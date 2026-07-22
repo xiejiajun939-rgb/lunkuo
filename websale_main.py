@@ -920,7 +920,7 @@ with st.sidebar:
     st.markdown("---")
     st.subheader("📌 快捷跳转")
     if st.button("📦 商品分析独立页", use_container_width=True):
-        st.switch_page("product_page.py")
+        st.switch_page("pages/product_page")
 
 # ========== 动态创建选项卡 ==========
 base_tabs = [
