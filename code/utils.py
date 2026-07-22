@@ -3,6 +3,15 @@ import streamlit as st
 import re
 from datetime import date, timedelta
 import pandas as pd
+import time
+def safe_rerun(force=False):
+    if force:
+        st.rerun(scope='app')
+        return
+    now = time.time()
+    if now - st.session_state.get('_last_rerun', 0) > 0.5:
+        st.session_state._last_rerun = now
+        st.rerun(scope='app')
 
 # ========== 常量 ==========
 SEASON_MAP = {"1": "春", "2": "夏", "3": "秋", "4": "冬"}
