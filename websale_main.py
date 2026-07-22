@@ -919,7 +919,23 @@ with st.sidebar:
         st.rerun()
    
 
-    st.page_link("pages/product_page.py", label="点击这里前往产品页", icon="📦")
+    st.markdown("---")
+    st.subheader("📌 快捷跳转")
+    st.markdown("""
+    <a href="/product_page" target="_blank" style="
+        display: inline-block;
+        width: 100%;
+        padding: 0.5rem 1rem;
+        background-color: #f0f2f6;
+        border-radius: 0.5rem;
+        text-decoration: none;
+        color: #1e293b;
+        font-weight: 500;
+        text-align: center;
+    ">
+    📦 商品分析独立页（新标签）
+    </a>
+    """, unsafe_allow_html=True)
 # ========== 动态创建选项卡 ==========
 base_tabs = [
     "📊 经营驾驶舱",
