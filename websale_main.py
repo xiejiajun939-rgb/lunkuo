@@ -922,7 +922,7 @@ with st.sidebar:
     st.markdown("---")
     st.subheader("📌 快捷跳转")
     st.markdown("""
-    <a href="/product_page" target="_blank" style="
+    <a href="/pages/product_page" target="_blank" style="
         display: inline-block;
         width: 100%;
         padding: 0.5rem 1rem;
