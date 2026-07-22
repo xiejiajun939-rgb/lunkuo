@@ -24,6 +24,17 @@ from core.db import init_supabase, get_table_name, load_product_sales, load_prod
 from core.utils import extract_anchor, parse_product_code, date_quick_buttons, apply_data_permission
 from core.ai import get_siliconflow_client, get_ai_summary
 
+# 添加一个全局防抖变量
+if "last_rerun" not in st.session_state:
+    st.session_state.last_rerun = 0
+
+def safe_rerun():
+    """防止过于频繁的重绘"""
+    now = time.time()
+    if now - st.session_state.last_rerun > 0.5:  # 至少间隔 0.5 秒
+        st.session_state.last_rerun = now
+        st.rerun()
+
 st.set_page_config(page_title="业绩统计工具", layout="wide", page_icon="📊")
 
 # ========== 自定义CSS ==========
