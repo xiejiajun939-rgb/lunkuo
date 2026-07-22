@@ -745,9 +745,7 @@ if st.session_state.target_dict == {}:
     st.session_state.target_dict = load_targets(st.session_state.table_suffix)
 
 with st.sidebar:
-    st.markdown("---")
-    st.subheader("📌 快捷跳转")
-    st.page_link("product_page.py", label="📦 商品分析独立页", icon="📦")
+    
     st.header("📂 数据加载")
     st.subheader("🔄 数据源切换")
     suffix_names = {"": "非直播数据", "_all": "全部数据"}
@@ -919,6 +917,9 @@ with st.sidebar:
             if key in st.session_state:
                 del st.session_state[key]
         st.rerun()
+    st.markdown("---")
+    st.subheader("📌 快捷跳转")
+    st.page_link("product_page.py", label="📦 商品分析独立页", icon="📦")
 
 # ========== 动态创建选项卡 ==========
 base_tabs = [
