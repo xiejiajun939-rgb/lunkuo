@@ -8,17 +8,15 @@ import io
 import re
 import numpy as np
 
-# ========== 导入公共模块 ==========
-from core.db import load_product_sales, load_product_master, init_supabase
-from core.utils import date_quick_buttons, parse_product_code, extract_anchor
+from core.db import load_product_sales, load_product_master
+from core.utils import date_quick_buttons, extract_anchor
 from core.ai import get_ai_summary
 
-# ========== 页面配置 ==========
 st.set_page_config(page_title="商品分析", layout="wide")
 
-# ========== 初始化 session_state（仅本页面需要的） ==========
+# ---------- 初始化 session_state ----------
 if "table_suffix" not in st.session_state:
-    st.session_state.table_suffix = ""   # 默认非直播
+    st.session_state.table_suffix = ""
 if "detail_clicked" not in st.session_state:
     st.session_state.detail_clicked = False
 if "show_dialog" not in st.session_state:
@@ -44,44 +42,24 @@ if "sort_by" not in st.session_state:
 if "sort_ascending" not in st.session_state:
     st.session_state.sort_ascending = False
 
-# ========== 侧边栏：数据源切换 ==========
-with st.sidebar:
-    st.header("数据源")
-    source = st.radio(
-        "选择数据源",
-        ["非直播数据", "全部数据"],
-        index=0 if st.session_state.table_suffix == "" else 1,
-        key="source_radio"
-    )
-    new_suffix = "" if source == "非直播数据" else "_all"
+st.title("📦 商品分析")
+
+# ---------- 数据源选择（主体顶部） ----------
+col1, col2 = st.columns([1, 4])
+with col1:
+    source = st.radio("数据源", ["非直播", "全部"], index=0 if st.session_state.table_suffix == "" else 1, key="src_radio")
+    new_suffix = "" if source == "非直播" else "_all"
     if new_suffix != st.session_state.table_suffix:
         st.session_state.table_suffix = new_suffix
         st.cache_data.clear()
         st.rerun()
-    
-    st.markdown("---")
-    if st.button("🔄 刷新数据", key="refresh_analysis"):
-        st.session_state.show_dialog = False
-        st.session_state.dialog_style_code = None
-        st.session_state.cached_detail_data = None
-        st.session_state.detail_clicked = False
-        st.session_state.show_trend_dialog = False
-        st.session_state.trend_style_code = None
-        st.session_state.trend_data = None
-        st.session_state.trend_clicked = False
-        st.cache_data.clear()
-        st.rerun()
-
-# ========== 主体 ==========
-st.title("📦 商品分析")
-st.markdown("---")
 
 # ---------- 加载数据 ----------
-with st.spinner("正在加载商品销售数据，请稍候..."):
+with st.spinner("加载商品销售数据..."):
     prod_df = load_product_sales(st.session_state.table_suffix)
 
 if prod_df.empty:
-    st.warning("暂无商品销售数据，请先上传订单文件。")
+    st.warning("暂无数据，请先上传订单文件。")
     st.stop()
 
 # ---------- 预处理 ----------
@@ -90,90 +68,87 @@ if "style_code" in prod_df.columns:
 else:
     prod_df["style_code"] = prod_df["product_code"].str[:8].str.strip().str.upper()
 
-if st.session_state.table_suffix in ["_live", "_all"]:
-    if "anchor" not in prod_df.columns:
-        prod_df["anchor"] = prod_df["remark"].astype(str).apply(extract_anchor)
+if st.session_state.table_suffix in ["_live", "_all"] and "anchor" not in prod_df.columns:
+    prod_df["anchor"] = prod_df["remark"].astype(str).apply(extract_anchor)
 
 min_date = prod_df["sale_date"].min().date()
 max_date = prod_df["sale_date"].max().date()
 
 # ---------- 日期选择 ----------
-date_quick_buttons("prod_start_final", "prod_end_final",
+date_quick_buttons("prod_start", "prod_end",
                    default_start=min_date,
                    default_end=max_date,
                    min_date=min_date,
                    max_date=max_date)
-start_date = st.session_state.get("prod_start_final", min_date)
-end_date = st.session_state.get("prod_end_final", max_date)
+start_date = st.session_state.get("prod_start", min_date)
+end_date = st.session_state.get("prod_end", max_date)
 
 # ---------- 筛选条件 ----------
 st.subheader("🔍 筛选条件")
 col_platform, col_shop = st.columns(2)
 with col_platform:
     platform_options = ["全部", "抖音", "视频号"]
-    selected_platform = st.selectbox("平台", platform_options, key="platform_filter_final")
+    selected_platform = st.selectbox("平台", platform_options, key="pf")
 with col_shop:
-    all_shops_all = prod_df["shop_name"].unique()
+    all_shops = prod_df["shop_name"].unique()
     if selected_platform == "抖音":
-        shop_options = [shop for shop in all_shops_all if "抖音" in shop]
+        shop_opts = [s for s in all_shops if "抖音" in s]
     elif selected_platform == "视频号":
-        shop_options = [shop for shop in all_shops_all if "视频号" in shop]
+        shop_opts = [s for s in all_shops if "视频号" in s]
     else:
-        shop_options = list(all_shops_all)
-    selected_shops = st.multiselect("店铺（可多选）", options=sorted(shop_options), default=[], key="shop_filter_final")
+        shop_opts = list(all_shops)
+    selected_shops = st.multiselect("店铺", sorted(shop_opts), key="sf")
 
 col_code, col_brand = st.columns(2)
 with col_code:
-    style_codes_input = st.text_input("货号筛选（多个用英文逗号分隔）", placeholder="例如: L262Y050, G262Y030", key="style_code_filter_final")
+    style_input = st.text_input("货号（逗号分隔）", placeholder="例如: L262Y050", key="sc")
 with col_brand:
-    brands_all = ["全部"] + sorted(prod_df["brand"].dropna().unique())
-    selected_brand = st.selectbox("品牌", brands_all, key="brand_filter_final")
+    brands = ["全部"] + sorted(prod_df["brand"].dropna().unique())
+    selected_brand = st.selectbox("品牌", brands, key="bf")
 
-coupon_filter_options = ["全部", "仅首单礼金", "非首单礼金"]
-selected_coupon_filter = st.selectbox("是否首单礼金款式", coupon_filter_options, key="coupon_filter_final")
+coupon_filter = st.selectbox("是否首单礼金", ["全部", "仅首单礼金", "非首单礼金"], key="cf")
 
+# 主播筛选（仅直播/全部数据）
 selected_anchors = []
 if st.session_state.table_suffix in ["_live", "_all"]:
-    if "anchor" not in prod_df.columns:
-        prod_df["anchor"] = prod_df["remark"].astype(str).apply(extract_anchor)
-    all_anchors = prod_df["anchor"].dropna().unique().tolist()
-    if all_anchors:
-        selected_anchors = st.multiselect("主播（可多选）", options=sorted(all_anchors), default=[], key="anchor_filter_final")
-    else:
-        st.info("当前数据中未识别到任何主播信息，请检查备注字段是否包含“主播：xxx”格式。")
+    if "anchor" in prod_df.columns:
+        anchors = sorted(prod_df["anchor"].dropna().unique())
+        if anchors:
+            selected_anchors = st.multiselect("主播", anchors, key="af")
+        else:
+            st.info("未识别到主播信息，请检查备注字段。")
 
 # ---------- 应用筛选 ----------
-mask_date = (prod_df["sale_date"] >= pd.to_datetime(start_date)) & (prod_df["sale_date"] <= pd.to_datetime(end_date))
-filtered = prod_df[mask_date].copy()
+mask = (prod_df["sale_date"] >= pd.to_datetime(start_date)) & (prod_df["sale_date"] <= pd.to_datetime(end_date))
+filtered = prod_df[mask].copy()
 
-if selected_platform == "抖音":
-    filtered = filtered[filtered["shop_name"].str.contains("抖音", case=False, na=False)]
-elif selected_platform == "视频号":
-    filtered = filtered[filtered["shop_name"].str.contains("视频号", case=False, na=False)]
+if selected_platform != "全部":
+    filtered = filtered[filtered["shop_name"].str.contains(selected_platform, case=False, na=False)]
 if selected_shops:
     filtered = filtered[filtered["shop_name"].isin(selected_shops)]
-if style_codes_input.strip():
-    target_codes = [code.strip().upper() for code in style_codes_input.split(",") if code.strip()]
-    if target_codes:
-        filtered = filtered[filtered["style_code"].isin(target_codes)]
+if style_input.strip():
+    codes = [c.strip().upper() for c in style_input.split(",") if c.strip()]
+    if codes:
+        filtered = filtered[filtered["style_code"].isin(codes)]
 if selected_brand != "全部":
     filtered = filtered[filtered["brand"] == selected_brand]
 if selected_anchors:
     filtered = filtered[filtered["anchor"].isin(selected_anchors)]
 
+# 礼金标记
 master_df = load_product_master()
 coupon_map = {}
 if not master_df.empty and "style_code" in master_df.columns:
     master_df["style_code"] = master_df["style_code"].astype(str).str.strip().str.upper()
     coupon_map = master_df.set_index("style_code")["has_newbie_coupon"].to_dict()
 filtered["has_newbie_coupon"] = filtered["style_code"].map(coupon_map).fillna(False)
-if selected_coupon_filter == "仅首单礼金":
-    filtered = filtered[filtered["has_newbie_coupon"] == True]
-elif selected_coupon_filter == "非首单礼金":
-    filtered = filtered[filtered["has_newbie_coupon"] == False]
+if coupon_filter == "仅首单礼金":
+    filtered = filtered[filtered["has_newbie_coupon"]]
+elif coupon_filter == "非首单礼金":
+    filtered = filtered[~filtered["has_newbie_coupon"]]
 
 if filtered.empty:
-    st.warning("所选条件下无销售数据")
+    st.warning("无匹配数据")
     st.stop()
 
 # ---------- 聚合 ----------
@@ -183,63 +158,44 @@ grouped = filtered.groupby("style_code").agg(
     净销售金额=("net_amount", "sum")
 ).reset_index().rename(columns={"style_code": "货号"})
 
+# 补充图片、分类、礼金信息
 if not master_df.empty and "style_code" in master_df.columns:
-    master_df = master_df.drop_duplicates(subset="style_code", keep="first")
+    master_df = master_df.drop_duplicates("style_code", keep="first")
     img_map = master_df.set_index("style_code")["image_url"].to_dict()
     cat_map = master_df.set_index("style_code")["category"].to_dict()
-    coupon_map = master_df.set_index("style_code")["has_newbie_coupon"].to_dict()
-    grouped["image_url"] = grouped["货号"].map(img_map).fillna(None)
+    grouped["image_url"] = grouped["货号"].map(img_map)
+    grouped["master_category"] = grouped["货号"].map(cat_map)
     grouped["has_newbie_coupon"] = grouped["货号"].map(coupon_map).fillna(False)
-    if "master_category" not in filtered.columns:
-        filtered["master_category"] = None
-    cat_series = filtered.groupby("style_code")["master_category"].first()
-    grouped["master_category"] = grouped["货号"].map(cat_series).fillna(grouped["货号"].map(cat_map))
 else:
-    grouped["master_category"] = None
     grouped["image_url"] = None
+    grouped["master_category"] = None
     grouped["has_newbie_coupon"] = False
 
 grouped["退款率"] = np.where(
     grouped["发货金额"] != 0,
-    ((grouped["退货金额"] / grouped["发货金额"].replace(0, np.nan)) * 100).map("{:.2f}%".format),
+    (grouped["退货金额"] / grouped["发货金额"] * 100).map("{:.2f}%".format),
     "-"
 )
 
 # ---------- 排序与分页 ----------
 st.markdown("#### 货号汇总表")
-col_sort1, col_sort2, col_sort3 = st.columns([1, 1, 2])
-with col_sort1:
-    sort_options = ["货号", "发货金额", "退货金额", "净销售金额", "退款率"]
-    selected_sort = st.selectbox("排序字段", sort_options, index=sort_options.index(st.session_state.sort_by) if st.session_state.sort_by in sort_options else 3, key="sort_by_selector")
-with col_sort2:
-    sort_order = st.radio("排序顺序", ["降序", "升序"], horizontal=True, index=0 if not st.session_state.sort_ascending else 1, key="sort_order_radio")
-with col_sort3:
-    page_size_options = [10, 20, 50, 100]
-    selected_page_size = st.selectbox(
-        "每页显示行数",
-        options=page_size_options,
-        index=page_size_options.index(st.session_state.product_page_size),
-        key="page_size_selector"
-    )
-    if selected_page_size != st.session_state.product_page_size:
-        st.session_state.product_page_size = selected_page_size
-        st.session_state.product_page_num = 1
-        st.rerun()
+col_s1, col_s2, col_s3 = st.columns([1, 1, 2])
+with col_s1:
+    sort_opts = ["货号", "发货金额", "退货金额", "净销售金额", "退款率"]
+    sort_by = st.selectbox("排序字段", sort_opts, index=sort_opts.index(st.session_state.sort_by), key="sort_sel")
+with col_s2:
+    asc = st.radio("顺序", ["降序", "升序"], horizontal=True, index=0 if not st.session_state.sort_ascending else 1, key="order")
+with col_s3:
+    psize = st.selectbox("每页行数", [10, 20, 50, 100], index=[10,20,50,100].index(st.session_state.product_page_size), key="psize")
 
-if selected_sort != st.session_state.sort_by or (sort_order == "降序" and st.session_state.sort_ascending) or (sort_order == "升序" and not st.session_state.sort_ascending):
-    st.session_state.show_dialog = False
-    st.session_state.dialog_style_code = None
-    st.session_state.cached_detail_data = None
-    st.session_state.detail_clicked = False
-    st.session_state.show_trend_dialog = False
-    st.session_state.trend_style_code = None
-    st.session_state.trend_data = None
-    st.session_state.trend_clicked = False
-    st.session_state.sort_by = selected_sort
-    st.session_state.sort_ascending = (sort_order == "升序")
+# 更新排序参数
+if sort_by != st.session_state.sort_by or (asc == "升序" and not st.session_state.sort_ascending) or (asc == "降序" and st.session_state.sort_ascending):
+    st.session_state.sort_by = sort_by
+    st.session_state.sort_ascending = (asc == "升序")
     st.session_state.product_page_num = 1
     st.rerun()
 
+# 排序
 if st.session_state.sort_by == "货号":
     grouped = grouped.sort_values("货号", ascending=st.session_state.sort_ascending)
 elif st.session_state.sort_by == "发货金额":
@@ -253,56 +209,34 @@ elif st.session_state.sort_by == "退款率":
     grouped = grouped.sort_values("退款率_num", ascending=st.session_state.sort_ascending)
     grouped = grouped.drop(columns=["退款率_num"])
 
-page_size = st.session_state.product_page_size
-total_rows = len(grouped)
-total_pages = (total_rows + page_size - 1) // page_size if total_rows > 0 else 1
-if st.session_state.product_page_num > total_pages:
+# 分页
+total = len(grouped)
+pages = (total + psize - 1) // psize if total > 0 else 1
+if st.session_state.product_page_num > pages:
     st.session_state.product_page_num = 1
+start_idx = (st.session_state.product_page_num - 1) * psize
+end_idx = min(start_idx + psize, total)
+page_df = grouped.iloc[start_idx:end_idx]
 
-col_prev, col_page, col_next, col_export = st.columns([1, 2, 1, 1.5])
+# 分页控制
+col_prev, col_page, col_next, col_export = st.columns([1, 2, 1, 2])
 with col_prev:
-    if st.button("◀ 上一页", key="product_prev_page"):
-        st.session_state.show_dialog = False
-        st.session_state.dialog_style_code = None
-        st.session_state.cached_detail_data = None
-        st.session_state.detail_clicked = False
-        st.session_state.show_trend_dialog = False
-        st.session_state.trend_style_code = None
-        st.session_state.trend_data = None
-        st.session_state.trend_clicked = False
+    if st.button("◀ 上一页", key="prev"):
         if st.session_state.product_page_num > 1:
             st.session_state.product_page_num -= 1
             st.rerun()
 with col_page:
-    st.write(f"第 {st.session_state.product_page_num} / {total_pages} 页")
+    st.write(f"第 {st.session_state.product_page_num} / {pages} 页")
 with col_next:
-    if st.button("下一页 ▶", key="product_next_page"):
-        st.session_state.show_dialog = False
-        st.session_state.dialog_style_code = None
-        st.session_state.cached_detail_data = None
-        st.session_state.detail_clicked = False
-        st.session_state.show_trend_dialog = False
-        st.session_state.trend_style_code = None
-        st.session_state.trend_data = None
-        st.session_state.trend_clicked = False
-        if st.session_state.product_page_num < total_pages:
+    if st.button("下一页 ▶", key="next"):
+        if st.session_state.product_page_num < pages:
             st.session_state.product_page_num += 1
             st.rerun()
 with col_export:
     is_live_or_all = st.session_state.table_suffix in ["_live", "_all"]
-    if is_live_or_all:
-        detail_type_name = "明细（货号+主播）"
-    else:
-        detail_type_name = "明细（货号+店铺）"
-    
-    export_type = st.radio(
-        "导出类型",
-        ["汇总（货号级别）", detail_type_name],
-        horizontal=True,
-        key="export_type_radio"
-    )
-    
-    if st.button("📥 下载数据", key="export_filtered_data"):
+    detail_label = "明细（货号+主播）" if is_live_or_all else "明细（货号+店铺）"
+    export_type = st.radio("导出类型", ["汇总（货号级别）", detail_label], horizontal=True, key="export_type")
+    if st.button("📥 下载数据", key="exp"):
         if export_type == "汇总（货号级别）":
             export_df = grouped.copy()
             if "image_url" in export_df.columns:
@@ -324,23 +258,19 @@ with col_export:
             else:
                 group_col = "shop_name"
                 group_name = "店铺"
-            
             if group_col not in filtered.columns:
                 st.error(f"数据中缺少 {group_name} 信息，无法导出明细。")
                 st.stop()
-            
             detail_agg = filtered.groupby(["style_code", group_col]).agg(
                 明细发货金额=("ship_amount", "sum"),
                 明细退货金额=("return_amount", "sum"),
                 明细净销售金额=("net_amount", "sum")
             ).reset_index()
-            
             detail_agg["明细退款率"] = np.where(
                 detail_agg["明细发货金额"] != 0,
                 (detail_agg["明细退货金额"] / detail_agg["明细发货金额"] * 100).map("{:.2f}%".format),
                 "-"
             )
-            
             master_cols = grouped[["货号", "master_category", "发货金额", "退货金额", "净销售金额", "退款率", "has_newbie_coupon"]].copy()
             export_df = pd.merge(
                 detail_agg,
@@ -356,7 +286,6 @@ with col_export:
                 "has_newbie_coupon": "是否新人礼金"
             }, inplace=True)
             export_df["是否新人礼金"] = export_df["是否新人礼金"].map({True: "是", False: "否"})
-            
             final_cols = [
                 "货号", "商品分类", "发货金额", "退货金额", "净销售金额", "退款率", "是否新人礼金",
                 group_name, "明细发货金额", "明细退货金额", "明细净销售金额", "明细退款率"
@@ -364,7 +293,6 @@ with col_export:
             export_df = export_df[final_cols]
             sheet_name = f"货号{group_name}明细"
             file_suffix = f"货号{group_name}明细"
-        
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
             export_df.to_excel(writer, index=False, sheet_name=sheet_name)
@@ -378,29 +306,25 @@ with col_export:
         )
 
 # ---------- 显示表格 ----------
-start_idx = (st.session_state.product_page_num - 1) * page_size
-end_idx = min(start_idx + page_size, total_rows)
-page_df = grouped.iloc[start_idx:end_idx]
-
 cols = st.columns([2, 0.5, 1.5, 1.2, 1.2, 1.2, 1, 0.8, 0.8, 0.8])
 headers = ["货号", "图片", "商品分类", "发货金额(¥)", "退货金额(¥)", "净销售金额(¥)", "退款率", "新人礼金", "详情", "趋势"]
-for col, header in zip(cols, headers):
-    col.markdown(f"**{header}**")
+for c, h in zip(cols, headers):
+    c.markdown(f"**{h}**")
 
 for idx, row in page_df.iterrows():
-    col1, col2, col3, col4, col5, col6, col7, col8, col9, col10 = st.columns([2, 0.5, 1.5, 1.2, 1.2, 1.2, 1, 0.8, 0.8, 0.8])
-    col1.write(row["货号"])
+    c1, c2, c3, c4, c5, c6, c7, c8, c9, c10 = st.columns([2, 0.5, 1.5, 1.2, 1.2, 1.2, 1, 0.8, 0.8, 0.8])
+    c1.write(row["货号"])
     if row.get("image_url") and pd.notna(row["image_url"]):
-        col2.image(row["image_url"], width=50)
+        c2.image(row["image_url"], width=50)
     else:
-        col2.write("-")
-    col3.write(row["master_category"] if pd.notna(row["master_category"]) else "-")
-    col4.write(f"{row['发货金额']:,.2f}")
-    col5.write(f"{row['退货金额']:,.2f}")
-    col6.write(f"{row['净销售金额']:,.2f}")
-    col7.write(row["退款率"])
-    col8.write("✅" if row.get("has_newbie_coupon") else "❌")
-    if col9.button("📊", key=f"detail_btn_{row['货号']}_{idx}"):
+        c2.write("-")
+    c3.write(row["master_category"] if pd.notna(row["master_category"]) else "-")
+    c4.write(f"{row['发货金额']:,.2f}")
+    c5.write(f"{row['退货金额']:,.2f}")
+    c6.write(f"{row['净销售金额']:,.2f}")
+    c7.write(row["退款率"])
+    c8.write("✅" if row.get("has_newbie_coupon") else "❌")
+    if c9.button("📊", key=f"detail_btn_{row['货号']}_{idx}"):
         style_code = row["货号"]
         detail_df = filtered[filtered["style_code"] == style_code].copy()
         if not detail_df.empty:
@@ -445,7 +369,7 @@ for idx, row in page_df.iterrows():
         st.session_state.show_dialog = True
         st.session_state.detail_clicked = True
         st.rerun()
-    if col10.button("📈", key=f"trend_btn_{row['货号']}_{idx}"):
+    if c10.button("📈", key=f"trend_btn_{row['货号']}_{idx}"):
         style_code = row["货号"]
         trend_data = filtered[filtered["style_code"] == style_code].copy()
         if not trend_data.empty:
