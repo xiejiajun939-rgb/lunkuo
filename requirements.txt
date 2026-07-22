@@ -1,0 +1,8 @@
+streamlit
+pandas
+numpy
+plotly
+openai
+supabase-py
+st-aggrid
+openpyxl
