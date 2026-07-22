@@ -17,7 +17,6 @@ from supabase import create_client
 import plotly.express as px
 import plotly.graph_objects as go
 from openai import OpenAI
-from st_aggrid import AgGrid, GridOptionsBuilder
 
 # ========== 导入公共模块（替代原先直接定义的函数） ==========
 from core.db import init_supabase, get_table_name, load_product_sales, load_product_master, load_dimension_mapping
