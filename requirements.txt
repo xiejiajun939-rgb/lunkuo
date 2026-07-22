@@ -3,6 +3,6 @@ pandas
 numpy
 plotly
 openai
-supabase-py
+supabase
 st-aggrid
 openpyxl
