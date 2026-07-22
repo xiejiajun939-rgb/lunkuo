@@ -747,8 +747,7 @@ if st.session_state.target_dict == {}:
 with st.sidebar:
     st.markdown("---")
     st.subheader("📌 快捷跳转")
-    if st.button("📦 打开商品分析独立页", use_container_width=True):
-    st.switch_page("product_page.py")
+    st.page_link("product_page.py", label="📦 商品分析独立页", icon="📦")
     st.header("📂 数据加载")
     st.subheader("🔄 数据源切换")
     suffix_names = {"": "非直播数据", "_all": "全部数据"}
