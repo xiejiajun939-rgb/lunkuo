@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-订单业绩统计工具 - 多页应用入口（手动导航版）
+订单业绩统计工具 - 多页应用入口（纯链接导航版）
 管理员账号：admin / 1234567890
 子账号存储在 Supabase 的 sub_accounts 表中
 """
@@ -44,7 +44,7 @@ st.set_page_config(
     }
 )
 
-# ========== 自定义CSS（与原来一致） ==========
+# ========== 自定义CSS ==========
 st.markdown("""
 <style>
     .custom-main-title { font-size: 28px !important; font-weight: 600 !important; margin-top: -0.5rem !important; margin-bottom: 0.25rem !important; padding-bottom: 0 !important; color: #1e293b !important; }
@@ -205,7 +205,7 @@ if "processing_upload" not in st.session_state:
 if "table_suffix" not in st.session_state:
     st.session_state.table_suffix = ""   # 默认非直播
 
-# ========== 辅助函数（保留原文件中的必要函数） ==========
+# ========== 辅助函数 ==========
 def refresh_materialized_view(suffix=""):
     if supabase is None:
         return
@@ -642,7 +642,7 @@ if st.session_state.target_dict == {}:
 
 # ========== 侧边栏 ==========
 with st.sidebar:
-    # ========== 导航菜单（手动构建） ==========
+    # ========== 导航菜单（纯HTML链接，稳定可靠） ==========
     st.markdown("### 📌 导航")
     
     # 获取当前用户角色和权限
@@ -651,17 +651,20 @@ with st.sidebar:
     user_info = st.session_state.sub_users.get(username, {})
     current_suffix = st.session_state.table_suffix
 
+    # 主页链接
+    st.sidebar.markdown("[🏠 主页](/)")
+    
     if role == "admin":
         # 管理员显示全部页面
-        st.sidebar.page_link("pages/dashboard. py", label="📊 经营驾驶舱")
-        st.sidebar.page_link("pages/daily_detail.py", label="📋 每日明细")
-        st.sidebar.page_link("pages/product_page.py", label="📦 商品分析")
-        st.sidebar.page_link("pages/anchor.py", label="🎤 主播分析")
-        st.sidebar.page_link("pages/distribution.py", label="📈 销售分布与品牌")
+        st.sidebar.markdown("[📊 经营驾驶舱](/pages/dashboard)")
+        st.sidebar.markdown("[📋 每日明细](/pages/daily_detail)")
+        st.sidebar.markdown("[📦 商品分析](/pages/product_page)")
+        st.sidebar.markdown("[🎤 主播分析](/pages/anchor)")
+        st.sidebar.markdown("[📈 销售分布与品牌](/pages/distribution)")
         if current_suffix == "_all":
-            st.sidebar.page_link("pages/org_dept.py", label="🏢 组织与部门分析")
-        st.sidebar.page_link("pages/export.py", label="📚 商品库导出")
-        st.sidebar.page_link("pages/settings.py", label="⚙️ 系统设置")
+            st.sidebar.markdown("[🏢 组织与部门分析](/pages/org_dept)")
+        st.sidebar.markdown("[📚 商品库导出](/pages/export)")
+        st.sidebar.markdown("[⚙️ 系统设置](/pages/settings)")
     else:
         # 子账号：根据权限显示
         perms = user_info.get("permissions", {})
@@ -669,18 +672,18 @@ with st.sidebar:
         if not allowed and "" in perms:
             allowed = perms[""]
         page_map = {
-            "📊 经营驾驶舱": "pages/dashboard.py",
-            "📋 每日明细": "pages/daily_detail.py",
-            "📦 商品分析": "pages/product_page.py",
-            "🎤 主播分析": "pages/anchor.py",
-            "📈 销售分布与品牌": "pages/distribution.py",
-            "🏢 组织与部门分析": "pages/org_dept.py",
+            "📊 经营驾驶舱": "/pages/dashboard",
+            "📋 每日明细": "/pages/daily_detail",
+            "📦 商品分析": "/pages/product_page",
+            "🎤 主播分析": "/pages/anchor",
+            "📈 销售分布与品牌": "/pages/distribution",
+            "🏢 组织与部门分析": "/pages/org_dept",
         }
         for label, path in page_map.items():
             if label == "🏢 组织与部门分析" and current_suffix != "_all":
                 continue
             if label in allowed:
-                st.sidebar.page_link(path, label=label)
+                st.sidebar.markdown(f"[{label}]({path})")
     st.markdown("---")
 
     # ---------- 数据加载 ----------
