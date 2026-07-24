@@ -642,7 +642,7 @@ if st.session_state.target_dict == {}:
 
 # ========== 侧边栏 ==========
 with st.sidebar:
-    # ========== 导航菜单（纯HTML链接，稳定可靠） ==========
+    # ========== 导航菜单（纯HTML链接，路径已修正） ==========
     st.markdown("### 📌 导航")
     
     # 获取当前用户角色和权限
@@ -655,29 +655,30 @@ with st.sidebar:
     st.sidebar.markdown("[🏠 主页](/)")
     
     if role == "admin":
-        # 管理员显示全部页面
-        st.sidebar.markdown("[📊 经营驾驶舱](/pages/dashboard)")
-        st.sidebar.markdown("[📋 每日明细](/pages/daily_detail)")
-        st.sidebar.markdown("[📦 商品分析](/pages/product_page)")
-        st.sidebar.markdown("[🎤 主播分析](/pages/anchor)")
-        st.sidebar.markdown("[📈 销售分布与品牌](/pages/distribution)")
+        # 管理员显示全部页面（注意路径为 /页面名，无 pages/ 前缀）
+        st.sidebar.markdown("[📊 经营驾驶舱](/dashboard)")
+        st.sidebar.markdown("[📋 每日明细](/daily_detail)")
+        st.sidebar.markdown("[📦 商品分析](/product_page)")
+        st.sidebar.markdown("[🎤 主播分析](/anchor)")
+        st.sidebar.markdown("[📈 销售分布与品牌](/distribution)")
         if current_suffix == "_all":
-            st.sidebar.markdown("[🏢 组织与部门分析](/pages/org_dept)")
-        st.sidebar.markdown("[📚 商品库导出](/pages/export)")
-        st.sidebar.markdown("[⚙️ 系统设置](/pages/settings)")
+            st.sidebar.markdown("[🏢 组织与部门分析](/org_dept)")
+        st.sidebar.markdown("[📚 商品库导出](/export)")
+        st.sidebar.markdown("[⚙️ 系统设置](/settings)")
     else:
         # 子账号：根据权限显示
         perms = user_info.get("permissions", {})
         allowed = perms.get(current_suffix, [])
         if not allowed and "" in perms:
             allowed = perms[""]
+        # 页面名称到路径的映射（不含 pages/ 前缀）
         page_map = {
-            "📊 经营驾驶舱": "/pages/dashboard",
-            "📋 每日明细": "/pages/daily_detail",
-            "📦 商品分析": "/pages/product_page",
-            "🎤 主播分析": "/pages/anchor",
-            "📈 销售分布与品牌": "/pages/distribution",
-            "🏢 组织与部门分析": "/pages/org_dept",
+            "📊 经营驾驶舱": "/dashboard",
+            "📋 每日明细": "/daily_detail",
+            "📦 商品分析": "/product_page",
+            "🎤 主播分析": "/anchor",
+            "📈 销售分布与品牌": "/distribution",
+            "🏢 组织与部门分析": "/org_dept",
         }
         for label, path in page_map.items():
             if label == "🏢 组织与部门分析" and current_suffix != "_all":
