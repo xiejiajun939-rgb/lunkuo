@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-订单业绩统计工具 - 多页应用入口
+订单业绩统计工具 - 多页应用入口（手动导航版）
 管理员账号：admin / 1234567890
 子账号存储在 Supabase 的 sub_accounts 表中
 """
@@ -43,23 +43,8 @@ st.set_page_config(
         'About': None
     }
 )
-# 在 st.set_page_config 之后立即添加
-from streamlit import navigation, Page
 
-pages = {
-    "📊 经营驾驶舱": Page("pages/dashboard.py", title="📊 经营驾驶舱"),
-    "📋 每日明细": Page("pages/daily_detail.py", title="📋 每日明细"),
-    "📦 商品分析": Page("pages/product_page.py", title="📦 商品分析"),
-    "🎤 主播分析": Page("pages/anchor.py", title="🎤 主播分析"),
-    "📈 销售分布与品牌": Page("pages/distribution.py", title="📈 销售分布与品牌"),
-    "🏢 组织与部门分析": Page("pages/org_dept.py", title="🏢 组织与部门分析"),
-    "📚 商品库导出": Page("pages/export.py", title="📚 商品库导出"),
-    "⚙️ 系统设置": Page("pages/settings.py", title="⚙️ 系统设置"),
-}
-
-nav = st.navigation(list(pages.values()), position="sidebar")
-nav.run()
-# ========== 自定义CSS ==========
+# ========== 自定义CSS（与原来一致） ==========
 st.markdown("""
 <style>
     .custom-main-title { font-size: 28px !important; font-weight: 600 !important; margin-top: -0.5rem !important; margin-bottom: 0.25rem !important; padding-bottom: 0 !important; color: #1e293b !important; }
@@ -221,8 +206,6 @@ if "table_suffix" not in st.session_state:
     st.session_state.table_suffix = ""   # 默认非直播
 
 # ========== 辅助函数（保留原文件中的必要函数） ==========
-# 注：以下函数为原文件中被侧边栏和全局操作调用的函数，必须保留
-
 def refresh_materialized_view(suffix=""):
     if supabase is None:
         return
@@ -659,6 +642,50 @@ if st.session_state.target_dict == {}:
 
 # ========== 侧边栏 ==========
 with st.sidebar:
+    # ========== 导航菜单（手动构建） ==========
+    st.markdown("### 📌 导航")
+    # 主页（当前文件）
+    st.sidebar.page_link("websale_main (3).py", label="🏠 主页")
+
+    # 获取当前用户角色和权限
+    role = st.session_state.role
+    username = st.session_state.username
+    user_info = st.session_state.sub_users.get(username, {})
+    current_suffix = st.session_state.table_suffix
+
+    if role == "admin":
+        # 管理员显示全部页面
+        st.sidebar.page_link("pages/dashboard.py", label="📊 经营驾驶舱")
+        st.sidebar.page_link("pages/daily_detail.py", label="📋 每日明细")
+        st.sidebar.page_link("pages/product_page.py", label="📦 商品分析")
+        st.sidebar.page_link("pages/anchor.py", label="🎤 主播分析")
+        st.sidebar.page_link("pages/distribution.py", label="📈 销售分布与品牌")
+        if current_suffix == "_all":
+            st.sidebar.page_link("pages/org_dept.py", label="🏢 组织与部门分析")
+        st.sidebar.page_link("pages/export.py", label="📚 商品库导出")
+        st.sidebar.page_link("pages/settings.py", label="⚙️ 系统设置")
+    else:
+        # 子账号：根据权限显示
+        perms = user_info.get("permissions", {})
+        allowed = perms.get(current_suffix, [])
+        if not allowed and "" in perms:
+            allowed = perms[""]
+        page_map = {
+            "📊 经营驾驶舱": "pages/dashboard.py",
+            "📋 每日明细": "pages/daily_detail.py",
+            "📦 商品分析": "pages/product_page.py",
+            "🎤 主播分析": "pages/anchor.py",
+            "📈 销售分布与品牌": "pages/distribution.py",
+            "🏢 组织与部门分析": "pages/org_dept.py",
+        }
+        for label, path in page_map.items():
+            if label == "🏢 组织与部门分析" and current_suffix != "_all":
+                continue
+            if label in allowed:
+                st.sidebar.page_link(path, label=label)
+    st.markdown("---")
+
+    # ---------- 数据加载 ----------
     st.header("📂 数据加载")
     st.subheader("🔄 数据源切换")
     suffix_names = {"": "非直播数据", "_all": "全部数据"}
@@ -693,6 +720,7 @@ with st.sidebar:
             st.rerun()
     st.markdown("---")
 
+    # ---------- 文件上传与工具 ----------
     if st.session_state.role == "admin":
         current_display_suffix = st.session_state.table_suffix
         def handle_upload(uploaded_file, suffix, file_type="order"):
@@ -770,7 +798,6 @@ with st.sidebar:
                         st.error(f"上传失败：{e}")           
         st.markdown("---")
         st.header("⚙️ 工具")
-        # ---- 组织目标上传（仅全部数据） ----
         if st.session_state.table_suffix == "_all":
             st.markdown("---")
             st.subheader("📊 组织目标管理")
@@ -824,10 +851,7 @@ with st.sidebar:
         st.info("您只有查看权限，无法上传文件。如需上传，请联系管理员。")
     st.markdown("---")
     
-    # ========== 新增：返回主页链接 ==========
-    st.markdown("[🏠 返回主页](/)")
-    st.markdown("---")
-    
+    # ========== 退出登录 ==========
     if st.button("🚪 退出登录", key="logout_final"):
         st.session_state.authenticated = False
         for key in ["username", "role", "table_suffix"]:
@@ -835,9 +859,7 @@ with st.sidebar:
                 del st.session_state[key]
         st.rerun()
 
-# ========== 主内容区 ==========
-# 由于使用了 pages/ 自动发现，主内容区无需再显示任何内容，
-# 但可放置欢迎信息或默认页面提示。
+# ========== 主内容区（欢迎信息） ==========
 st.markdown("""
 <div style="display: flex; justify-content: center; align-items: center; height: 50vh; flex-direction: column;">
     <h1 style="color: #1e293b;">📊 欢迎使用数据罗盘</h1>
