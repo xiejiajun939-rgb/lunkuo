@@ -823,6 +823,11 @@ with st.sidebar:
     else:
         st.info("您只有查看权限，无法上传文件。如需上传，请联系管理员。")
     st.markdown("---")
+    
+    # ========== 新增：返回主页链接 ==========
+    st.markdown("[🏠 返回主页](/)")
+    st.markdown("---")
+    
     if st.button("🚪 退出登录", key="logout_final"):
         st.session_state.authenticated = False
         for key in ["username", "role", "table_suffix"]:
@@ -830,19 +835,13 @@ with st.sidebar:
                 del st.session_state[key]
         st.rerun()
 
-    st.markdown("---")
-    st.subheader("📌 导航")
-    st.markdown("""
-    请使用页面顶部的导航栏切换功能。
-    """)
-
 # ========== 主内容区 ==========
 # 由于使用了 pages/ 自动发现，主内容区无需再显示任何内容，
 # 但可放置欢迎信息或默认页面提示。
 st.markdown("""
 <div style="display: flex; justify-content: center; align-items: center; height: 50vh; flex-direction: column;">
     <h1 style="color: #1e293b;">📊 欢迎使用数据罗盘</h1>
-    <p style="color: #475569; font-size: 18px;">请从左侧导航栏或顶部菜单选择一个功能页面开始分析。</p>
+    <p style="color: #475569; font-size: 18px;">请从左侧导航栏选择一个功能页面开始分析。</p>
     <p style="color: #94a3b8; font-size: 14px;">当前数据源：<strong>{}</strong></p>
 </div>
 """.format(current_source_name), unsafe_allow_html=True)
