@@ -1,14 +1,16 @@
-# pages/2_daily_detail.py
+# pages/daily_detail.py
+# -*- coding: utf-8 -*-
 import streamlit as st
 import pandas as pd
 from datetime import date, timedelta
 import io
 
-from core.db import load_product_sales, load_org_targets
-from core.utils import date_quick_buttons
+from core.db import load_product_sales, load_org_targets, load_dimension_mapping
+from core.utils import extract_anchor, date_quick_buttons
 
 st.set_page_config(page_title="每日明细", layout="wide")
 
+# 确保全局状态
 if "table_suffix" not in st.session_state:
     st.session_state.table_suffix = ""
 if "target_dict" not in st.session_state:
@@ -17,6 +19,7 @@ if "target_dict" not in st.session_state:
 st.subheader("📋 每日明细查询")
 st.info("此处展示最新日销售明细，并支持按日期查询任意一天的销售情况。")
 
+# ---------- 加载商品数据 ----------
 with st.spinner("加载数据..."):
     prod_df = load_product_sales(st.session_state.table_suffix, apply_filter=False)
 
@@ -24,8 +27,27 @@ if prod_df.empty:
     st.warning("暂无商品销售数据，请先上传订单文件。")
     st.stop()
 
-# ---------- 确定维度 ----------
+# ---------- 映射表合并（仅全部数据） ----------
 is_all = st.session_state.table_suffix == "_all"
+if is_all:
+    # 加载映射表（表名：mapping）
+    mapping_df = load_dimension_mapping()
+    if not mapping_df.empty:
+        # 检查映射表列：优先使用 shop_name，若无则尝试 anchor
+        if 'shop_name' in mapping_df.columns:
+            # 确保 prod_df 有 shop_name
+            prod_df = prod_df.merge(mapping_df, on="shop_name", how="left")
+        elif 'anchor' in mapping_df.columns:
+            # 若使用主播维度，需先提取 anchor
+            if 'anchor' not in prod_df.columns:
+                prod_df["anchor"] = prod_df["remark"].astype(str).apply(extract_anchor)
+            prod_df = prod_df.merge(mapping_df, on="anchor", how="left")
+        else:
+            st.warning("映射表中缺少 shop_name 或 anchor 列，无法关联组织/部门信息。")
+    else:
+        st.warning("未加载到映射关系（mapping 表），组织/部门信息不可用。")
+
+# ---------- 确定维度 ----------
 if is_all:
     org_targets = load_org_targets("_all")
     dimension_options = ["阿米巴组织", "部门"]
@@ -37,22 +59,29 @@ if is_all:
     else:
         group_col = "dept"
         dim_label = "部门"
-        org_dept_map = prod_df[['org_name', 'dept']].drop_duplicates()
-        dept_targets = {}
-        for _, row in org_dept_map.iterrows():
-            org = row['org_name']
-            dept = row['dept']
-            target = org_targets.get(org, 0)
-            dept_targets[dept] = dept_targets.get(dept, 0) + target
-        target_dict = dept_targets
+        # 若合并后 org_name 和 dept 存在，则按部门汇总目标
+        if 'org_name' in prod_df.columns and 'dept' in prod_df.columns:
+            org_dept_map = prod_df[['org_name', 'dept']].drop_duplicates()
+            dept_targets = {}
+            for _, row in org_dept_map.iterrows():
+                org = row['org_name']
+                dept = row['dept']
+                target = org_targets.get(org, 0)
+                dept_targets[dept] = dept_targets.get(dept, 0) + target
+            target_dict = dept_targets
+        else:
+            st.warning("当前数据中无部门信息，请检查映射表。")
+            st.stop()
+    # 检查 group_col 是否存在
     if group_col not in prod_df.columns or prod_df[group_col].isna().all():
-        st.warning("当前数据中无组织/部门信息，请检查映射表。")
+        st.warning(f"当前数据中无 {dim_label} 信息，请检查映射表。")
         st.stop()
 else:
     group_col = "shop_name"
     dim_label = "店铺名称"
     target_dict = st.session_state.target_dict
 
+# ---------- 聚合辅助函数 ----------
 def aggregate_dim(df, group_col, dim_label):
     agg = df.groupby(group_col).agg(
         发货金额=("ship_amount", "sum"),
@@ -63,6 +92,10 @@ def aggregate_dim(df, group_col, dim_label):
 
 # ---------- 第一部分：最新日明细 ----------
 st.markdown("#### 📅 最新日明细")
+source_names = {"": "非直播数据", "_all": "全部数据"}
+current_source = source_names.get(st.session_state.table_suffix, "未知")
+st.caption(f"当前数据源：**{current_source}**")
+
 latest_date = prod_df["sale_date"].max().date()
 month_start = latest_date.replace(day=1)
 
@@ -75,18 +108,38 @@ month_data = prod_df[mask_month]
 month_agg = aggregate_dim(month_data, group_col, dim_label)
 
 df_latest = pd.merge(today_agg, month_agg, on=dim_label, suffixes=("_日", "_月"), how="outer").fillna(0)
-df_latest["日退货率_数值"] = df_latest.apply(lambda r: (r['退货金额_日'] / r['发货金额_日'] * 100) if r['发货金额_日'] != 0 else 0.0, axis=1)
-df_latest["月累计退货率_数值"] = df_latest.apply(lambda r: (r['退货金额_月'] / r['发货金额_月'] * 100) if r['发货金额_月'] != 0 else 0.0, axis=1)
+df_latest["日退货率_数值"] = df_latest.apply(
+    lambda r: (r['退货金额_日'] / r['发货金额_日'] * 100) if r['发货金额_日'] != 0 else 0.0, axis=1
+)
+df_latest["月累计退货率_数值"] = df_latest.apply(
+    lambda r: (r['退货金额_月'] / r['发货金额_月'] * 100) if r['发货金额_月'] != 0 else 0.0, axis=1
+)
 df_latest["目标金额"] = df_latest[dim_label].map(target_dict).fillna(0)
-df_latest["达成率_数值"] = df_latest.apply(lambda r: (r['净销售金额_月'] / r['目标金额'] * 100) if r['目标金额'] != 0 else 0.0, axis=1)
+df_latest["达成率_数值"] = df_latest.apply(
+    lambda r: (r['净销售金额_月'] / r['目标金额'] * 100) if r['目标金额'] != 0 else 0.0, axis=1
+)
 df_latest = df_latest.sort_values(dim_label)
 
 if not df_latest.empty:
-    display_cols = [dim_label, "发货金额_日", "退货金额_日", "净销售金额_日", "日退货率_数值",
-                    "发货金额_月", "退货金额_月", "净销售金额_月", "月累计退货率_数值", "目标金额", "达成率_数值"]
-    rename_map = {dim_label: dim_label, "发货金额_日": "日发货", "退货金额_日": "日退货", "净销售金额_日": "日净额",
-                  "日退货率_数值": "日退货率", "发货金额_月": "月累计发货", "退货金额_月": "月累计退货",
-                  "净销售金额_月": "月累计净额", "月累计退货率_数值": "月累计退货率", "目标金额": "目标金额", "达成率_数值": "达成率"}
+    display_cols = [
+        dim_label,
+        "发货金额_日", "退货金额_日", "净销售金额_日", "日退货率_数值",
+        "发货金额_月", "退货金额_月", "净销售金额_月", "月累计退货率_数值",
+        "目标金额", "达成率_数值"
+    ]
+    rename_map = {
+        dim_label: dim_label,
+        "发货金额_日": "日发货",
+        "退货金额_日": "日退货",
+        "净销售金额_日": "日净额",
+        "日退货率_数值": "日退货率",
+        "发货金额_月": "月累计发货",
+        "退货金额_月": "月累计退货",
+        "净销售金额_月": "月累计净额",
+        "月累计退货率_数值": "月累计退货率",
+        "目标金额": "目标金额",
+        "达成率_数值": "达成率"
+    }
     display_df = df_latest[display_cols].rename(columns=rename_map)
     column_config = {
         dim_label: st.column_config.TextColumn(dim_label),
@@ -114,9 +167,12 @@ if not df_latest.empty:
     total_rate = (total_month_net / total_target * 100) if total_target != 0 else 0.0
 
     col1, col2, col3 = st.columns(3)
-    col1.metric("📊 当日合计", f"净额: ¥{total_today_net:,.2f}", delta=f"发货 ¥{total_today_ship:,.2f} / 退货 ¥{total_today_return:,.2f}")
-    col2.metric("📆 月累计合计", f"净额: ¥{total_month_net:,.2f}", delta=f"发货 ¥{total_month_ship:,.2f} / 退货 ¥{total_month_return:,.2f} | 退货率 {total_return_rate:.2f}%")
-    col3.metric("🎯 目标完成率", f"{total_rate:.2f}%", delta=f"总目标: ¥{total_target:,.2f}")
+    with col1:
+        st.metric("📊 当日合计", f"净额: ¥{total_today_net:,.2f}", delta=f"发货 ¥{total_today_ship:,.2f} / 退货 ¥{total_today_return:,.2f}")
+    with col2:
+        st.metric("📆 月累计合计", f"净额: ¥{total_month_net:,.2f}", delta=f"发货 ¥{total_month_ship:,.2f} / 退货 ¥{total_month_return:,.2f} | 退货率 {total_return_rate:.2f}%")
+    with col3:
+        st.metric("🎯 目标完成率", f"{total_rate:.2f}%", delta=f"总目标: ¥{total_target:,.2f}")
 
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
@@ -125,7 +181,12 @@ if not df_latest.empty:
             if col in export_df.columns:
                 export_df[col] = export_df[col].apply(lambda x: f"{x:.2f}%")
         export_df.to_excel(writer, index=False)
-    st.download_button("💾 导出最新日明细", data=output.getvalue(), file_name=f"最新日明细_{latest_date}.xlsx", key="export_latest_detail_dim")
+    st.download_button(
+        "💾 导出最新日明细",
+        data=output.getvalue(),
+        file_name=f"最新日明细_{latest_date}.xlsx",
+        key="export_latest_detail_dim"
+    )
 else:
     st.info("无数据")
 
@@ -136,7 +197,11 @@ st.markdown("#### 🔍 日期查询")
 if st.button("📅 今日", key="query_today_daily"):
     st.session_state["query_date_daily"] = date.today()
     st.rerun()
-query_date = st.date_input("查询日期", value=st.session_state.get("query_date_daily", date.today()), key="query_date_daily")
+query_date = st.date_input(
+    "查询日期",
+    value=st.session_state.get("query_date_daily", date.today()),
+    key="query_date_daily"
+)
 if st.button("查询", key="query_btn_daily"):
     mask_query = prod_df["sale_date"].dt.date == query_date
     query_data = prod_df[mask_query]
@@ -148,16 +213,34 @@ if st.button("查询", key="query_btn_daily"):
         mask_month_q = (prod_df["sale_date"].dt.date >= month_start_q) & (prod_df["sale_date"].dt.date <= query_date)
         month_data_q = prod_df[mask_month_q]
         month_agg_q = aggregate_dim(month_data_q, group_col, dim_label)
+
         df_query = pd.merge(query_agg, month_agg_q, on=dim_label, suffixes=("_日", "_月"), how="outer").fillna(0)
-        df_query["日退货率_数值"] = df_query.apply(lambda r: (r['退货金额_日'] / r['发货金额_日'] * 100) if r['发货金额_日'] != 0 else 0.0, axis=1)
-        df_query["月累计退货率_数值"] = df_query.apply(lambda r: (r['退货金额_月'] / r['发货金额_月'] * 100) if r['发货金额_月'] != 0 else 0.0, axis=1)
+        df_query["日退货率_数值"] = df_query.apply(
+            lambda r: (r['退货金额_日'] / r['发货金额_日'] * 100) if r['发货金额_日'] != 0 else 0.0, axis=1
+        )
+        df_query["月累计退货率_数值"] = df_query.apply(
+            lambda r: (r['退货金额_月'] / r['发货金额_月'] * 100) if r['发货金额_月'] != 0 else 0.0, axis=1
+        )
         df_query = df_query.sort_values(dim_label)
-        display_cols_q = [dim_label, "发货金额_日", "退货金额_日", "净销售金额_日", "日退货率_数值",
-                          "发货金额_月", "退货金额_月", "净销售金额_月", "月累计退货率_数值"]
-        rename_map_q = {dim_label: dim_label, "发货金额_日": "当日发货", "退货金额_日": "当日退货", "净销售金额_日": "当日净额",
-                        "日退货率_数值": "日退货率", "发货金额_月": "月累计发货", "退货金额_月": "月累计退货",
-                        "净销售金额_月": "月累计净额", "月累计退货率_数值": "月累计退货率"}
+
+        display_cols_q = [
+            dim_label,
+            "发货金额_日", "退货金额_日", "净销售金额_日", "日退货率_数值",
+            "发货金额_月", "退货金额_月", "净销售金额_月", "月累计退货率_数值"
+        ]
+        rename_map_q = {
+            dim_label: dim_label,
+            "发货金额_日": "当日发货",
+            "退货金额_日": "当日退货",
+            "净销售金额_日": "当日净额",
+            "日退货率_数值": "日退货率",
+            "发货金额_月": "月累计发货",
+            "退货金额_月": "月累计退货",
+            "净销售金额_月": "月累计净额",
+            "月累计退货率_数值": "月累计退货率"
+        }
         display_q = df_query[display_cols_q].rename(columns=rename_map_q)
+
         column_config_q = {
             dim_label: st.column_config.TextColumn(dim_label),
             "当日发货": st.column_config.NumberColumn("当日发货", format="%.2f"),
@@ -178,8 +261,10 @@ if st.button("查询", key="query_btn_daily"):
         total_q_month_return = df_query["退货金额_月"].sum()
         total_q_month_net = df_query["净销售金额_月"].sum()
         col1, col2 = st.columns(2)
-        col1.metric("📊 当日合计", f"净额: ¥{total_q_net:,.2f}", delta=f"发货 ¥{total_q_ship:,.2f} / 退货 ¥{total_q_return:,.2f}")
-        col2.metric("📆 截止当日月累计", f"净额: ¥{total_q_month_net:,.2f}", delta=f"发货 ¥{total_q_month_ship:,.2f} / 退货 ¥{total_q_month_return:,.2f}")
+        with col1:
+            st.metric("📊 当日合计", f"净额: ¥{total_q_net:,.2f}", delta=f"发货 ¥{total_q_ship:,.2f} / 退货 ¥{total_q_return:,.2f}")
+        with col2:
+            st.metric("📆 截止当日月累计", f"净额: ¥{total_q_month_net:,.2f}", delta=f"发货 ¥{total_q_month_ship:,.2f} / 退货 ¥{total_q_month_return:,.2f}")
 
         output_q = io.BytesIO()
         with pd.ExcelWriter(output_q, engine='openpyxl') as writer:
@@ -188,4 +273,9 @@ if st.button("查询", key="query_btn_daily"):
                 if col in export_q.columns:
                     export_q[col] = export_q[col].apply(lambda x: f"{x:.2f}%")
             export_q.to_excel(writer, index=False)
-        st.download_button("💾 导出查询结果", data=output_q.getvalue(), file_name=f"查询_{query_date}.xlsx", key="export_query_result_daily")
+        st.download_button(
+            "💾 导出查询结果",
+            data=output_q.getvalue(),
+            file_name=f"查询_{query_date}.xlsx",
+            key="export_query_result_daily"
+        )
