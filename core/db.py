@@ -11,18 +11,55 @@ from datetime import date, timedelta
 import time
 from supabase import create_client
 
-# ---------- Supabase 配置 ----------
-SUPABASE_URL = st.secrets["supabase"]["url"]
-SUPABASE_KEY = st.secrets["supabase"]["key"]
+# ---------- 获取 Supabase 配置（兼容多种 secrets 写法） ----------
+def get_supabase_config():
+    """
+    从 st.secrets 中获取 Supabase URL 和 Key。
+    支持两种格式：
+    1. 嵌套：supabase.url 和 supabase.key
+    2. 顶层：SUPABASE_URL 和 SUPABASE_KEY
+    """
+    try:
+        # 尝试嵌套方式
+        url = st.secrets["supabase"]["url"]
+        key = st.secrets["supabase"]["key"]
+        return url, key
+    except KeyError:
+        pass
+
+    try:
+        # 尝试顶层方式
+        url = st.secrets["SUPABASE_URL"]
+        key = st.secrets["SUPABASE_KEY"]
+        return url, key
+    except KeyError:
+        pass
+
+    # 若都找不到，抛出友好错误
+    st.error(
+        "❌ 未找到 Supabase 配置。请在 `.streamlit/secrets.toml` 中设置：\n"
+        "```toml\n"
+        "[supabase]\n"
+        "url = \"https://your-project.supabase.co\"\n"
+        "key = \"your-anon-key\"\n"
+        "```\n"
+        "或使用顶层变量：\n"
+        "```toml\n"
+        "SUPABASE_URL = \"https://your-project.supabase.co\"\n"
+        "SUPABASE_KEY = \"your-anon-key\"\n"
+        "```"
+    )
+    st.stop()
 
 @st.cache_resource
 def init_supabase():
     """初始化 Supabase 客户端（缓存）"""
+    url, key = get_supabase_config()
     try:
-        return create_client(SUPABASE_URL, SUPABASE_KEY)
+        return create_client(url, key)
     except Exception as e:
         st.error(f"Supabase 连接失败：{e}")
-        return None
+        st.stop()
 
 def get_table_name(base_name, suffix=""):
     """根据后缀返回表名，例如 product_sales -> product_sales_live"""
@@ -33,8 +70,6 @@ def get_table_name(base_name, suffix=""):
 def load_product_sales(suffix="", apply_filter=True):
     """加载商品销售数据（product_sales 表），并应用数据权限过滤"""
     supabase = init_supabase()
-    if supabase is None:
-        return pd.DataFrame()
     try:
         table_name = get_table_name("product_sales", suffix)
         # 分页查询所有数据
@@ -67,8 +102,6 @@ def load_product_sales(suffix="", apply_filter=True):
 def load_product_master():
     """加载商品主数据（product_master）"""
     supabase = init_supabase()
-    if supabase is None:
-        return pd.DataFrame()
     try:
         resp = supabase.table("product_master").select("*").execute()
         if resp.data:
@@ -83,8 +116,6 @@ def load_product_master():
 def load_dimension_mapping():
     """从 mapping 表加载组织/部门映射"""
     supabase = init_supabase()
-    if supabase is None:
-        return pd.DataFrame()
     try:
         resp = supabase.table("mapping").select("*").execute()
         if resp.data:
@@ -99,8 +130,6 @@ def load_dimension_mapping():
 def load_org_targets(suffix=None):
     """从 arg_targets 表加载组织目标"""
     supabase = init_supabase()
-    if supabase is None:
-        return {}
     try:
         table_name = get_table_name("arg_targets", suffix)
         resp = supabase.table(table_name).select("*").execute()
@@ -115,8 +144,6 @@ def load_org_targets(suffix=None):
 def save_org_targets(target_dict, suffix=None):
     """保存组织目标到 arg_targets 表"""
     supabase = init_supabase()
-    if supabase is None:
-        return
     records = [{"org_name": k, "target_amount": v} for k, v in target_dict.items()]
     if records:
         table_name = get_table_name("arg_targets", suffix)
@@ -126,8 +153,6 @@ def save_org_targets(target_dict, suffix=None):
 def fetch_sales_summary(start_date, end_date, suffix=""):
     """调用 RPC get_sales_summary 获取聚合数据"""
     supabase = init_supabase()
-    if supabase is None:
-        return pd.DataFrame()
     try:
         response = supabase.rpc('get_sales_summary', {
             'start_date': start_date.isoformat(),
@@ -146,8 +171,6 @@ def fetch_sales_summary(start_date, end_date, suffix=""):
 def get_date_range(suffix):
     """获取数据表中最早和最晚日期（用于组织页面）"""
     supabase = init_supabase()
-    if supabase is None:
-        return None, None
     try:
         min_dates, max_dates = [], []
         table_name = get_table_name("product_sales", suffix)
@@ -172,4 +195,33 @@ def get_date_range(suffix):
         return None, None
 
 # ---------- 其他可能用到的函数（从原主文件移入） ----------
-# （如果还需要 load_targets, save_targets, clear_targets 等，可继续添加）
+def load_targets(suffix=None):
+    """加载店铺目标（shop_targets）"""
+    supabase = init_supabase()
+    try:
+        table_name = get_table_name("shop_targets", suffix)
+        resp = supabase.table(table_name).select("*").execute()
+        if resp.data:
+            return {row["shop_name"]: row["target_amount"] for row in resp.data}
+        else:
+            return {}
+    except Exception as e:
+        st.error(f"加载店铺目标失败：{e}")
+        return {}
+
+def save_targets(target_dict, suffix=None):
+    """保存店铺目标到 shop_targets 表"""
+    supabase = init_supabase()
+    records = [{"shop_name": k, "target_amount": v} for k, v in target_dict.items()]
+    if records:
+        table_name = get_table_name("shop_targets", suffix)
+        supabase.table(table_name).upsert(records, on_conflict="shop_name").execute()
+
+def clear_targets(suffix=None):
+    """清除当前数据源的店铺目标"""
+    supabase = init_supabase()
+    if supabase:
+        table_name = get_table_name("shop_targets", suffix)
+        supabase.table(table_name).delete().neq("id", 0).execute()
+    st.session_state.target_dict = {}
+    st.rerun()
