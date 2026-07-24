@@ -645,7 +645,7 @@ with st.sidebar:
     # ========== 导航菜单（手动构建） ==========
     st.markdown("### 📌 导航")
     # 主页（当前文件）
-    st.sidebar.page_link("websale_main.py", label="🏠 主页")
+    st.sidebar.page_link("/", label="🏠 主页")
 
     # 获取当前用户角色和权限
     role = st.session_state.role
