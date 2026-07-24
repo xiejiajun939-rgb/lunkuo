@@ -394,7 +394,7 @@ for idx, row in page_df.iterrows():
 if st.session_state.show_dialog and st.session_state.dialog_style_code:
     style_code = st.session_state.dialog_style_code
     cached = st.session_state.cached_detail_data
-    @st.dialog(f"📋 货号 {style_code} 销售明细", width="large")
+    @st.dialog(f"📋 货号 {style_code} 销售明细", width="large", dismissible=False)
     def show_style_detail():
         if cached and cached.get("style_code") == style_code:
             shop_detail = cached["shop_detail"]
@@ -425,7 +425,7 @@ if st.session_state.show_dialog and st.session_state.dialog_style_code:
 # ---------- 趋势对话框 ----------
 if st.session_state.show_trend_dialog and st.session_state.trend_style_code:
     style_code = st.session_state.trend_style_code
-    @st.dialog(f"📈 货号 {style_code} 销售趋势", width="large")
+    @st.dialog(f"📈 货号 {style_code} 销售趋势", width="large", dismissible=False)
     def show_trend():
         st.subheader(f"货号：{style_code}")
         daily = st.session_state.trend_data
