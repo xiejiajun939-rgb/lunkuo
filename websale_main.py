@@ -690,8 +690,9 @@ if not pages_to_show:
         Page("pages/product_page.py", title="📦 商品分析"),
     ]
 
-# 创建导航
+# 创建导航并运行（关键：必须调用 .run()）
 nav = st.navigation(pages_to_show, position="sidebar")
+nav.run()  # <-- 这一行是必须的，否则页面无法切换
 
 # ========== 侧边栏额外内容（在导航下方） ==========
 # 注意：导航菜单已经占据了侧边栏顶部，我们在此添加其他内容
@@ -877,10 +878,11 @@ with st.sidebar:
         st.rerun()
 
 # ========== 主内容区（仅当处于根路径时显示欢迎信息） ==========
-# 使用 st.runtime.scriptrunner.script_run_context 检测是否为主页，
-# 简单方法：判断当前路径是否为 '/'
-import streamlit as st
-if st.query_params.get("page") is None and not st.session_state.get("_page_loaded", False):
+# 检测当前是否为根路径（即没有选择任何子页面）
+# 方法：检查 query_params 中的 "page" 参数，或者判断当前路径。
+# Streamlit 在子页面时会在 URL 中显示 "/page_name"，根路径为 "/"
+# 通过 st.query_params 判断
+if "page" not in st.query_params:
     # 仅在根路径显示欢迎信息
     st.markdown("""
     <div style="display: flex; justify-content: center; align-items: center; height: 50vh; flex-direction: column;">
