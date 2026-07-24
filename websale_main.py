@@ -47,14 +47,14 @@ st.set_page_config(
 from streamlit import navigation, Page
 
 pages = {
-    "📊 经营驾驶舱": Page("pages/1_dashboard.py", title="📊 经营驾驶舱"),
-    "📋 每日明细": Page("pages/2_daily_detail.py", title="📋 每日明细"),
+    "📊 经营驾驶舱": Page("pages/dashboard.py", title="📊 经营驾驶舱"),
+    "📋 每日明细": Page("pages/daily_detail.py", title="📋 每日明细"),
     "📦 商品分析": Page("pages/product_page.py", title="📦 商品分析"),
-    "🎤 主播分析": Page("pages/3_anchor.py", title="🎤 主播分析"),
-    "📈 销售分布与品牌": Page("pages/4_distribution.py", title="📈 销售分布与品牌"),
-    "🏢 组织与部门分析": Page("pages/5_org_dept.py", title="🏢 组织与部门分析"),
-    "📚 商品库导出": Page("pages/6_export.py", title="📚 商品库导出"),
-    "⚙️ 系统设置": Page("pages/7_settings.py", title="⚙️ 系统设置"),
+    "🎤 主播分析": Page("pages/anchor.py", title="🎤 主播分析"),
+    "📈 销售分布与品牌": Page("pages/distribution.py", title="📈 销售分布与品牌"),
+    "🏢 组织与部门分析": Page("pages/org_dept.py", title="🏢 组织与部门分析"),
+    "📚 商品库导出": Page("pages/export.py", title="📚 商品库导出"),
+    "⚙️ 系统设置": Page("pages/settings.py", title="⚙️ 系统设置"),
 }
 
 nav = st.navigation(list(pages.values()), position="sidebar")
