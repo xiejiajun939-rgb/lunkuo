@@ -644,9 +644,7 @@ if st.session_state.target_dict == {}:
 with st.sidebar:
     # ========== 导航菜单（手动构建） ==========
     st.markdown("### 📌 导航")
-    # 主页（当前文件）
-    st.sidebar.markdown("[🏠 主页](/)")
-
+    
     # 获取当前用户角色和权限
     role = st.session_state.role
     username = st.session_state.username
@@ -655,7 +653,7 @@ with st.sidebar:
 
     if role == "admin":
         # 管理员显示全部页面
-        st.sidebar.page_link("pages/dashboard.py", label="📊 经营驾驶舱")
+        st.sidebar.page_link("pages/dashboard. py", label="📊 经营驾驶舱")
         st.sidebar.page_link("pages/daily_detail.py", label="📋 每日明细")
         st.sidebar.page_link("pages/product_page.py", label="📦 商品分析")
         st.sidebar.page_link("pages/anchor.py", label="🎤 主播分析")
