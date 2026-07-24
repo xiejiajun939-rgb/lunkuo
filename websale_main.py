@@ -47,7 +47,7 @@ st.set_page_config(
 from streamlit import navigation, Page
 
 pages = {
-    
+    "📊 主页": Page("websale_main.py", title="📊 主页"),
     "📊 经营驾驶舱": Page("pages/dashboard.py", title="📊 经营驾驶舱"),
     "📋 每日明细": Page("pages/daily_detail.py", title="📋 每日明细"),
     "📦 商品分析": Page("pages/product_page.py", title="📦 商品分析"),
@@ -57,7 +57,7 @@ pages = {
     "📚 商品库导出": Page("pages/export.py", title="📚 商品库导出"),
     "⚙️ 系统设置": Page("pages/settings.py", title="⚙️ 系统设置"),
 }
-st.sidebar.page_link("websale_main.py", label="🏠 主页")
+
 nav = st.navigation(list(pages.values()), position="sidebar")
 nav.run()
 # ========== 自定义CSS ==========
