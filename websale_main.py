@@ -47,7 +47,6 @@ st.set_page_config(
 from streamlit import navigation, Page
 
 pages = {
-    "📊 主页": Page("websale_main.py", title="📊 主页"),
     "📊 经营驾驶舱": Page("pages/dashboard.py", title="📊 经营驾驶舱"),
     "📋 每日明细": Page("pages/daily_detail.py", title="📋 每日明细"),
     "📦 商品分析": Page("pages/product_page.py", title="📦 商品分析"),
