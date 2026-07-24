@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-订单业绩统计工具 - 多页应用入口（纯链接导航版）
+订单业绩统计工具 - 多页应用入口（标准导航版）
 管理员账号：admin / 1234567890
 子账号存储在 Supabase 的 sub_accounts 表中
 """
@@ -640,54 +640,68 @@ rebuild_daily_data(st.session_state.table_suffix)
 if st.session_state.target_dict == {}:
     st.session_state.target_dict = load_targets(st.session_state.table_suffix)
 
-# ========== 侧边栏 ==========
-with st.sidebar:
-    # ========== 导航菜单（纯HTML链接，路径已修正） ==========
-    st.markdown("### 📌 导航")
-    
-    # 获取当前用户角色和权限
-    role = st.session_state.role
-    username = st.session_state.username
+# ========== 构建导航页面（根据权限动态显示） ==========
+from streamlit import navigation, Page
+
+# 定义所有可用页面（显示名称 → 文件路径）
+all_pages = {
+    "📊 经营驾驶舱": "pages/dashboard.py",
+    "📋 每日明细": "pages/daily_detail.py",
+    "📦 商品分析": "pages/product_page.py",
+    "🎤 主播分析": "pages/anchor.py",
+    "📈 销售分布与品牌": "pages/distribution.py",
+    "🏢 组织与部门分析": "pages/org_dept.py",
+    "📚 商品库导出": "pages/export.py",
+    "⚙️ 系统设置": "pages/settings.py",
+}
+
+# 根据角色和权限过滤
+role = st.session_state.role
+username = st.session_state.username
+current_suffix = st.session_state.table_suffix
+
+if role == "admin":
+    allowed_labels = list(all_pages.keys())
+else:
     user_info = st.session_state.sub_users.get(username, {})
-    current_suffix = st.session_state.table_suffix
+    perms = user_info.get("permissions", {})
+    allowed = perms.get(current_suffix, [])
+    if not allowed and "" in perms:
+        allowed = perms[""]
+    allowed_labels = allowed
 
-    # 主页链接
+# 构建 Page 对象列表
+pages_to_show = []
+for label, path in all_pages.items():
+    # 系统设置仅管理员
+    if label == "⚙️ 系统设置" and role != "admin":
+        continue
+    # 组织与部门分析仅 _all
+    if label == "🏢 组织与部门分析" and current_suffix != "_all":
+        continue
+    if label in allowed_labels:
+        pages_to_show.append(Page(path, title=label))
+
+# 如果没有任何页面，则显示默认（防止空导航）
+if not pages_to_show:
+    pages_to_show = [
+        Page("pages/dashboard.py", title="📊 经营驾驶舱"),
+        Page("pages/daily_detail.py", title="📋 每日明细"),
+        Page("pages/product_page.py", title="📦 商品分析"),
+    ]
+
+# 创建导航
+nav = st.navigation(pages_to_show, position="sidebar")
+
+# ========== 侧边栏额外内容（在导航下方） ==========
+# 注意：导航菜单已经占据了侧边栏顶部，我们在此添加其他内容
+with st.sidebar:
+    # 主页链接（使用 Markdown，稳定可靠）
+    st.sidebar.markdown("---")
     st.sidebar.markdown("[🏠 主页](/)")
-    
-    if role == "admin":
-        # 管理员显示全部页面（注意路径为 /页面名，无 pages/ 前缀）
-        st.sidebar.markdown("[📊 经营驾驶舱](/dashboard)")
-        st.sidebar.markdown("[📋 每日明细](/daily_detail)")
-        st.sidebar.markdown("[📦 商品分析](/product_page)")
-        st.sidebar.markdown("[🎤 主播分析](/anchor)")
-        st.sidebar.markdown("[📈 销售分布与品牌](/distribution)")
-        if current_suffix == "_all":
-            st.sidebar.markdown("[🏢 组织与部门分析](/org_dept)")
-        st.sidebar.markdown("[📚 商品库导出](/export)")
-        st.sidebar.markdown("[⚙️ 系统设置](/settings)")
-    else:
-        # 子账号：根据权限显示
-        perms = user_info.get("permissions", {})
-        allowed = perms.get(current_suffix, [])
-        if not allowed and "" in perms:
-            allowed = perms[""]
-        # 页面名称到路径的映射（不含 pages/ 前缀）
-        page_map = {
-            "📊 经营驾驶舱": "/dashboard",
-            "📋 每日明细": "/daily_detail",
-            "📦 商品分析": "/product_page",
-            "🎤 主播分析": "/anchor",
-            "📈 销售分布与品牌": "/distribution",
-            "🏢 组织与部门分析": "/org_dept",
-        }
-        for label, path in page_map.items():
-            if label == "🏢 组织与部门分析" and current_suffix != "_all":
-                continue
-            if label in allowed:
-                st.sidebar.markdown(f"[{label}]({path})")
-    st.markdown("---")
+    st.sidebar.markdown("---")
 
-    # ---------- 数据加载 ----------
+    # 数据加载
     st.header("📂 数据加载")
     st.subheader("🔄 数据源切换")
     suffix_names = {"": "非直播数据", "_all": "全部数据"}
@@ -719,10 +733,11 @@ with st.sidebar:
         if new_suffix != st.session_state.table_suffix:
             st.session_state.table_suffix = new_suffix
             st.cache_data.clear()
+            # 刷新页面以更新导航
             st.rerun()
     st.markdown("---")
 
-    # ---------- 文件上传与工具 ----------
+    # 文件上传与工具（仅管理员）
     if st.session_state.role == "admin":
         current_display_suffix = st.session_state.table_suffix
         def handle_upload(uploaded_file, suffix, file_type="order"):
@@ -861,14 +876,19 @@ with st.sidebar:
                 del st.session_state[key]
         st.rerun()
 
-# ========== 主内容区（欢迎信息） ==========
-st.markdown("""
-<div style="display: flex; justify-content: center; align-items: center; height: 50vh; flex-direction: column;">
-    <h1 style="color: #1e293b;">📊 欢迎使用数据罗盘</h1>
-    <p style="color: #475569; font-size: 18px;">请从左侧导航栏选择一个功能页面开始分析。</p>
-    <p style="color: #94a3b8; font-size: 14px;">当前数据源：<strong>{}</strong></p>
-</div>
-""".format(current_source_name), unsafe_allow_html=True)
+# ========== 主内容区（仅当处于根路径时显示欢迎信息） ==========
+# 使用 st.runtime.scriptrunner.script_run_context 检测是否为主页，
+# 简单方法：判断当前路径是否为 '/'
+import streamlit as st
+if st.query_params.get("page") is None and not st.session_state.get("_page_loaded", False):
+    # 仅在根路径显示欢迎信息
+    st.markdown("""
+    <div style="display: flex; justify-content: center; align-items: center; height: 50vh; flex-direction: column;">
+        <h1 style="color: #1e293b;">📊 欢迎使用数据罗盘</h1>
+        <p style="color: #475569; font-size: 18px;">请从左侧导航栏选择一个功能页面开始分析。</p>
+        <p style="color: #94a3b8; font-size: 14px;">当前数据源：<strong>{}</strong></p>
+    </div>
+    """.format(current_source_name), unsafe_allow_html=True)
 
 # ========== 保存组织目标（辅助函数） ==========
 def save_org_targets(target_dict, suffix=None):
