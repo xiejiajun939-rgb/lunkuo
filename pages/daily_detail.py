@@ -109,7 +109,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.subheader("📋 每日明细查询")
-st.info("此处展示任意日期的销售明细。选择阿米巴组织时，默认仅显示「小店运营组」的各店铺明细。")
+st.info("此处展示任意日期的销售明细，支持按组织/部门/店铺维度汇总，并可查看特定组织的店铺明细。")
 
 # ---------- 数据源 ----------
 suffix = st.session_state.table_suffix
@@ -123,28 +123,27 @@ if date_df.empty:
 min_date = date_df["sale_date"].min().date()
 max_date = date_df["sale_date"].max().date()
 
-# ---------- 维度选择（简化） ----------
+# ---------- 维度选择 ----------
 if is_all:
     mapping_df = load_dimension_mapping()
     has_org = not mapping_df.empty and 'org_name' in mapping_df.columns
     if has_org:
-        dimension_options = ["阿米巴组织", "部门"]
+        org_targets = load_org_targets("_all")
+        # 增加 "小店运营组" 作为独立选项
+        dimension_options = ["阿米巴组织", "部门", "小店运营组"]
         selected_dim = st.radio("选择维度", dimension_options, horizontal=True, key="dimension_select_daily")
 
         if selected_dim == "阿米巴组织":
-            # 固定为小店运营组
-            selected_org = "小店运营组"
-            st.info(f"当前选择：阿米巴组织 → **{selected_org}**（仅展示该组织下的店铺明细）")
-            # 切换到店铺明细模式
-            group_col = "shop_name"
-            dim_label = "店铺"
-            # 店铺目标从 shop_targets 表读取（无后缀，与非直播目标共用）
-            target_dict = load_targets()  # 无参数
-            use_shop_detail = True
-            org_filter = selected_org
-        else:
-            # 部门维度（保持原有逻辑）
-            org_targets = load_org_targets("_all")
+            # 提供组织下拉选择（全量）
+            all_orgs = sorted(mapping_df['org_name'].dropna().unique())
+            selected_org = st.selectbox("选择组织", all_orgs, key="org_select")
+            group_col = "org_name"
+            dim_label = "组织"
+            target_dict = org_targets
+            use_shop_detail = False
+            org_filter = None  # 不额外过滤，因为是组织维度本身
+
+        elif selected_dim == "部门":
             group_col = "dept"
             dim_label = "部门"
             # 汇总部门目标
@@ -159,6 +158,17 @@ if is_all:
             target_dict = dept_targets
             use_shop_detail = False
             org_filter = None
+
+        else:  # 小店运营组
+            # 固定为店铺维度，只过滤组织为"小店运营组"
+            group_col = "shop_name"
+            dim_label = "店铺"
+            # 店铺目标从 shop_targets 表读取（无后缀）
+            target_dict = load_targets()  # 无参数
+            use_shop_detail = True
+            org_filter = "小店运营组"
+            st.info("当前选择：小店运营组 → 展示该组织下所有店铺的销售明细，目标取自店铺目标表。")
+
     else:
         # 无映射表，回退到店铺
         group_col = "shop_name"
@@ -357,7 +367,7 @@ else:
         dim_agg["退款率"] = dim_agg.apply(
             lambda r: f"{(r['退货金额'] / r['发货金额'] * 100):.2f}%" if r['发货金额'] != 0 else "-", axis=1
         )
-        # 如果是店铺模式，加入目标
+        # 如果是店铺模式（小店运营组），加入目标
         if use_shop_detail and group_col == "shop_name":
             dim_agg["目标金额"] = dim_agg[dim_label].map(target_dict).fillna(0)
             dim_agg["达成率"] = dim_agg.apply(
