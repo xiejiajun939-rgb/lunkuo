@@ -14,142 +14,110 @@ from core.ai import get_ai_summary
 
 st.markdown("""
 <style>
-    /* 全局基础 */
-    .stApp {
-        background: #f0f4f8;
-        font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    /* ---------- 翻页控件：去掉背景和边框，只留文字 ---------- */
+    /* 翻页按钮（上一页/下一页） */
+    div[data-testid="stButton"] button:has(> :contains("◀")),
+    div[data-testid="stButton"] button:has(> :contains("▶")) {
+        background: transparent !important;
+        border: none !important;
+        box-shadow: none !important;
+        padding: 4px 8px !important;
+        font-weight: 400 !important;
+        color: #2563eb !important;
+        transition: color 0.2s ease !important;
+    }
+    div[data-testid="stButton"] button:has(> :contains("◀")):hover,
+    div[data-testid="stButton"] button:has(> :contains("▶")):hover {
+        color: #1d4ed8 !important;
+        text-decoration: underline !important;
+        background: transparent !important;
+        transform: none !important;
+        box-shadow: none !important;
     }
 
-    /* 标题样式保持 */
-    h1, h2, h3, h4, h5, h6, .stMarkdown h1, .stMarkdown h2, .stMarkdown h3 {
-        color: #0b1a33 !important;
-        font-weight: 500 !important;
-        letter-spacing: -0.03em !important;
-        margin-bottom: 0.2rem !important;
-    }
-    .stMarkdown h1 {
-        font-size: 2.2rem !important;
-        font-weight: 600 !important;
-        background: linear-gradient(135deg, #0b1a33 30%, #3b82f6);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        background-clip: text;
+    /* 翻页中的“第 X / Y 页”文字（去掉框） */
+    .stMarkdown p:has(+ div[data-testid="stButton"]) {
+        margin: 0 12px !important;
+        color: #475569 !important;
+        font-weight: 400 !important;
     }
 
-    /* 卡片 - 毛玻璃，但内边距大幅缩小 */
-    .stColumn > div, 
-    div[data-testid="stExpander"], 
-    div[data-testid="stMetric"],
-    .stAlert,
-    .stMarkdown .stBlock {
-        background: rgba(255, 255, 255, 0.65) !important;
-        backdrop-filter: blur(12px) !important;
-        -webkit-backdrop-filter: blur(12px) !important;
-        border-radius: 16px !important;
-        border: 1px solid rgba(255, 255, 255, 0.4) !important;
-        box-shadow: 0 4px 16px rgba(0, 20, 40, 0.06), 
-                    inset 0 1px 0 rgba(255, 255, 255, 0.6) !important;
-        padding: 8px 12px !important;          /* 大幅缩减内边距 */
-        transition: all 0.25s ease !important;
+    /* 导出类型下拉框（只留文字和箭头，去掉边框背景） */
+    .stSelectbox > div > div > div {
+        background: transparent !important;
+        border: none !important;
+        border-bottom: 1px solid #cbd5e1 !important;
+        border-radius: 0 !important;
+        padding: 4px 0 !important;
+        box-shadow: none !important;
+        backdrop-filter: none !important;
+        font-weight: 400 !important;
+        color: #1e293b !important;
     }
-    .stColumn > div:hover, 
-    div[data-testid="stExpander"]:hover {
-        box-shadow: 0 8px 28px rgba(0, 20, 40, 0.1),
-                    inset 0 1px 0 rgba(255, 255, 255, 0.8) !important;
-        transform: translateY(-1px);
-        background: rgba(255, 255, 255, 0.8) !important;
+    .stSelectbox > div > div > div:focus-within {
+        border-bottom-color: #2563eb !important;
+        box-shadow: none !important;
     }
 
-    /* 侧边栏 - 内边距也缩小 */
-    section[data-testid="stSidebar"] {
-        background: rgba(255, 255, 255, 0.6) !important;
-        backdrop-filter: blur(20px) !important;
-        -webkit-backdrop-filter: blur(20px) !important;
-        border-right: 1px solid rgba(255, 255, 255, 0.3) !important;
-        padding: 16px 12px !important;
-        box-shadow: 4px 0 24px rgba(0, 20, 40, 0.04) !important;
-    }
-
-    /* 表格容器 - 无额外内边距 */
+    /* ---------- 商品明细表格：去掉外边框和整体背景，只留线条 ---------- */
     .stDataFrame {
-        border-radius: 12px !important;
-        overflow: hidden !important;
-        background: rgba(255, 255, 255, 0.5) !important;
-        backdrop-filter: blur(8px) !important;
-        box-shadow: 0 2px 12px rgba(0, 20, 40, 0.04) !important;
-        border: 1px solid rgba(255, 255, 255, 0.3) !important;
-        margin: 0 !important;
+        background: transparent !important;
+        backdrop-filter: none !important;
+        border: none !important;
+        box-shadow: none !important;
+        border-radius: 0 !important;
     }
     .stDataFrame thead tr th {
-        padding: 8px 10px !important;
-        font-size: 0.8rem !important;
+        background: transparent !important;
+        border-bottom: 2px solid #e2e8f0 !important;
+        padding: 8px 12px !important;
+        font-weight: 500 !important;
+        color: #0f172a !important;
+        text-transform: none !important;
+        letter-spacing: 0 !important;
     }
     .stDataFrame tbody tr td {
-        padding: 6px 10px !important;
-        font-size: 0.85rem !important;
+        border-bottom: 1px solid #e2e8f0 !important;
+        padding: 8px 12px !important;
+        background: transparent !important;
+    }
+    .stDataFrame tbody tr:hover {
+        background: rgba(241, 245, 249, 0.3) !important;
+    }
+    .stDataFrame tbody tr:last-child td {
+        border-bottom: none !important;
     }
 
-    /* 图片列（商品分析页） - 确保图片不被压缩 */
-    .stImage {
-        max-width: 100% !important;
-        height: auto !important;
+    /* 如果表格在卡片内，去掉卡片的背景（仅针对明细区域） */
+    .stColumn > div:has(.stDataFrame) {
+        background: transparent !important;
+        backdrop-filter: none !important;
+        border: none !important;
+        box-shadow: none !important;
+        padding: 0 !important;
     }
 
-    /* 按钮 - 保持精致但更紧凑 */
-    div[data-testid="stButton"] button {
-        padding: 4px 14px !important;
-        font-size: 0.9rem !important;
-        border-radius: 8px !important;
+    /* 详情对话框内表格（同样处理） */
+    div[data-testid="stDialog"] .stDataFrame {
+        background: transparent !important;
+        border: none !important;
+        box-shadow: none !important;
     }
 
-    /* 输入框 - 紧凑 */
-    .stTextInput > div > div > input,
-    .stSelectbox > div > div > div,
-    .stMultiSelect > div > div > div {
-        padding: 6px 10px !important;
-        font-size: 0.9rem !important;
-        border-radius: 8px !important;
+    /* 对话框本身保持毛玻璃，但内部表格无框 */
+    div[data-testid="stDialog"] .stColumn > div {
+        background: transparent !important;
+        border: none !important;
+        box-shadow: none !important;
+        padding: 0 !important;
     }
 
-    /* 日期输入 */
-    div[data-testid="stDateInput"] input {
-        padding: 6px 10px !important;
-    }
-
-    /* Metric 卡片 */
-    div[data-testid="stMetric"] {
-        padding: 12px 14px !important;
-    }
-    div[data-testid="stMetric"] .stMetricValue {
-        font-size: 1.6rem !important;
-    }
-
-    /* 其他元素保持毛玻璃效果，但内边距全面收紧 */
-    .stInfo, .stWarning, .stSuccess, .stError {
-        padding: 10px 14px !important;
-    }
-
-    /* 分割线间距 */
-    hr {
-        margin: 16px 0 !important;
-    }
-
-    /* 弹窗 */
-    div[data-testid="stDialog"] {
-        padding: 20px !important;
-        border-radius: 20px !important;
-    }
-
-    /* 侧边栏按钮 */
-    section[data-testid="stSidebar"] .stButton button {
-        padding: 6px 10px !important;
-    }
-
-    /* 响应式 */
-    @media (max-width: 768px) {
-        .stColumn > div {
-            padding: 6px 8px !important;
-        }
+    /* 翻页区域整个容器（如果有背景框） */
+    .stColumns:has(> .stColumn > div[data-testid="stButton"]) {
+        background: transparent !important;
+        border: none !important;
+        box-shadow: none !important;
+        padding: 8px 0 !important;
     }
 </style>
 """, unsafe_allow_html=True)
