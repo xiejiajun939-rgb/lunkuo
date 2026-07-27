@@ -20,7 +20,7 @@ st.markdown("""
         font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
     }
 
-    /* 标题 - 更轻盈、现代 */
+    /* 标题样式保持 */
     h1, h2, h3, h4, h5, h6, .stMarkdown h1, .stMarkdown h2, .stMarkdown h3 {
         color: #0b1a33 !important;
         font-weight: 500 !important;
@@ -36,7 +36,7 @@ st.markdown("""
         background-clip: text;
     }
 
-    /* 卡片 - 毛玻璃效果 */
+    /* 卡片 - 毛玻璃，但内边距大幅缩小 */
     .stColumn > div, 
     div[data-testid="stExpander"], 
     div[data-testid="stMetric"],
@@ -45,231 +45,110 @@ st.markdown("""
         background: rgba(255, 255, 255, 0.65) !important;
         backdrop-filter: blur(12px) !important;
         -webkit-backdrop-filter: blur(12px) !important;
-        border-radius: 20px !important;
+        border-radius: 16px !important;
         border: 1px solid rgba(255, 255, 255, 0.4) !important;
-        box-shadow: 0 8px 32px rgba(0, 20, 40, 0.08), 
+        box-shadow: 0 4px 16px rgba(0, 20, 40, 0.06), 
                     inset 0 1px 0 rgba(255, 255, 255, 0.6) !important;
-        padding: 20px 18px !important;
+        padding: 8px 12px !important;          /* 大幅缩减内边距 */
         transition: all 0.25s ease !important;
     }
     .stColumn > div:hover, 
     div[data-testid="stExpander"]:hover {
-        box-shadow: 0 12px 48px rgba(0, 20, 40, 0.12),
+        box-shadow: 0 8px 28px rgba(0, 20, 40, 0.1),
                     inset 0 1px 0 rgba(255, 255, 255, 0.8) !important;
-        transform: translateY(-2px);
-        background: rgba(255, 255, 255, 0.75) !important;
+        transform: translateY(-1px);
+        background: rgba(255, 255, 255, 0.8) !important;
     }
 
-    /* 按钮 - 渐变与光感 */
-    div[data-testid="stButton"] button {
-        background: linear-gradient(135deg, #ffffff, #f8fafc) !important;
-        border: 1px solid rgba(203, 213, 225, 0.6) !important;
-        border-radius: 12px !important;
-        color: #1e293b !important;
-        font-weight: 500 !important;
-        padding: 6px 18px !important;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.02), inset 0 1px 0 rgba(255,255,255,0.8) !important;
-        transition: all 0.2s ease !important;
-    }
-    div[data-testid="stButton"] button:hover {
-        background: linear-gradient(135deg, #f1f5f9, #e2e8f0) !important;
-        border-color: rgba(148, 163, 184, 0.8) !important;
-        box-shadow: 0 8px 20px rgba(0, 20, 40, 0.1), inset 0 1px 0 rgba(255,255,255,0.9) !important;
-        transform: translateY(-2px);
-    }
-    div[data-testid="stButton"] button:active {
-        transform: scale(0.96);
-        box-shadow: 0 2px 8px rgba(0,0,0,0.06) !important;
-    }
-
-    /* 主要操作按钮（如"确认上传"）可单独强调 */
-    div[data-testid="stButton"] button[kind="primary"] {
-        background: linear-gradient(135deg, #3b82f6, #2563eb) !important;
-        border: none !important;
-        color: white !important;
-        box-shadow: 0 4px 14px rgba(59, 130, 246, 0.35) !important;
-    }
-    div[data-testid="stButton"] button[kind="primary"]:hover {
-        background: linear-gradient(135deg, #2563eb, #1d4ed8) !important;
-        box-shadow: 0 8px 24px rgba(59, 130, 246, 0.45) !important;
-    }
-
-    /* 输入框、选择框、多选框 */
-    .stTextInput > div > div > input,
-    .stSelectbox > div > div > div,
-    .stMultiSelect > div > div > div {
-        background: rgba(255, 255, 255, 0.7) !important;
-        backdrop-filter: blur(8px) !important;
-        -webkit-backdrop-filter: blur(8px) !important;
-        border-radius: 12px !important;
-        border: 1px solid rgba(203, 213, 225, 0.5) !important;
-        padding: 8px 14px !important;
-        transition: all 0.2s ease !important;
-        color: #0f172a !important;
-        font-size: 14px !important;
-    }
-    .stTextInput > div > div > input:focus,
-    .stSelectbox > div > div > div:focus-within,
-    .stMultiSelect > div > div > div:focus-within {
-        border-color: #3b82f6 !important;
-        box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.15) !important;
-        background: rgba(255, 255, 255, 0.9) !important;
-    }
-
-    /* 日期输入 */
-    div[data-testid="stDateInput"] input {
-        background: rgba(255, 255, 255, 0.7) !important;
-        backdrop-filter: blur(8px) !important;
-        border-radius: 12px !important;
-        border: 1px solid rgba(203, 213, 225, 0.5) !important;
-        padding: 8px 14px !important;
-    }
-
-    /* 表格 - 极简优雅 */
-    .stDataFrame {
-        border-radius: 16px !important;
-        overflow: hidden !important;
-        background: rgba(255, 255, 255, 0.5) !important;
-        backdrop-filter: blur(8px) !important;
-        box-shadow: 0 4px 20px rgba(0, 20, 40, 0.04) !important;
-        border: 1px solid rgba(255, 255, 255, 0.3) !important;
-    }
-    .stDataFrame thead tr th {
-        background: rgba(241, 245, 249, 0.6) !important;
-        color: #0f172a !important;
-        font-weight: 600 !important;
-        font-size: 0.85rem !important;
-        text-transform: uppercase;
-        letter-spacing: 0.03em;
-        padding: 12px 16px !important;
-        border-bottom: 1px solid rgba(203, 213, 225, 0.3) !important;
-    }
-    .stDataFrame tbody tr td {
-        padding: 10px 16px !important;
-        border-bottom: 1px solid rgba(203, 213, 225, 0.15) !important;
-        font-size: 0.9rem !important;
-    }
-    .stDataFrame tbody tr:hover {
-        background: rgba(241, 245, 249, 0.4) !important;
-    }
-
-    /* 侧边栏 - 毛玻璃 */
+    /* 侧边栏 - 内边距也缩小 */
     section[data-testid="stSidebar"] {
         background: rgba(255, 255, 255, 0.6) !important;
         backdrop-filter: blur(20px) !important;
         -webkit-backdrop-filter: blur(20px) !important;
         border-right: 1px solid rgba(255, 255, 255, 0.3) !important;
-        padding: 24px 16px !important;
+        padding: 16px 12px !important;
         box-shadow: 4px 0 24px rgba(0, 20, 40, 0.04) !important;
     }
-    section[data-testid="stSidebar"] .stButton button {
-        background: transparent !important;
-        border: none !important;
-        justify-content: flex-start !important;
-        padding: 8px 12px !important;
-        border-radius: 12px !important;
-        width: 100% !important;
-        text-align: left !important;
-        font-weight: 500 !important;
-        color: #1e293b !important;
-        transition: all 0.15s ease !important;
-    }
-    section[data-testid="stSidebar"] .stButton button:hover {
-        background: rgba(241, 245, 249, 0.6) !important;
-        transform: translateX(4px);
-    }
 
-    /* Metric 卡片加强 */
-    div[data-testid="stMetric"] {
+    /* 表格容器 - 无额外内边距 */
+    .stDataFrame {
+        border-radius: 12px !important;
+        overflow: hidden !important;
         background: rgba(255, 255, 255, 0.5) !important;
         backdrop-filter: blur(8px) !important;
-        border-radius: 20px !important;
-        padding: 18px 20px !important;
+        box-shadow: 0 2px 12px rgba(0, 20, 40, 0.04) !important;
         border: 1px solid rgba(255, 255, 255, 0.3) !important;
-        box-shadow: 0 4px 16px rgba(0, 20, 40, 0.04) !important;
+        margin: 0 !important;
     }
-    div[data-testid="stMetric"] label {
-        font-weight: 500 !important;
-        color: #475569 !important;
+    .stDataFrame thead tr th {
+        padding: 8px 10px !important;
         font-size: 0.8rem !important;
-        text-transform: uppercase;
-        letter-spacing: 0.04em;
+    }
+    .stDataFrame tbody tr td {
+        padding: 6px 10px !important;
+        font-size: 0.85rem !important;
+    }
+
+    /* 图片列（商品分析页） - 确保图片不被压缩 */
+    .stImage {
+        max-width: 100% !important;
+        height: auto !important;
+    }
+
+    /* 按钮 - 保持精致但更紧凑 */
+    div[data-testid="stButton"] button {
+        padding: 4px 14px !important;
+        font-size: 0.9rem !important;
+        border-radius: 8px !important;
+    }
+
+    /* 输入框 - 紧凑 */
+    .stTextInput > div > div > input,
+    .stSelectbox > div > div > div,
+    .stMultiSelect > div > div > div {
+        padding: 6px 10px !important;
+        font-size: 0.9rem !important;
+        border-radius: 8px !important;
+    }
+
+    /* 日期输入 */
+    div[data-testid="stDateInput"] input {
+        padding: 6px 10px !important;
+    }
+
+    /* Metric 卡片 */
+    div[data-testid="stMetric"] {
+        padding: 12px 14px !important;
     }
     div[data-testid="stMetric"] .stMetricValue {
-        font-size: 2rem !important;
-        font-weight: 600 !important;
-        color: #0b1a33 !important;
-        letter-spacing: -0.02em;
+        font-size: 1.6rem !important;
     }
 
-    /* 标签/标题装饰 */
-    .stSubheader {
-        font-weight: 500 !important;
-        color: #0b1a33 !important;
-        letter-spacing: -0.01em !important;
-        border-bottom: 2px solid rgba(203, 213, 225, 0.3) !important;
-        padding-bottom: 8px !important;
-        margin-bottom: 20px !important;
-    }
-
-    /* 分割线 - 渐变装饰 */
-    hr {
-        margin: 28px 0 !important;
-        border: none !important;
-        height: 1px !important;
-        background: linear-gradient(to right, rgba(203, 213, 225, 0.2), rgba(59, 130, 246, 0.4), rgba(203, 213, 225, 0.2)) !important;
-        border-radius: 2px !important;
-    }
-
-    /* 信息框 - 毛玻璃+彩色边框 */
+    /* 其他元素保持毛玻璃效果，但内边距全面收紧 */
     .stInfo, .stWarning, .stSuccess, .stError {
-        background: rgba(255, 255, 255, 0.5) !important;
-        backdrop-filter: blur(8px) !important;
-        border-radius: 16px !important;
-        border-left: 4px solid !important;
-        padding: 14px 20px !important;
-        box-shadow: 0 4px 16px rgba(0, 20, 40, 0.04) !important;
-        border-top: 1px solid rgba(255, 255, 255, 0.3) !important;
-        border-right: 1px solid rgba(255, 255, 255, 0.3) !important;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.3) !important;
-    }
-    .stInfo { border-left-color: #3b82f6 !important; }
-    .stWarning { border-left-color: #f59e0b !important; }
-    .stSuccess { border-left-color: #22c55e !important; }
-    .stError { border-left-color: #ef4444 !important; }
-
-    /* 单选/多选标签 */
-    .stRadio > div, .stCheckbox {
-        background: transparent !important;
-    }
-    .stRadio label, .stCheckbox label {
-        color: #1e293b !important;
-        font-weight: 450 !important;
+        padding: 10px 14px !important;
     }
 
-    /* 弹窗 (Dialog) */
+    /* 分割线间距 */
+    hr {
+        margin: 16px 0 !important;
+    }
+
+    /* 弹窗 */
     div[data-testid="stDialog"] {
-        background: rgba(255, 255, 255, 0.75) !important;
-        backdrop-filter: blur(24px) !important;
-        -webkit-backdrop-filter: blur(24px) !important;
-        border-radius: 28px !important;
-        border: 1px solid rgba(255, 255, 255, 0.5) !important;
-        box-shadow: 0 24px 80px rgba(0, 20, 40, 0.16) !important;
-        padding: 32px !important;
+        padding: 20px !important;
+        border-radius: 20px !important;
     }
 
-    /* 微交互：平滑滚动 */
-    .stApp {
-        scroll-behavior: smooth;
+    /* 侧边栏按钮 */
+    section[data-testid="stSidebar"] .stButton button {
+        padding: 6px 10px !important;
     }
 
-    /* 移动端优化 */
+    /* 响应式 */
     @media (max-width: 768px) {
         .stColumn > div {
-            padding: 16px !important;
-        }
-        h1 {
-            font-size: 1.8rem !important;
+            padding: 6px 8px !important;
         }
     }
 </style>
