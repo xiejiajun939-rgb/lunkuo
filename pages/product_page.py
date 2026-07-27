@@ -14,7 +14,244 @@ from core.ai import get_ai_summary
 
 st.markdown("""
 <style>
-    /* ---------- 翻页控件：去掉背景和边框，只留文字 ---------- */
+    /* ========== 全局基础 ========== */
+    .stApp {
+        background: #f3f6fa;
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    }
+
+    /* ========== 标题区 ========== */
+    .stMarkdown h1 {
+        font-size: 2.4rem !important;
+        font-weight: 600 !important;
+        background: linear-gradient(135deg, #0b1a33 0%, #2563eb 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+        margin-bottom: 0.2rem !important;
+        letter-spacing: -0.02em;
+        border-bottom: 3px solid rgba(37, 99, 235, 0.2);
+        padding-bottom: 8px;
+        display: inline-block;
+    }
+
+    /* ========== 数据源单选按钮（美化） ========== */
+    .stRadio > div {
+        background: rgba(255,255,255,0.6);
+        backdrop-filter: blur(8px);
+        border-radius: 12px;
+        padding: 6px 12px !important;
+        border: 1px solid rgba(255,255,255,0.3);
+    }
+    .stRadio label {
+        font-weight: 500 !important;
+        color: #1e293b !important;
+    }
+
+    /* ========== 日期选择区（卡片） ========== */
+    div[data-testid="stDateInput"] {
+        background: rgba(255,255,255,0.7) !important;
+        backdrop-filter: blur(8px);
+        border-radius: 14px !important;
+        padding: 6px 12px !important;
+        border: 1px solid rgba(255,255,255,0.4);
+        box-shadow: 0 2px 8px rgba(0,20,40,0.04);
+    }
+    div[data-testid="stDateInput"] input {
+        border: none !important;
+        background: transparent !important;
+        padding: 4px 0 !important;
+        font-weight: 400;
+    }
+
+    /* 日期快捷按钮（今日/近7天/本月） */
+    .stButton button:has(> :contains("📅")),
+    .stButton button:has(> :contains("📆")) {
+        background: transparent !important;
+        border: 1px solid #e2e8f0 !important;
+        border-radius: 20px !important;
+        padding: 2px 14px !important;
+        font-size: 0.8rem !important;
+        color: #475569 !important;
+        transition: all 0.2s;
+        box-shadow: none !important;
+    }
+    .stButton button:has(> :contains("📅")):hover,
+    .stButton button:has(> :contains("📆")):hover {
+        background: #e2e8f0 !important;
+        border-color: #94a3b8 !important;
+    }
+
+    /* ========== 筛选条件区（卡片） ========== */
+    /* 整个筛选区域用卡片包裹（需在代码中用 st.container 包裹） */
+    /* 这里假设筛选条件在 st.columns 中，我们给 columns 加卡片效果 */
+    .stColumns:has(> .stColumn > .stSelectbox) {
+        background: rgba(255,255,255,0.6) !important;
+        backdrop-filter: blur(8px);
+        border-radius: 20px !important;
+        padding: 16px 20px !important;
+        border: 1px solid rgba(255,255,255,0.3);
+        box-shadow: 0 4px 16px rgba(0,20,40,0.04);
+        margin-bottom: 16px;
+    }
+
+    /* 筛选控件标签（平台、店铺等） */
+    .stSelectbox label, .stTextInput label, .stMultiSelect label {
+        font-weight: 500 !important;
+        color: #0f172a !important;
+        font-size: 0.8rem !important;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+        margin-bottom: 2px !important;
+    }
+
+    /* 筛选输入框、下拉框（透明无框，只保留底部线条） */
+    .stSelectbox > div > div > div,
+    .stTextInput > div > div > input,
+    .stMultiSelect > div > div > div {
+        background: transparent !important;
+        border: none !important;
+        border-bottom: 2px solid #e2e8f0 !important;
+        border-radius: 0 !important;
+        padding: 4px 0 !important;
+        box-shadow: none !important;
+        font-weight: 400;
+        color: #0f172a;
+        transition: border-color 0.2s;
+    }
+    .stSelectbox > div > div > div:focus-within,
+    .stTextInput > div > div > input:focus,
+    .stMultiSelect > div > div > div:focus-within {
+        border-bottom-color: #2563eb !important;
+    }
+
+    /* 多选框标签（已选） */
+    .stMultiSelect [data-testid="stMultiSelectTag"] {
+        background: rgba(37, 99, 235, 0.08) !important;
+        border-radius: 12px !important;
+        padding: 2px 10px !important;
+        color: #2563eb !important;
+        font-weight: 500;
+    }
+
+    /* ========== 表格区 ========== */
+    /* 去掉卡片背景，只保留表格本身 */
+    .stColumn > div:has(.stDataFrame) {
+        background: transparent !important;
+        backdrop-filter: none !important;
+        border: none !important;
+        box-shadow: none !important;
+        padding: 0 !important;
+    }
+
+    .stDataFrame {
+        background: transparent !important;
+        border: none !important;
+        border-radius: 0 !important;
+        box-shadow: none !important;
+    }
+
+    /* 表头 */
+    .stDataFrame thead tr th {
+        background: #eef2f7 !important;
+        color: #0f172a !important;
+        font-weight: 600 !important;
+        font-size: 0.75rem !important;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        padding: 10px 12px !important;
+        border-bottom: 2px solid #cbd5e1 !important;
+        border-top: 1px solid #e2e8f0;
+    }
+
+    /* 表格行 */
+    .stDataFrame tbody tr td {
+        padding: 8px 12px !important;
+        border-bottom: 1px solid #e2e8f0 !important;
+        background: #ffffff !important;
+        font-size: 0.9rem;
+        color: #1e293b;
+    }
+    /* 交替行颜色（浅灰） */
+    .stDataFrame tbody tr:nth-child(even) td {
+        background: #f8fafc !important;
+    }
+    /* 悬浮效果 */
+    .stDataFrame tbody tr:hover td {
+        background: #f1f5f9 !important;
+        transition: background 0.15s;
+    }
+
+    /* 图片列（商品图片） */
+    .stDataFrame tbody tr td:has(img) {
+        padding: 4px 6px !important;
+        text-align: center;
+    }
+    .stDataFrame tbody tr td img {
+        max-width: 50px !important;
+        max-height: 50px !important;
+        border-radius: 6px;
+        border: 1px solid #e2e8f0;
+    }
+
+    /* 新人礼金列（✅ ❌）用颜色表示 */
+    .stDataFrame tbody tr td:has(:contains("✅")) {
+        color: #22c55e !important;
+        font-weight: 600;
+    }
+    .stDataFrame tbody tr td:has(:contains("❌")) {
+        color: #94a3b8 !important;
+        font-weight: 400;
+    }
+
+    /* 退款率列（根据高低颜色） */
+    .stDataFrame tbody tr td:nth-child(7) {
+        font-weight: 500;
+    }
+    .stDataFrame tbody tr td:nth-child(7):contains("%") {
+        color: #dc2626; /* 默认红色，但可配合js或简单处理，这里用静态颜色 */
+    }
+
+    /* ========== 详情/趋势按钮（图标按钮） ========== */
+    .stButton button:has(> :contains("📊")),
+    .stButton button:has(> :contains("📈")) {
+        background: transparent !important;
+        border: none !important;
+        box-shadow: none !important;
+        padding: 4px 8px !important;
+        font-size: 1.2rem !important;
+        border-radius: 50% !important;
+        transition: background 0.2s, transform 0.1s;
+        color: #64748b !important;
+        width: 32px !important;
+        height: 32px !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+    }
+    .stButton button:has(> :contains("📊")):hover,
+    .stButton button:has(> :contains("📈")):hover {
+        background: rgba(37, 99, 235, 0.08) !important;
+        color: #2563eb !important;
+        transform: scale(1.1);
+    }
+
+    /* ========== 排序与分页区 ========== */
+    /* 排序字段、每页行数等下拉框（只保留文字） */
+    .stSelectbox:has(label:contains("排序字段")),
+    .stSelectbox:has(label:contains("每页行数")) {
+        background: transparent !important;
+        border: none !important;
+    }
+    .stSelectbox:has(label:contains("排序字段")) > div > div > div,
+    .stSelectbox:has(label:contains("每页行数")) > div > div > div {
+        border: none !important;
+        border-bottom: 1px dashed #cbd5e1 !important;
+        border-radius: 0 !important;
+        padding: 4px 0 !important;
+        background: transparent !important;
+    }
+
     /* 翻页按钮（上一页/下一页） */
     div[data-testid="stButton"] button:has(> :contains("◀")),
     div[data-testid="stButton"] button:has(> :contains("▶")) {
@@ -24,104 +261,91 @@ st.markdown("""
         padding: 4px 8px !important;
         font-weight: 400 !important;
         color: #2563eb !important;
-        transition: color 0.2s ease !important;
+        transition: color 0.2s;
+        font-size: 0.9rem;
     }
     div[data-testid="stButton"] button:has(> :contains("◀")):hover,
     div[data-testid="stButton"] button:has(> :contains("▶")):hover {
         color: #1d4ed8 !important;
         text-decoration: underline !important;
         background: transparent !important;
-        transform: none !important;
-        box-shadow: none !important;
     }
 
-    /* 翻页中的“第 X / Y 页”文字（去掉框） */
+    /* 页码文字 */
     .stMarkdown p:has(+ div[data-testid="stButton"]) {
-        margin: 0 12px !important;
+        margin: 0 8px !important;
         color: #475569 !important;
-        font-weight: 400 !important;
+        font-weight: 400;
+        font-size: 0.9rem;
+        background: transparent !important;
     }
 
-    /* 导出类型下拉框（只留文字和箭头，去掉边框背景） */
-    .stSelectbox > div > div > div {
-        background: transparent !important;
+    /* 导出类型下拉框（只留文字+下划线） */
+    .stSelectbox:has(label:contains("导出类型")) > div > div > div {
         border: none !important;
         border-bottom: 1px solid #cbd5e1 !important;
         border-radius: 0 !important;
         padding: 4px 0 !important;
-        box-shadow: none !important;
-        backdrop-filter: none !important;
-        font-weight: 400 !important;
-        color: #1e293b !important;
-    }
-    .stSelectbox > div > div > div:focus-within {
-        border-bottom-color: #2563eb !important;
-        box-shadow: none !important;
+        background: transparent !important;
     }
 
-    /* ---------- 商品明细表格：去掉外边框和整体背景，只留线条 ---------- */
-    .stDataFrame {
-        background: transparent !important;
-        backdrop-filter: none !important;
-        border: none !important;
-        box-shadow: none !important;
-        border-radius: 0 !important;
+    /* ========== 对话框（详情/趋势） ========== */
+    div[data-testid="stDialog"] {
+        background: rgba(255, 255, 255, 0.8) !important;
+        backdrop-filter: blur(24px) !important;
+        border-radius: 28px !important;
+        border: 1px solid rgba(255, 255, 255, 0.5) !important;
+        box-shadow: 0 24px 80px rgba(0, 20, 40, 0.12) !important;
+        padding: 28px !important;
     }
-    .stDataFrame thead tr th {
-        background: transparent !important;
-        border-bottom: 2px solid #e2e8f0 !important;
-        padding: 8px 12px !important;
-        font-weight: 500 !important;
-        color: #0f172a !important;
-        text-transform: none !important;
-        letter-spacing: 0 !important;
-    }
-    .stDataFrame tbody tr td {
-        border-bottom: 1px solid #e2e8f0 !important;
-        padding: 8px 12px !important;
-        background: transparent !important;
-    }
-    .stDataFrame tbody tr:hover {
-        background: rgba(241, 245, 249, 0.3) !important;
-    }
-    .stDataFrame tbody tr:last-child td {
-        border-bottom: none !important;
-    }
-
-    /* 如果表格在卡片内，去掉卡片的背景（仅针对明细区域） */
-    .stColumn > div:has(.stDataFrame) {
-        background: transparent !important;
-        backdrop-filter: none !important;
-        border: none !important;
-        box-shadow: none !important;
-        padding: 0 !important;
-    }
-
-    /* 详情对话框内表格（同样处理） */
+    /* 对话框内表格无框 */
     div[data-testid="stDialog"] .stDataFrame {
         background: transparent !important;
         border: none !important;
         box-shadow: none !important;
     }
-
-    /* 对话框本身保持毛玻璃，但内部表格无框 */
-    div[data-testid="stDialog"] .stColumn > div {
-        background: transparent !important;
-        border: none !important;
-        box-shadow: none !important;
-        padding: 0 !important;
+    div[data-testid="stDialog"] .stDataFrame thead tr th {
+        background: rgba(241, 245, 249, 0.5) !important;
     }
 
-    /* 翻页区域整个容器（如果有背景框） */
-    .stColumns:has(> .stColumn > div[data-testid="stButton"]) {
-        background: transparent !important;
+    /* ========== 侧边栏（保留原有毛玻璃，但更干净） ========== */
+    section[data-testid="stSidebar"] {
+        background: rgba(255, 255, 255, 0.5) !important;
+        backdrop-filter: blur(20px) !important;
+        border-right: 1px solid rgba(255, 255, 255, 0.2) !important;
+        padding: 20px 14px !important;
+    }
+
+    /* ========== 通用微调 ========== */
+    hr {
+        margin: 20px 0 !important;
         border: none !important;
-        box-shadow: none !important;
-        padding: 8px 0 !important;
+        height: 1px !important;
+        background: linear-gradient(to right, #e2e8f0, transparent) !important;
+    }
+
+    /* 货号汇总表标题（保留，但修饰） */
+    .stMarkdown h3:contains("货号汇总表") {
+        font-size: 1.2rem !important;
+        font-weight: 500 !important;
+        color: #0f172a !important;
+        border-left: 4px solid #2563eb;
+        padding-left: 12px;
+        margin-bottom: 16px;
+    }
+
+    /* 适应小屏幕 */
+    @media (max-width: 768px) {
+        .stColumns:has(> .stColumn > .stSelectbox) {
+            padding: 12px !important;
+        }
+        .stDataFrame tbody tr td {
+            padding: 4px 6px !important;
+            font-size: 0.8rem !important;
+        }
     }
 </style>
 """, unsafe_allow_html=True)
-
 st.set_page_config(page_title="商品分析", layout="wide")
 
 # ---------- 初始化 session_state ----------
