@@ -83,13 +83,15 @@ date_quick_buttons("prod_start", "prod_end",
 start_date = st.session_state.get("prod_start", min_date)
 end_date = st.session_state.get("prod_end", max_date)
 
-# ---------- 筛选条件 ----------
+# ---------- 筛选条件（修改为一行4列） ----------
 st.subheader("🔍 筛选条件")
-col_platform, col_shop = st.columns(2)
-with col_platform:
+
+# 第一行：平台、店铺、货号、品牌
+col1, col2, col3, col4 = st.columns(4)
+with col1:
     platform_options = ["全部", "抖音", "视频号"]
     selected_platform = st.selectbox("平台", platform_options, key="pf")
-with col_shop:
+with col2:
     all_shops = prod_df["shop_name"].unique()
     if selected_platform == "抖音":
         shop_opts = [s for s in all_shops if "抖音" in s]
@@ -98,25 +100,33 @@ with col_shop:
     else:
         shop_opts = list(all_shops)
     selected_shops = st.multiselect("店铺", sorted(shop_opts), key="sf")
-
-col_code, col_brand = st.columns(2)
-with col_code:
+with col3:
     style_input = st.text_input("货号（逗号分隔）", placeholder="例如: L262Y050", key="sc")
-with col_brand:
+with col4:
     brands = ["全部"] + sorted(prod_df["brand"].dropna().unique())
     selected_brand = st.selectbox("品牌", brands, key="bf")
 
-coupon_filter = st.selectbox("是否首单礼金", ["全部", "仅首单礼金", "非首单礼金"], key="cf")
-
-# 主播筛选（仅直播/全部数据）
-selected_anchors = []
-if st.session_state.table_suffix in ["_live", "_all"]:
-    if "anchor" in prod_df.columns:
-        anchors = sorted(prod_df["anchor"].dropna().unique())
-        if anchors:
-            selected_anchors = st.multiselect("主播", anchors, key="af")
-        else:
-            st.info("未识别到主播信息，请检查备注字段。")
+# 第二行：是否首单礼金、主播（条件显示），其余两列留空
+col5, col6, col7, col8 = st.columns(4)
+with col5:
+    coupon_filter = st.selectbox("是否首单礼金", ["全部", "仅首单礼金", "非首单礼金"], key="cf")
+with col6:
+    # 主播筛选（仅直播/全部数据）
+    selected_anchors = []
+    if st.session_state.table_suffix in ["_live", "_all"]:
+        if "anchor" in prod_df.columns:
+            anchors = sorted(prod_df["anchor"].dropna().unique())
+            if anchors:
+                selected_anchors = st.multiselect("主播", anchors, key="af")
+            else:
+                st.info("未识别到主播信息，请检查备注字段。")
+    # 若没有主播选项，col6 可能为空，但布局保持不变
+with col7:
+    # 留空，供未来扩展
+    pass
+with col8:
+    # 留空，供未来扩展
+    pass
 
 # ---------- 应用筛选 ----------
 mask = (prod_df["sale_date"] >= pd.to_datetime(start_date)) & (prod_df["sale_date"] <= pd.to_datetime(end_date))
