@@ -19,11 +19,8 @@ if "target_dict" not in st.session_state:
 # ---------- 页面样式（与商品分析页统一） ----------
 st.markdown("""
 <style>
-    /* 全局 */
     .stApp { background: #f3f6fa; font-family: 'Inter', sans-serif; }
     .stSubheader { font-weight: 500; color: #0f172a; border-bottom: 2px solid #e2e8f0; padding-bottom: 6px; margin-bottom: 16px; }
-
-    /* 卡片 */
     .stColumns > .stColumn > div {
         background: rgba(255,255,255,0.6);
         backdrop-filter: blur(8px);
@@ -32,8 +29,6 @@ st.markdown("""
         border: 1px solid rgba(255,255,255,0.3);
         box-shadow: 0 4px 16px rgba(0,20,40,0.04);
     }
-
-    /* 表格（无框，干净） */
     .stDataFrame {
         background: transparent !important;
         border: none !important;
@@ -60,8 +55,6 @@ st.markdown("""
     .stDataFrame tbody tr:hover td {
         background: #f1f5f9;
     }
-
-    /* 按钮（透明，只保留文字） */
     .stButton button {
         background: transparent !important;
         border: none !important;
@@ -74,8 +67,6 @@ st.markdown("""
         text-decoration: underline !important;
         color: #1d4ed8 !important;
     }
-
-    /* metric卡片 */
     div[data-testid="stMetric"] {
         background: rgba(255,255,255,0.5);
         backdrop-filter: blur(8px);
@@ -88,8 +79,6 @@ st.markdown("""
         font-weight: 600 !important;
         color: #0f172a;
     }
-
-    /* 下载按钮（保留原始样式，但也可美化） */
     .stDownloadButton button {
         background: #2563eb !important;
         color: white !important;
@@ -125,25 +114,58 @@ group_col = "shop_name"
 dim_label = "店铺名称"
 target_dict = st.session_state.target_dict
 
-if is_all:
-    # 加载映射表（表名：mapping）
-    mapping_df = load_dimension_mapping()
-    if not mapping_df.empty:
-        # 检查映射表列：优先使用 shop_name，若无则尝试 anchor
-        if 'shop_name' in mapping_df.columns:
-            prod_df = prod_df.merge(mapping_df, on="shop_name", how="left")
-        elif 'anchor' in mapping_df.columns:
-            if 'anchor' not in prod_df.columns:
-                prod_df["anchor"] = prod_df["remark"].astype(str).apply(extract_anchor)
-            prod_df = prod_df.merge(mapping_df, on="anchor", how="left")
-        else:
-            st.warning("映射表中缺少 shop_name 或 anchor 列，无法关联组织/部门信息。")
-    else:
-        st.warning("未加载到映射关系（mapping 表），组织/部门信息不可用。")
+def apply_dimension_mapping(df, mapping_df):
+    """
+    对 df 应用维度映射，与 fetch_sales_summary 中的逻辑一致。
+    返回添加了 org_name 和 dept 列的 DataFrame。
+    """
+    if mapping_df.empty:
+        df["org_name"] = "未分配组织"
+        df["dept"] = "未分配部门"
+        return df
 
-    # 检查合并后是否有 org_name 和 dept
+    # 1. 清洗字段
+    df["shop_name_clean"] = df["shop_name"].astype(str).str.strip().str.upper()
+    mapping_df["shop_name_clean"] = mapping_df["shop_name"].astype(str).str.strip().str.upper()
+    mapping_df["anchor_name_clean"] = mapping_df["anchor_name"].fillna("NONE").astype(str).str.strip().str.upper()
+
+    # 2. 如果有 anchor，提取并清洗
+    if "anchor" not in df.columns:
+        df["anchor"] = "NONE"
+    df["anchor_clean"] = df["anchor"].fillna("NONE").astype(str).str.strip().str.upper()
+
+    # 3. 按 (shop_name_clean, anchor_clean) 精确匹配
+    merged = df.merge(
+        mapping_df[["shop_name_clean", "anchor_name_clean", "org_name", "dept"]],
+        left_on=["shop_name_clean", "anchor_clean"],
+        right_on=["shop_name_clean", "anchor_name_clean"],
+        how="left"
+    )
+
+    # 4. 对于未匹配的行，回退到仅按 shop_name 匹配（取第一条）
+    null_mask = merged["org_name"].isna()
+    if null_mask.any():
+        fallback = mapping_df.drop_duplicates(subset=["shop_name_clean"], keep="first")[["shop_name_clean", "org_name", "dept"]]
+        fallback = fallback.rename(columns={"org_name": "org_fallback", "dept": "dept_fallback"})
+        merged = merged.merge(fallback, on="shop_name_clean", how="left")
+        merged.loc[null_mask, "org_name"] = merged.loc[null_mask, "org_fallback"]
+        merged.loc[null_mask, "dept"] = merged.loc[null_mask, "dept_fallback"]
+        merged = merged.drop(columns=["org_fallback", "dept_fallback"])
+
+    # 5. 填充缺失值
+    merged["org_name"] = merged["org_name"].fillna("未分配组织")
+    merged["dept"] = merged["dept"].fillna("未分配部门")
+
+    # 6. 删除临时列
+    df_out = merged.drop(columns=["shop_name_clean", "anchor_clean"])
+    return df_out
+
+if is_all:
+    mapping_df = load_dimension_mapping()
+    prod_df = apply_dimension_mapping(prod_df, mapping_df)
+
+    # 检查合并后是否有 org_name 和 dept（应该总是有）
     if 'org_name' in prod_df.columns and 'dept' in prod_df.columns:
-        # 有组织/部门信息，让用户选择维度
         org_targets = load_org_targets("_all")
         dimension_options = ["阿米巴组织", "部门"]
         selected_dim = st.radio("选择维度", dimension_options, horizontal=True, key="dimension_select_daily")
@@ -164,13 +186,13 @@ if is_all:
                 dept_targets[dept] = dept_targets.get(dept, 0) + target
             target_dict = dept_targets
     else:
-        # 没有组织/部门信息，回退到店铺维度
-        st.warning("当前数据中无组织/部门信息，将按店铺维度展示。")
+        # 若仍未出现，回退到店铺
+        st.warning("未获取到组织/部门信息，将按店铺维度展示。")
         group_col = "shop_name"
         dim_label = "店铺名称"
         target_dict = st.session_state.target_dict
 
-# 检查 group_col 是否存在，若不存在则回退到 shop_name
+# 最终检查 group_col 是否存在
 if group_col not in prod_df.columns or prod_df[group_col].isna().all():
     st.warning(f"当前数据中无 {dim_label} 信息，已切换为店铺维度。")
     group_col = "shop_name"
