@@ -12,6 +12,210 @@ from core.db import load_product_sales, load_product_master
 from core.utils import date_quick_buttons, extract_anchor
 from core.ai import get_ai_summary
 
+st.markdown("""
+<style>
+    /* 全局字体与背景 */
+    .stApp {
+        background: #f8fafc;
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    }
+
+    /* 标题与文字 */
+    h1, h2, h3, h4, h5, h6, .stMarkdown h1, .stMarkdown h2, .stMarkdown h3 {
+        color: #0f172a !important;
+        font-weight: 600 !important;
+        letter-spacing: -0.02em !important;
+    }
+    .stMarkdown p, .stText, .stCaption, .stInfo, .stWarning, .stSuccess {
+        color: #1e293b !important;
+    }
+
+    /* 卡片容器（适用于列、expander、对话框等） */
+    div[data-testid="stExpander"] {
+        border: none !important;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.04), 0 1px 2px rgba(0,0,0,0.06) !important;
+        border-radius: 12px !important;
+        background: #ffffff !important;
+        padding: 4px 8px !important;
+    }
+    div[data-testid="stExpander"]:hover {
+        box-shadow: 0 4px 12px rgba(0,0,0,0.08) !important;
+    }
+
+    /* 卡片：对 columns 内嵌的 div 应用卡片效果（需包裹在 st.container 或直接作用于 block-container） */
+    .element-container, .stBlock, .stColumn {
+        background: transparent;
+    }
+    /* 为每个列或容器添加卡片效果（可选） */
+    .stColumn > div {
+        background: #ffffff;
+        border-radius: 16px;
+        padding: 20px 18px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.04), 0 1px 2px rgba(0,0,0,0.06);
+        transition: box-shadow 0.2s ease, transform 0.1s ease;
+    }
+    .stColumn > div:hover {
+        box-shadow: 0 8px 24px rgba(0,0,0,0.08);
+    }
+
+    /* 按钮优化 */
+    div[data-testid="stButton"] button {
+        background: #ffffff !important;
+        border: 1px solid #e2e8f0 !important;
+        border-radius: 8px !important;
+        color: #1e293b !important;
+        font-weight: 500 !important;
+        padding: 6px 16px !important;
+        transition: all 0.15s ease !important;
+        box-shadow: 0 1px 2px rgba(0,0,0,0.02) !important;
+    }
+    div[data-testid="stButton"] button:hover {
+        background: #f1f5f9 !important;
+        border-color: #cbd5e1 !important;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.06) !important;
+        transform: translateY(-1px);
+    }
+    div[data-testid="stButton"] button:active {
+        transform: scale(0.97);
+    }
+
+    /* 输入框、选择框、多选框美化 */
+    .stTextInput > div > div > input,
+    .stSelectbox > div > div > div,
+    .stMultiSelect > div > div > div {
+        border-radius: 8px !important;
+        border: 1px solid #e2e8f0 !important;
+        background: #ffffff !important;
+        padding: 6px 12px !important;
+        transition: border-color 0.15s ease, box-shadow 0.15s ease !important;
+    }
+    .stTextInput > div > div > input:focus,
+    .stSelectbox > div > div > div:focus-within,
+    .stMultiSelect > div > div > div:focus-within {
+        border-color: #94a3b8 !important;
+        box-shadow: 0 0 0 3px rgba(148, 163, 184, 0.2) !important;
+    }
+
+    /* 日期输入 */
+    div[data-testid="stDateInput"] input {
+        border-radius: 8px !important;
+        border: 1px solid #e2e8f0 !important;
+        background: #ffffff !important;
+        padding: 6px 12px !important;
+    }
+
+    /* 表格美化（DataFrame） */
+    .stDataFrame {
+        border-radius: 12px !important;
+        overflow: hidden !important;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.04) !important;
+    }
+    .stDataFrame thead tr th {
+        background: #f1f5f9 !important;
+        color: #0f172a !important;
+        font-weight: 600 !important;
+        padding: 8px 12px !important;
+        border-bottom: 2px solid #e2e8f0 !important;
+    }
+    .stDataFrame tbody tr td {
+        padding: 8px 12px !important;
+        border-bottom: 1px solid #f1f5f9 !important;
+    }
+    .stDataFrame tbody tr:hover {
+        background: #f8fafc !important;
+    }
+
+    /* 侧边栏优化 */
+    section[data-testid="stSidebar"] {
+        background: #ffffff !important;
+        border-right: 1px solid #e2e8f0 !important;
+        padding: 20px 16px !important;
+    }
+    section[data-testid="stSidebar"] .stMarkdown, 
+    section[data-testid="stSidebar"] .stText {
+        color: #1e293b !important;
+    }
+    section[data-testid="stSidebar"] .stButton button {
+        background: #f8fafc !important;
+        border: none !important;
+        justify-content: flex-start !important;
+        padding: 8px 12px !important;
+        border-radius: 8px !important;
+        width: 100% !important;
+        text-align: left !important;
+        font-weight: 500 !important;
+    }
+    section[data-testid="stSidebar"] .stButton button:hover {
+        background: #f1f5f9 !important;
+    }
+
+    /* 标签/标题装饰 */
+    .stSubheader {
+        font-weight: 600 !important;
+        color: #0f172a !important;
+        letter-spacing: -0.01em !important;
+        border-bottom: 2px solid #e2e8f0 !important;
+        padding-bottom: 6px !important;
+        margin-bottom: 16px !important;
+    }
+
+    /* 对话/弹窗 */
+    div[data-testid="stDialog"] {
+        border-radius: 20px !important;
+        box-shadow: 0 20px 60px rgba(0,0,0,0.12) !important;
+        background: #ffffff !important;
+        padding: 24px !important;
+    }
+
+    /* 指标卡片（如 st.metric） */
+    div[data-testid="stMetric"] {
+        background: #ffffff;
+        border-radius: 12px;
+        padding: 16px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+        border: 1px solid #f1f5f9;
+    }
+    div[data-testid="stMetric"] label {
+        font-weight: 500 !important;
+        color: #475569 !important;
+        font-size: 14px !important;
+    }
+    div[data-testid="stMetric"] .stMetricValue {
+        font-size: 28px !important;
+        font-weight: 700 !important;
+        color: #0f172a !important;
+    }
+
+    /* 信息/警告/成功框 */
+    .stInfo, .stWarning, .stSuccess, .stError {
+        border-radius: 12px !important;
+        border-left-width: 4px !important;
+        padding: 12px 16px !important;
+        background: #ffffff !important;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.04) !important;
+    }
+    .stInfo { border-left-color: #3b82f6 !important; }
+    .stWarning { border-left-color: #f59e0b !important; }
+    .stSuccess { border-left-color: #22c55e !important; }
+    .stError { border-left-color: #ef4444 !important; }
+
+    /* 分割线 */
+    hr {
+        margin: 24px 0 !important;
+        border: none !important;
+        height: 1px !important;
+        background: linear-gradient(to right, #e2e8f0, #ffffff) !important;
+    }
+
+    /* 响应式微调 */
+    @media (max-width: 768px) {
+        .stColumn > div {
+            padding: 12px !important;
+        }
+    }
+</style>
+""", unsafe_allow_html=True)
+
 st.set_page_config(page_title="商品分析", layout="wide")
 
 # ---------- 初始化 session_state ----------
