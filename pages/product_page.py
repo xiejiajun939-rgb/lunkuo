@@ -14,203 +14,262 @@ from core.ai import get_ai_summary
 
 st.markdown("""
 <style>
-    /* 全局字体与背景 */
+    /* 全局基础 */
     .stApp {
-        background: #f8fafc;
+        background: #f0f4f8;
         font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
     }
 
-    /* 标题与文字 */
+    /* 标题 - 更轻盈、现代 */
     h1, h2, h3, h4, h5, h6, .stMarkdown h1, .stMarkdown h2, .stMarkdown h3 {
-        color: #0f172a !important;
+        color: #0b1a33 !important;
+        font-weight: 500 !important;
+        letter-spacing: -0.03em !important;
+        margin-bottom: 0.2rem !important;
+    }
+    .stMarkdown h1 {
+        font-size: 2.2rem !important;
         font-weight: 600 !important;
-        letter-spacing: -0.02em !important;
-    }
-    .stMarkdown p, .stText, .stCaption, .stInfo, .stWarning, .stSuccess {
-        color: #1e293b !important;
+        background: linear-gradient(135deg, #0b1a33 30%, #3b82f6);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
     }
 
-    /* 卡片容器（适用于列、expander、对话框等） */
-    div[data-testid="stExpander"] {
-        border: none !important;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.04), 0 1px 2px rgba(0,0,0,0.06) !important;
-        border-radius: 12px !important;
-        background: #ffffff !important;
-        padding: 4px 8px !important;
+    /* 卡片 - 毛玻璃效果 */
+    .stColumn > div, 
+    div[data-testid="stExpander"], 
+    div[data-testid="stMetric"],
+    .stAlert,
+    .stMarkdown .stBlock {
+        background: rgba(255, 255, 255, 0.65) !important;
+        backdrop-filter: blur(12px) !important;
+        -webkit-backdrop-filter: blur(12px) !important;
+        border-radius: 20px !important;
+        border: 1px solid rgba(255, 255, 255, 0.4) !important;
+        box-shadow: 0 8px 32px rgba(0, 20, 40, 0.08), 
+                    inset 0 1px 0 rgba(255, 255, 255, 0.6) !important;
+        padding: 20px 18px !important;
+        transition: all 0.25s ease !important;
     }
+    .stColumn > div:hover, 
     div[data-testid="stExpander"]:hover {
-        box-shadow: 0 4px 12px rgba(0,0,0,0.08) !important;
+        box-shadow: 0 12px 48px rgba(0, 20, 40, 0.12),
+                    inset 0 1px 0 rgba(255, 255, 255, 0.8) !important;
+        transform: translateY(-2px);
+        background: rgba(255, 255, 255, 0.75) !important;
     }
 
-    /* 卡片：对 columns 内嵌的 div 应用卡片效果（需包裹在 st.container 或直接作用于 block-container） */
-    .element-container, .stBlock, .stColumn {
-        background: transparent;
-    }
-    /* 为每个列或容器添加卡片效果（可选） */
-    .stColumn > div {
-        background: #ffffff;
-        border-radius: 16px;
-        padding: 20px 18px;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.04), 0 1px 2px rgba(0,0,0,0.06);
-        transition: box-shadow 0.2s ease, transform 0.1s ease;
-    }
-    .stColumn > div:hover {
-        box-shadow: 0 8px 24px rgba(0,0,0,0.08);
-    }
-
-    /* 按钮优化 */
+    /* 按钮 - 渐变与光感 */
     div[data-testid="stButton"] button {
-        background: #ffffff !important;
-        border: 1px solid #e2e8f0 !important;
-        border-radius: 8px !important;
+        background: linear-gradient(135deg, #ffffff, #f8fafc) !important;
+        border: 1px solid rgba(203, 213, 225, 0.6) !important;
+        border-radius: 12px !important;
         color: #1e293b !important;
         font-weight: 500 !important;
-        padding: 6px 16px !important;
-        transition: all 0.15s ease !important;
-        box-shadow: 0 1px 2px rgba(0,0,0,0.02) !important;
+        padding: 6px 18px !important;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.02), inset 0 1px 0 rgba(255,255,255,0.8) !important;
+        transition: all 0.2s ease !important;
     }
     div[data-testid="stButton"] button:hover {
-        background: #f1f5f9 !important;
-        border-color: #cbd5e1 !important;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.06) !important;
-        transform: translateY(-1px);
+        background: linear-gradient(135deg, #f1f5f9, #e2e8f0) !important;
+        border-color: rgba(148, 163, 184, 0.8) !important;
+        box-shadow: 0 8px 20px rgba(0, 20, 40, 0.1), inset 0 1px 0 rgba(255,255,255,0.9) !important;
+        transform: translateY(-2px);
     }
     div[data-testid="stButton"] button:active {
-        transform: scale(0.97);
+        transform: scale(0.96);
+        box-shadow: 0 2px 8px rgba(0,0,0,0.06) !important;
     }
 
-    /* 输入框、选择框、多选框美化 */
+    /* 主要操作按钮（如"确认上传"）可单独强调 */
+    div[data-testid="stButton"] button[kind="primary"] {
+        background: linear-gradient(135deg, #3b82f6, #2563eb) !important;
+        border: none !important;
+        color: white !important;
+        box-shadow: 0 4px 14px rgba(59, 130, 246, 0.35) !important;
+    }
+    div[data-testid="stButton"] button[kind="primary"]:hover {
+        background: linear-gradient(135deg, #2563eb, #1d4ed8) !important;
+        box-shadow: 0 8px 24px rgba(59, 130, 246, 0.45) !important;
+    }
+
+    /* 输入框、选择框、多选框 */
     .stTextInput > div > div > input,
     .stSelectbox > div > div > div,
     .stMultiSelect > div > div > div {
-        border-radius: 8px !important;
-        border: 1px solid #e2e8f0 !important;
-        background: #ffffff !important;
-        padding: 6px 12px !important;
-        transition: border-color 0.15s ease, box-shadow 0.15s ease !important;
+        background: rgba(255, 255, 255, 0.7) !important;
+        backdrop-filter: blur(8px) !important;
+        -webkit-backdrop-filter: blur(8px) !important;
+        border-radius: 12px !important;
+        border: 1px solid rgba(203, 213, 225, 0.5) !important;
+        padding: 8px 14px !important;
+        transition: all 0.2s ease !important;
+        color: #0f172a !important;
+        font-size: 14px !important;
     }
     .stTextInput > div > div > input:focus,
     .stSelectbox > div > div > div:focus-within,
     .stMultiSelect > div > div > div:focus-within {
-        border-color: #94a3b8 !important;
-        box-shadow: 0 0 0 3px rgba(148, 163, 184, 0.2) !important;
+        border-color: #3b82f6 !important;
+        box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.15) !important;
+        background: rgba(255, 255, 255, 0.9) !important;
     }
 
     /* 日期输入 */
     div[data-testid="stDateInput"] input {
-        border-radius: 8px !important;
-        border: 1px solid #e2e8f0 !important;
-        background: #ffffff !important;
-        padding: 6px 12px !important;
+        background: rgba(255, 255, 255, 0.7) !important;
+        backdrop-filter: blur(8px) !important;
+        border-radius: 12px !important;
+        border: 1px solid rgba(203, 213, 225, 0.5) !important;
+        padding: 8px 14px !important;
     }
 
-    /* 表格美化（DataFrame） */
+    /* 表格 - 极简优雅 */
     .stDataFrame {
-        border-radius: 12px !important;
+        border-radius: 16px !important;
         overflow: hidden !important;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.04) !important;
+        background: rgba(255, 255, 255, 0.5) !important;
+        backdrop-filter: blur(8px) !important;
+        box-shadow: 0 4px 20px rgba(0, 20, 40, 0.04) !important;
+        border: 1px solid rgba(255, 255, 255, 0.3) !important;
     }
     .stDataFrame thead tr th {
-        background: #f1f5f9 !important;
+        background: rgba(241, 245, 249, 0.6) !important;
         color: #0f172a !important;
         font-weight: 600 !important;
-        padding: 8px 12px !important;
-        border-bottom: 2px solid #e2e8f0 !important;
+        font-size: 0.85rem !important;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+        padding: 12px 16px !important;
+        border-bottom: 1px solid rgba(203, 213, 225, 0.3) !important;
     }
     .stDataFrame tbody tr td {
-        padding: 8px 12px !important;
-        border-bottom: 1px solid #f1f5f9 !important;
+        padding: 10px 16px !important;
+        border-bottom: 1px solid rgba(203, 213, 225, 0.15) !important;
+        font-size: 0.9rem !important;
     }
     .stDataFrame tbody tr:hover {
-        background: #f8fafc !important;
+        background: rgba(241, 245, 249, 0.4) !important;
     }
 
-    /* 侧边栏优化 */
+    /* 侧边栏 - 毛玻璃 */
     section[data-testid="stSidebar"] {
-        background: #ffffff !important;
-        border-right: 1px solid #e2e8f0 !important;
-        padding: 20px 16px !important;
-    }
-    section[data-testid="stSidebar"] .stMarkdown, 
-    section[data-testid="stSidebar"] .stText {
-        color: #1e293b !important;
+        background: rgba(255, 255, 255, 0.6) !important;
+        backdrop-filter: blur(20px) !important;
+        -webkit-backdrop-filter: blur(20px) !important;
+        border-right: 1px solid rgba(255, 255, 255, 0.3) !important;
+        padding: 24px 16px !important;
+        box-shadow: 4px 0 24px rgba(0, 20, 40, 0.04) !important;
     }
     section[data-testid="stSidebar"] .stButton button {
-        background: #f8fafc !important;
+        background: transparent !important;
         border: none !important;
         justify-content: flex-start !important;
         padding: 8px 12px !important;
-        border-radius: 8px !important;
+        border-radius: 12px !important;
         width: 100% !important;
         text-align: left !important;
         font-weight: 500 !important;
+        color: #1e293b !important;
+        transition: all 0.15s ease !important;
     }
     section[data-testid="stSidebar"] .stButton button:hover {
-        background: #f1f5f9 !important;
+        background: rgba(241, 245, 249, 0.6) !important;
+        transform: translateX(4px);
     }
 
-    /* 标签/标题装饰 */
-    .stSubheader {
-        font-weight: 600 !important;
-        color: #0f172a !important;
-        letter-spacing: -0.01em !important;
-        border-bottom: 2px solid #e2e8f0 !important;
-        padding-bottom: 6px !important;
-        margin-bottom: 16px !important;
-    }
-
-    /* 对话/弹窗 */
-    div[data-testid="stDialog"] {
-        border-radius: 20px !important;
-        box-shadow: 0 20px 60px rgba(0,0,0,0.12) !important;
-        background: #ffffff !important;
-        padding: 24px !important;
-    }
-
-    /* 指标卡片（如 st.metric） */
+    /* Metric 卡片加强 */
     div[data-testid="stMetric"] {
-        background: #ffffff;
-        border-radius: 12px;
-        padding: 16px;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.04);
-        border: 1px solid #f1f5f9;
+        background: rgba(255, 255, 255, 0.5) !important;
+        backdrop-filter: blur(8px) !important;
+        border-radius: 20px !important;
+        padding: 18px 20px !important;
+        border: 1px solid rgba(255, 255, 255, 0.3) !important;
+        box-shadow: 0 4px 16px rgba(0, 20, 40, 0.04) !important;
     }
     div[data-testid="stMetric"] label {
         font-weight: 500 !important;
         color: #475569 !important;
-        font-size: 14px !important;
+        font-size: 0.8rem !important;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
     }
     div[data-testid="stMetric"] .stMetricValue {
-        font-size: 28px !important;
-        font-weight: 700 !important;
-        color: #0f172a !important;
+        font-size: 2rem !important;
+        font-weight: 600 !important;
+        color: #0b1a33 !important;
+        letter-spacing: -0.02em;
     }
 
-    /* 信息/警告/成功框 */
+    /* 标签/标题装饰 */
+    .stSubheader {
+        font-weight: 500 !important;
+        color: #0b1a33 !important;
+        letter-spacing: -0.01em !important;
+        border-bottom: 2px solid rgba(203, 213, 225, 0.3) !important;
+        padding-bottom: 8px !important;
+        margin-bottom: 20px !important;
+    }
+
+    /* 分割线 - 渐变装饰 */
+    hr {
+        margin: 28px 0 !important;
+        border: none !important;
+        height: 1px !important;
+        background: linear-gradient(to right, rgba(203, 213, 225, 0.2), rgba(59, 130, 246, 0.4), rgba(203, 213, 225, 0.2)) !important;
+        border-radius: 2px !important;
+    }
+
+    /* 信息框 - 毛玻璃+彩色边框 */
     .stInfo, .stWarning, .stSuccess, .stError {
-        border-radius: 12px !important;
-        border-left-width: 4px !important;
-        padding: 12px 16px !important;
-        background: #ffffff !important;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.04) !important;
+        background: rgba(255, 255, 255, 0.5) !important;
+        backdrop-filter: blur(8px) !important;
+        border-radius: 16px !important;
+        border-left: 4px solid !important;
+        padding: 14px 20px !important;
+        box-shadow: 0 4px 16px rgba(0, 20, 40, 0.04) !important;
+        border-top: 1px solid rgba(255, 255, 255, 0.3) !important;
+        border-right: 1px solid rgba(255, 255, 255, 0.3) !important;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.3) !important;
     }
     .stInfo { border-left-color: #3b82f6 !important; }
     .stWarning { border-left-color: #f59e0b !important; }
     .stSuccess { border-left-color: #22c55e !important; }
     .stError { border-left-color: #ef4444 !important; }
 
-    /* 分割线 */
-    hr {
-        margin: 24px 0 !important;
-        border: none !important;
-        height: 1px !important;
-        background: linear-gradient(to right, #e2e8f0, #ffffff) !important;
+    /* 单选/多选标签 */
+    .stRadio > div, .stCheckbox {
+        background: transparent !important;
+    }
+    .stRadio label, .stCheckbox label {
+        color: #1e293b !important;
+        font-weight: 450 !important;
     }
 
-    /* 响应式微调 */
+    /* 弹窗 (Dialog) */
+    div[data-testid="stDialog"] {
+        background: rgba(255, 255, 255, 0.75) !important;
+        backdrop-filter: blur(24px) !important;
+        -webkit-backdrop-filter: blur(24px) !important;
+        border-radius: 28px !important;
+        border: 1px solid rgba(255, 255, 255, 0.5) !important;
+        box-shadow: 0 24px 80px rgba(0, 20, 40, 0.16) !important;
+        padding: 32px !important;
+    }
+
+    /* 微交互：平滑滚动 */
+    .stApp {
+        scroll-behavior: smooth;
+    }
+
+    /* 移动端优化 */
     @media (max-width: 768px) {
         .stColumn > div {
-            padding: 12px !important;
+            padding: 16px !important;
+        }
+        h1 {
+            font-size: 1.8rem !important;
         }
     }
 </style>
