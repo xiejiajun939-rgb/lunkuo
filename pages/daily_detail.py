@@ -5,7 +5,14 @@ import pandas as pd
 from datetime import date, timedelta
 import io
 
-from core.db import fetch_sales_summary, load_org_targets, load_dimension_mapping
+from core.db import (
+    fetch_sales_summary,
+    load_org_targets,
+    load_dimension_mapping,
+    load_targets,
+    load_product_sales
+)
+from core.utils import date_quick_buttons
 
 st.set_page_config(page_title="每日明细", layout="wide")
 
@@ -91,18 +98,24 @@ st.markdown("""
         background: #1d4ed8 !important;
         box-shadow: 0 8px 20px rgba(37,99,235,0.35);
     }
+    .stAlert {
+        border-radius: 12px;
+        background: rgba(255,255,255,0.6);
+        backdrop-filter: blur(8px);
+        border-left: 4px solid #3b82f6;
+        padding: 12px 16px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
 st.subheader("📋 每日明细查询")
-st.info("此处展示任意日期的销售明细，支持按组织/部门/店铺维度汇总，并可按组织筛选查看店铺明细。")
+st.info("此处展示任意日期的销售明细。选择阿米巴组织时，默认仅显示「小店运营组」的各店铺明细。")
 
 # ---------- 数据源 ----------
-suffix = st.session_state.table_suffix  # 保持与全局一致
+suffix = st.session_state.table_suffix
 is_all = suffix == "_all"
 
 # 获取日期范围
-from core.db import load_product_sales
 date_df = load_product_sales(suffix, apply_filter=False)
 if date_df.empty:
     st.warning("暂无商品销售数据，请先上传订单文件。")
@@ -110,21 +123,31 @@ if date_df.empty:
 min_date = date_df["sale_date"].min().date()
 max_date = date_df["sale_date"].max().date()
 
-# ---------- 维度选择 ----------
+# ---------- 维度选择（简化） ----------
 if is_all:
     mapping_df = load_dimension_mapping()
     has_org = not mapping_df.empty and 'org_name' in mapping_df.columns
     if has_org:
-        org_targets = load_org_targets("_all")
         dimension_options = ["阿米巴组织", "部门"]
         selected_dim = st.radio("选择维度", dimension_options, horizontal=True, key="dimension_select_daily")
+
         if selected_dim == "阿米巴组织":
-            group_col = "org_name"
-            dim_label = "组织"
-            target_dict = org_targets
+            # 固定为小店运营组
+            selected_org = "小店运营组"
+            st.info(f"当前选择：阿米巴组织 → **{selected_org}**（仅展示该组织下的店铺明细）")
+            # 切换到店铺明细模式
+            group_col = "shop_name"
+            dim_label = "店铺"
+            # 店铺目标从 shop_targets 表读取（无后缀，与非直播目标共用）
+            target_dict = load_targets()  # 无参数
+            use_shop_detail = True
+            org_filter = selected_org
         else:
+            # 部门维度（保持原有逻辑）
+            org_targets = load_org_targets("_all")
             group_col = "dept"
             dim_label = "部门"
+            # 汇总部门目标
             dept_targets = {}
             if not mapping_df.empty:
                 org_dept_map = mapping_df[['org_name', 'dept']].drop_duplicates()
@@ -134,29 +157,22 @@ if is_all:
                     target = org_targets.get(org, 0)
                     dept_targets[dept] = dept_targets.get(dept, 0) + target
             target_dict = dept_targets
+            use_shop_detail = False
+            org_filter = None
     else:
-        has_org = False
+        # 无映射表，回退到店铺
         group_col = "shop_name"
         dim_label = "店铺名称"
         target_dict = st.session_state.target_dict
+        use_shop_detail = False
+        org_filter = None
 else:
+    # 非全部数据，固定店铺维度
     group_col = "shop_name"
     dim_label = "店铺名称"
     target_dict = st.session_state.target_dict
-
-# ---------- 组织筛选器（当维度为组织时） ----------
-selected_org = None
-if is_all and has_org and group_col == "org_name":
-    # 获取所有组织名称
-    # 先尝试从 mapping_df 获取，或从数据中获取
-    org_list = sorted(mapping_df['org_name'].unique()) if not mapping_df.empty else []
-    if org_list:
-        org_options = ["全部组织"] + org_list
-        selected_org = st.selectbox("选择具体组织（查看店铺明细）", options=org_options, key="org_filter")
-        if selected_org != "全部组织":
-            st.info(f"当前筛选组织：**{selected_org}**，将显示该组织下各店铺的每日明细。")
-    else:
-        selected_org = None
+    use_shop_detail = False
+    org_filter = None
 
 # ---------- 日期范围选择 ----------
 if "range_start" not in st.session_state:
@@ -201,7 +217,6 @@ with col1:
 with col2:
     end_date = st.date_input("结束日期", value=st.session_state["range_end"], min_value=min_date, max_value=max_date, key="range_end_input")
 
-# 同步 session_state
 if start_date != st.session_state["range_start"] or end_date != st.session_state["range_end"]:
     st.session_state["range_start"] = start_date
     st.session_state["range_end"] = end_date
@@ -228,33 +243,23 @@ if df.empty:
     st.warning("所选范围内无销售数据")
     st.stop()
 
-# ---------- 如果筛选了具体组织，则过滤数据 ----------
-if selected_org and selected_org != "全部组织":
-    if 'org_name' in df.columns:
-        df = df[df['org_name'] == selected_org]
-        if df.empty:
-            st.warning(f"组织 {selected_org} 在所选日期范围内无数据")
-            st.stop()
-        # 修改 group_col 为 shop_name，以便展示店铺明细
-        group_col = "shop_name"
-        dim_label = "店铺名称"
-        # 注意：此时 target_dict 可能不适用，但不影响展示
+# ---------- 如果启用店铺明细模式，过滤组织 ----------
+if use_shop_detail and org_filter:
+    # 过滤出该组织下的数据
+    df = df[df['org_name'] == org_filter]
+    if df.empty:
+        st.warning(f"组织 {org_filter} 无销售数据")
+        st.stop()
 
-# ---------- 显示结果 ----------
+# ---------- 展示结果 ----------
 st.markdown(f"#### 📊 查询结果（{start} ~ {end}）")
-
-# 判断是否单日
 if start == end:
-    # 单日模式：显示当日明细 + 月累计
+    # 单日模式
     st.caption("单日明细，同时显示当月累计数据")
     month_start = start.replace(day=1)
     df_mtd = load_aggregated_data(month_start, start, suffix)
-
-    # 如果筛选了具体组织，月累计也需过滤
-    if selected_org and selected_org != "全部组织" and 'org_name' in df_mtd.columns:
-        df_mtd = df_mtd[df_mtd['org_name'] == selected_org]
-        # 同样，这里 group_col 已改为 shop_name，但月累计可能需要按 shop_name 聚合
-        # 但由于我们只展示汇总，这里先按当前 group_col 处理
+    if use_shop_detail and org_filter:
+        df_mtd = df_mtd[df_mtd['org_name'] == org_filter]
 
     def aggregate_by_dim(df, group_col, dim_label):
         if df.empty or group_col not in df.columns:
@@ -279,21 +284,19 @@ if start == end:
         merged["月累计退货率"] = merged.apply(
             lambda r: (r['退货金额_月'] / r['发货金额_月'] * 100) if r['发货金额_月'] != 0 else 0.0, axis=1
         ).map(lambda x: f"{x:.2f}%")
-        # 如果有目标数据则加，否则不加
-        if target_dict:
-            merged["目标金额"] = merged[dim_label].map(target_dict).fillna(0)
-            merged["达成率"] = merged.apply(
-                lambda r: (r['净销售金额_月'] / r['目标金额'] * 100) if r['目标金额'] != 0 else 0.0, axis=1
-            ).map(lambda x: f"{x:.2f}%")
+        # 目标使用 target_dict（已根据模式设置）
+        merged["目标金额"] = merged[dim_label].map(target_dict).fillna(0)
+        merged["达成率"] = merged.apply(
+            lambda r: (r['净销售金额_月'] / r['目标金额'] * 100) if r['目标金额'] != 0 else 0.0, axis=1
+        ).map(lambda x: f"{x:.2f}%")
         merged = merged.sort_values(dim_label)
 
         display_cols = [
             dim_label,
             "发货金额_日", "退货金额_日", "净销售金额_日", "日退货率",
-            "发货金额_月", "退货金额_月", "净销售金额_月", "月累计退货率"
+            "发货金额_月", "退货金额_月", "净销售金额_月", "月累计退货率",
+            "目标金额", "达成率"
         ]
-        if target_dict:
-            display_cols.extend(["目标金额", "达成率"])
         column_config = {
             dim_label: st.column_config.TextColumn(dim_label),
             "发货金额_日": st.column_config.NumberColumn("日发货", format="%.2f"),
@@ -304,20 +307,18 @@ if start == end:
             "退货金额_月": st.column_config.NumberColumn("月累计退货", format="%.2f"),
             "净销售金额_月": st.column_config.NumberColumn("月累计净额", format="%.2f"),
             "月累计退货率": st.column_config.TextColumn("月累计退货率"),
+            "目标金额": st.column_config.NumberColumn("目标金额", format="%.2f"),
+            "达成率": st.column_config.TextColumn("达成率")
         }
-        if target_dict:
-            column_config["目标金额"] = st.column_config.NumberColumn("目标金额", format="%.2f")
-            column_config["达成率"] = st.column_config.TextColumn("达成率")
         st.dataframe(merged[display_cols], column_config=column_config, use_container_width=True, hide_index=True)
 
-        # 汇总行
         total_today_ship = merged["发货金额_日"].sum()
         total_today_return = merged["退货金额_日"].sum()
         total_today_net = merged["净销售金额_日"].sum()
         total_month_ship = merged["发货金额_月"].sum()
         total_month_return = merged["退货金额_月"].sum()
         total_month_net = merged["净销售金额_月"].sum()
-        total_target = merged["目标金额"].sum() if target_dict else 0
+        total_target = merged["目标金额"].sum()
         total_return_rate = (total_month_return / total_month_ship * 100) if total_month_ship != 0 else 0.0
         total_rate = (total_month_net / total_target * 100) if total_target != 0 else 0.0
 
@@ -326,7 +327,6 @@ if start == end:
         col2.metric("📆 月累计合计", f"净额: ¥{total_month_net:,.2f}", delta=f"发货 ¥{total_month_ship:,.2f} / 退货 ¥{total_month_return:,.2f} | 退货率 {total_return_rate:.2f}%")
         col3.metric("🎯 目标完成率", f"{total_rate:.2f}%", delta=f"总目标: ¥{total_target:,.2f}")
 
-        # 导出
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
             merged[display_cols].to_excel(writer, index=False)
@@ -337,7 +337,7 @@ if start == end:
             key="export_detail"
         )
 else:
-    # 多日模式：显示总合计 + 按维度汇总 + 每日透视
+    # 多日模式
     total_ship = df["total_ship"].sum()
     total_return = df["total_return"].sum()
     total_net = df["total_net"].sum()
@@ -347,7 +347,7 @@ else:
     col2.metric("总退货", f"¥{total_return:,.2f}")
     col3.metric("总净额", f"¥{total_net:,.2f}", delta=f"退货率 {return_rate:.2f}%")
 
-    # 按维度汇总（如果 group_col 是 shop_name 且是因为筛选组织导致的，则汇总店铺）
+    # 按维度汇总
     if group_col in df.columns:
         dim_agg = df.groupby(group_col).agg(
             发货金额=("total_ship", "sum"),
@@ -357,6 +357,12 @@ else:
         dim_agg["退款率"] = dim_agg.apply(
             lambda r: f"{(r['退货金额'] / r['发货金额'] * 100):.2f}%" if r['发货金额'] != 0 else "-", axis=1
         )
+        # 如果是店铺模式，加入目标
+        if use_shop_detail and group_col == "shop_name":
+            dim_agg["目标金额"] = dim_agg[dim_label].map(target_dict).fillna(0)
+            dim_agg["达成率"] = dim_agg.apply(
+                lambda r: (r['净销售金额'] / r['目标金额'] * 100) if r['目标金额'] != 0 else 0.0, axis=1
+            ).map(lambda x: f"{x:.2f}%")
         st.markdown(f"#### 按 {dim_label} 汇总")
         st.dataframe(dim_agg, use_container_width=True, hide_index=True)
 
@@ -373,7 +379,7 @@ else:
     # 导出
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        if group_col in df.columns and not dim_agg.empty:
+        if group_col in df.columns:
             dim_agg.to_excel(writer, sheet_name="按维度汇总", index=False)
         if group_col in df.columns and not pivot.empty:
             pivot.reset_index().to_excel(writer, sheet_name="每日明细", index=False)
