@@ -16,6 +16,96 @@ if "table_suffix" not in st.session_state:
 if "target_dict" not in st.session_state:
     st.session_state.target_dict = {}
 
+# ---------- 页面样式（与商品分析页统一） ----------
+st.markdown("""
+<style>
+    /* 全局 */
+    .stApp { background: #f3f6fa; font-family: 'Inter', sans-serif; }
+    .stSubheader { font-weight: 500; color: #0f172a; border-bottom: 2px solid #e2e8f0; padding-bottom: 6px; margin-bottom: 16px; }
+
+    /* 卡片 */
+    .stColumns > .stColumn > div {
+        background: rgba(255,255,255,0.6);
+        backdrop-filter: blur(8px);
+        border-radius: 16px;
+        padding: 12px 16px;
+        border: 1px solid rgba(255,255,255,0.3);
+        box-shadow: 0 4px 16px rgba(0,20,40,0.04);
+    }
+
+    /* 表格（无框，干净） */
+    .stDataFrame {
+        background: transparent !important;
+        border: none !important;
+        box-shadow: none !important;
+    }
+    .stDataFrame thead tr th {
+        background: #eef2f7 !important;
+        color: #0f172a !important;
+        font-weight: 600;
+        font-size: 0.75rem;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        padding: 10px 12px;
+        border-bottom: 2px solid #cbd5e1;
+    }
+    .stDataFrame tbody tr td {
+        padding: 8px 12px;
+        border-bottom: 1px solid #e2e8f0;
+        background: #ffffff;
+    }
+    .stDataFrame tbody tr:nth-child(even) td {
+        background: #f8fafc;
+    }
+    .stDataFrame tbody tr:hover td {
+        background: #f1f5f9;
+    }
+
+    /* 按钮（透明，只保留文字） */
+    .stButton button {
+        background: transparent !important;
+        border: none !important;
+        box-shadow: none !important;
+        color: #2563eb !important;
+        font-weight: 400;
+        padding: 4px 12px !important;
+    }
+    .stButton button:hover {
+        text-decoration: underline !important;
+        color: #1d4ed8 !important;
+    }
+
+    /* metric卡片 */
+    div[data-testid="stMetric"] {
+        background: rgba(255,255,255,0.5);
+        backdrop-filter: blur(8px);
+        border-radius: 16px;
+        padding: 16px;
+        border: 1px solid rgba(255,255,255,0.3);
+    }
+    .stMetricValue {
+        font-size: 1.8rem !important;
+        font-weight: 600 !important;
+        color: #0f172a;
+    }
+
+    /* 下载按钮（保留原始样式，但也可美化） */
+    .stDownloadButton button {
+        background: #2563eb !important;
+        color: white !important;
+        border-radius: 20px !important;
+        padding: 6px 20px !important;
+        border: none !important;
+        font-weight: 500;
+        box-shadow: 0 4px 12px rgba(37,99,235,0.25);
+    }
+    .stDownloadButton button:hover {
+        background: #1d4ed8 !important;
+        box-shadow: 0 8px 20px rgba(37,99,235,0.35);
+    }
+</style>
+""", unsafe_allow_html=True)
+
 st.subheader("📋 每日明细查询")
 st.info("此处展示最新日销售明细，并支持按日期查询任意一天的销售情况。")
 
@@ -29,16 +119,20 @@ if prod_df.empty:
 
 # ---------- 映射表合并（仅全部数据） ----------
 is_all = st.session_state.table_suffix == "_all"
+
+# 默认维度（非全部数据为店铺）
+group_col = "shop_name"
+dim_label = "店铺名称"
+target_dict = st.session_state.target_dict
+
 if is_all:
     # 加载映射表（表名：mapping）
     mapping_df = load_dimension_mapping()
     if not mapping_df.empty:
         # 检查映射表列：优先使用 shop_name，若无则尝试 anchor
         if 'shop_name' in mapping_df.columns:
-            # 确保 prod_df 有 shop_name
             prod_df = prod_df.merge(mapping_df, on="shop_name", how="left")
         elif 'anchor' in mapping_df.columns:
-            # 若使用主播维度，需先提取 anchor
             if 'anchor' not in prod_df.columns:
                 prod_df["anchor"] = prod_df["remark"].astype(str).apply(extract_anchor)
             prod_df = prod_df.merge(mapping_df, on="anchor", how="left")
@@ -47,20 +141,20 @@ if is_all:
     else:
         st.warning("未加载到映射关系（mapping 表），组织/部门信息不可用。")
 
-# ---------- 确定维度 ----------
-if is_all:
-    org_targets = load_org_targets("_all")
-    dimension_options = ["阿米巴组织", "部门"]
-    selected_dim = st.radio("选择维度", dimension_options, horizontal=True, key="dimension_select_daily")
-    if selected_dim == "阿米巴组织":
-        group_col = "org_name"
-        dim_label = "组织"
-        target_dict = org_targets
-    else:
-        group_col = "dept"
-        dim_label = "部门"
-        # 若合并后 org_name 和 dept 存在，则按部门汇总目标
-        if 'org_name' in prod_df.columns and 'dept' in prod_df.columns:
+    # 检查合并后是否有 org_name 和 dept
+    if 'org_name' in prod_df.columns and 'dept' in prod_df.columns:
+        # 有组织/部门信息，让用户选择维度
+        org_targets = load_org_targets("_all")
+        dimension_options = ["阿米巴组织", "部门"]
+        selected_dim = st.radio("选择维度", dimension_options, horizontal=True, key="dimension_select_daily")
+        if selected_dim == "阿米巴组织":
+            group_col = "org_name"
+            dim_label = "组织"
+            target_dict = org_targets
+        else:
+            group_col = "dept"
+            dim_label = "部门"
+            # 汇总部门目标
             org_dept_map = prod_df[['org_name', 'dept']].drop_duplicates()
             dept_targets = {}
             for _, row in org_dept_map.iterrows():
@@ -69,14 +163,16 @@ if is_all:
                 target = org_targets.get(org, 0)
                 dept_targets[dept] = dept_targets.get(dept, 0) + target
             target_dict = dept_targets
-        else:
-            st.warning("当前数据中无部门信息，请检查映射表。")
-            st.stop()
-    # 检查 group_col 是否存在
-    if group_col not in prod_df.columns or prod_df[group_col].isna().all():
-        st.warning(f"当前数据中无 {dim_label} 信息，请检查映射表。")
-        st.stop()
-else:
+    else:
+        # 没有组织/部门信息，回退到店铺维度
+        st.warning("当前数据中无组织/部门信息，将按店铺维度展示。")
+        group_col = "shop_name"
+        dim_label = "店铺名称"
+        target_dict = st.session_state.target_dict
+
+# 检查 group_col 是否存在，若不存在则回退到 shop_name
+if group_col not in prod_df.columns or prod_df[group_col].isna().all():
+    st.warning(f"当前数据中无 {dim_label} 信息，已切换为店铺维度。")
     group_col = "shop_name"
     dim_label = "店铺名称"
     target_dict = st.session_state.target_dict
