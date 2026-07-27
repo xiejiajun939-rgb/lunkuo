@@ -63,7 +63,7 @@ def date_quick_buttons(start_key, end_key, default_start=None, default_end=None,
         with col4_1:
             st.date_input(
                 "开始",
-                key=start_key,                       # 直接使用 start_key
+                key=start_key,
                 min_value=min_date,
                 max_value=max_date,
                 label_visibility="collapsed"
@@ -76,3 +76,83 @@ def date_quick_buttons(start_key, end_key, default_start=None, default_end=None,
                 max_value=max_date,
                 label_visibility="collapsed"
             )
+
+# ---------- 主播提取 ----------
+def extract_anchor(remark):
+    """从备注中提取主播名称（格式：主播：xxx）"""
+    if not isinstance(remark, str):
+        return None
+    match = re.search(r'主播[：:]([^_]+)', remark)
+    return match.group(1).strip() if match else None
+
+# ---------- 货号解析 ----------
+def parse_product_code(remark):
+    """
+    解析备注中的货号信息，返回字典：
+    {
+        "product_code": 完整商品编码,
+        "style_code": 款式码（前8位）,
+        "brand": 品牌,
+        "year": 年份,
+        "season": 季节,
+        "category": 品类,
+        "style": 款式,
+        "color_code": 颜色代码,
+        "size": 尺码
+    }
+    若解析失败返回 None
+    """
+    if not isinstance(remark, str):
+        return None
+    parts = remark.split('_')
+    if len(parts) < 3:
+        return None
+    product_code = parts[0]
+    if len(product_code) < 8:
+        return None
+    style_code = product_code[:8]
+    brand = product_code[0] if len(product_code) > 0 else ''
+    year = product_code[1:3] if len(product_code) > 3 else ''
+    season_map = {"1": "春", "2": "夏", "3": "秋", "4": "冬"}
+    season = season_map.get(product_code[3] if len(product_code) > 3 else '', '')
+    category = product_code[4:6] if len(product_code) > 6 else ''
+    style = product_code[6:8] if len(product_code) > 8 else ''
+    color_code = parts[1] if len(parts) > 1 else ''
+    size = parts[2] if len(parts) > 2 else ''
+    size_map = {"001": "S", "002": "M", "003": "L", "004": "XL", "008": "均码"}
+    size = size_map.get(size, size)
+    return {
+        "product_code": product_code,
+        "style_code": style_code,
+        "brand": brand,
+        "year": year,
+        "season": season,
+        "category": category,
+        "style": style,
+        "color_code": color_code,
+        "size": size
+    }
+
+# ---------- 数据权限过滤 ----------
+def apply_data_permission(df):
+    """
+    根据当前用户的过滤权限（平台、店铺/主播）过滤数据
+    需要在 session_state 中有 username, table_suffix, sub_users
+    """
+    if df.empty:
+        return df
+    username = st.session_state.get("username", "")
+    sub_users = st.session_state.get("sub_users", {})
+    user_info = sub_users.get(username, {})
+    filter_platform = user_info.get("filter_platform", "all")
+    filter_shop_names = user_info.get("filter_shop_names", [])
+
+    if filter_platform != "all" and "shop_name" in df.columns:
+        df = df[df["shop_name"].str.contains(filter_platform, case=False, na=False)]
+
+    if filter_shop_names and "shop_name" in df.columns:
+        df = df[df["shop_name"].isin(filter_shop_names)]
+    elif filter_shop_names and "anchor" in df.columns:
+        df = df[df["anchor"].isin(filter_shop_names)]
+
+    return df
