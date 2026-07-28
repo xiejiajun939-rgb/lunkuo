@@ -341,22 +341,43 @@ if start == end:
             key="export_detail"
         )
 else:
-    # ---------- 多日模式（已修复退货率计算） ----------
-    # 安全计算汇总数据
-    if not df.empty and all(col in df.columns for col in ['total_ship', 'total_return', 'total_net']):
-        total_ship = float(df['total_ship'].sum())
-        total_return = float(df['total_return'].sum())
-        total_net = float(df['total_net'].sum())
-    else:
-        total_ship = total_return = total_net = 0.0
+    # ================== 多日模式（完全重写） ==================
+    # 第一步：确保数据有效且含所需列
+    required = ['total_ship', 'total_return', 'total_net']
+    if df.empty or not all(col in df.columns for col in required):
+        st.warning("数据不完整或为空，请尝试其他日期范围。")
+        st.stop()
 
+    # 第二步：将相关列转换为数值（若无法转换则设为 0）
+    for col in required:
+        df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+
+    # 第三步：聚合求和，返回 Python 原生 float（不再使用 float() 转换）
+    # 使用 .agg 获得明确 Series，然后取出第一个值（因为只有一行汇总）
+    totals = df[required].agg('sum')
+    # totals 是一个 Series，索引为列名，值为 float
+    total_ship = totals['total_ship']   # 已经是 numpy.float64，但可直接用于运算
+    total_return = totals['total_return']
+    total_net = totals['total_net']
+
+    # 若因某些原因仍为 Series，强制转为标量
+    if isinstance(total_ship, pd.Series):
+        total_ship = total_ship.iloc[0]
+    if isinstance(total_return, pd.Series):
+        total_return = total_return.iloc[0]
+    if isinstance(total_net, pd.Series):
+        total_net = total_net.iloc[0]
+
+    # 计算退货率（避免除零）
     return_rate = (total_return / total_ship * 100) if total_ship > 0 else 0.0
 
+    # 展示卡片
     col1, col2, col3 = st.columns(3)
     col1.metric("总发货", f"¥{total_ship:,.2f}")
     col2.metric("总退货", f"¥{total_return:,.2f}")
     col3.metric("总净额", f"¥{total_net:,.2f}", delta=f"退货率 {return_rate:.2f}%")
 
+    # ---------- 以下部分保持不变（维度汇总、透视表、导出） ----------
     if group_col in df.columns:
         dim_agg = df.groupby(group_col).agg(
             发货金额=("total_ship", "sum"),
