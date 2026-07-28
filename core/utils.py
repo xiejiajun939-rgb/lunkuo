@@ -9,7 +9,7 @@ import pandas as pd
 import re
 from datetime import date, timedelta
 
-# ---------- 日期快捷按钮（稳定版） ----------
+# ---------- 日期快捷按钮（最终稳定版） ----------
 def date_quick_buttons(start_key, end_key, default_start=None, default_end=None, min_date=None, max_date=None):
     """
     日期选择器 + 快捷按钮。
@@ -43,9 +43,9 @@ def date_quick_buttons(start_key, end_key, default_start=None, default_end=None,
     with col1:
         if st.button("📅 今日", key=f"quick_today_{start_key}"):
             today = date.today()
-            if today < min_date:
+            if min_date and today < min_date:
                 today = min_date
-            if today > max_date:
+            if max_date and today > max_date:
                 today = max_date
             st.session_state[start_key] = today
             st.session_state[end_key] = today
@@ -53,10 +53,10 @@ def date_quick_buttons(start_key, end_key, default_start=None, default_end=None,
     with col2:
         if st.button("📆 近7天", key=f"quick_7days_{start_key}"):
             today = date.today()
-            if today > max_date:
+            if max_date and today > max_date:
                 today = max_date
             start = today - timedelta(days=6)
-            if start < min_date:
+            if min_date and start < min_date:
                 start = min_date
             st.session_state[start_key] = start
             st.session_state[end_key] = today
@@ -64,10 +64,10 @@ def date_quick_buttons(start_key, end_key, default_start=None, default_end=None,
     with col3:
         if st.button("📆 本月", key=f"quick_month_{start_key}"):
             today = date.today()
-            if today > max_date:
+            if max_date and today > max_date:
                 today = max_date
             start = today.replace(day=1)
-            if start < min_date:
+            if min_date and start < min_date:
                 start = min_date
             st.session_state[start_key] = start
             st.session_state[end_key] = today
@@ -99,7 +99,7 @@ def extract_anchor(remark):
     match = re.search(r'主播[：:]([^_]+)', remark)
     return match.group(1).strip() if match else None
 
-# ---------- 货号解析（修正版） ----------
+# ---------- 货号解析（修正版：取第二部分为商品编码） ----------
 def parse_product_code(remark):
     """
     解析备注中的货号信息，返回字典：
@@ -123,10 +123,10 @@ def parse_product_code(remark):
         # 如果只有一个部分，尝试直接作为商品编码（兼容旧格式）
         product_code = parts[0]
     else:
-        # 新格式：第二个部分是商品编码
+        # 新格式：第二个部分是商品编码（例如：16072512213877_G253Y043421001_...）
         product_code = parts[1]
     
-    # 如果 product_code 长度不足8位，或不是以字母开头（如 G/L/T 等），可能解析错误，返回 None
+    # 验证 product_code 是否有效（长度>=8，且首字母为字母）
     if len(product_code) < 8 or not product_code[0].isalpha():
         return None
     
@@ -138,7 +138,7 @@ def parse_product_code(remark):
     category = product_code[4:6] if len(product_code) > 6 else ''
     style = product_code[6:8] if len(product_code) > 8 else ''
     # 颜色和尺码可能在其他部分，但此处暂不处理
-    color_code = ''  # 可从后续部分提取，但现有逻辑未使用
+    color_code = ''
     size = ''
     return {
         "product_code": product_code,
