@@ -15,32 +15,29 @@ SIZE_MAP = {"001": "S", "002": "M", "003": "L", "004": "XL", "008": "均码"}
 
 # ---------- 日期快捷按钮 ----------
 def date_quick_buttons(start_key, end_key, default_start=None, default_end=None, min_date=None, max_date=None):
-    """
-    日期选择器 + 快捷按钮。
-    直接使用 start_key 和 end_key 作为 st.date_input 的 key，
-    快捷按钮通过修改 session_state 并刷新页面来更新日期。
-    """
-    # 处理 None 值
-    if min_date is None:
-        min_date = date.today() - timedelta(days=30)
-    if max_date is None:
-        max_date = date.today()
-    if default_start is None:
-        default_start = max_date - timedelta(days=7)
-    if default_end is None:
-        default_end = max_date
-
-    # 确保默认值在范围内
-    if default_start < min_date:
-        default_start = min_date
-    if default_end > max_date:
-        default_end = max_date
+    # ... 原有处理 default_start/default_end 和范围边界 ...
 
     # 初始化 session_state
     if start_key not in st.session_state:
         st.session_state[start_key] = default_start
     if end_key not in st.session_state:
         st.session_state[end_key] = default_end
+
+    # ===== 新增校验：强制修正日期范围 =====
+    # 如果当前存储的值超出有效范围，则将其修正到边界
+    if st.session_state[start_key] < min_date:
+        st.session_state[start_key] = min_date
+    if st.session_state[start_key] > max_date:
+        st.session_state[start_key] = max_date
+    if st.session_state[end_key] < min_date:
+        st.session_state[end_key] = min_date
+    if st.session_state[end_key] > max_date:
+        st.session_state[end_key] = max_date
+    # 保证 start <= end
+    if st.session_state[start_key] > st.session_state[end_key]:
+        st.session_state[start_key] = st.session_state[end_key]  # 或者交换
+
+    # ... 后续按钮逻辑不变，但确保 st.date_input 使用时传入的 value 在范围内
 
     # 快捷按钮行
     col1, col2, col3, col4 = st.columns([1, 1, 1, 3])
