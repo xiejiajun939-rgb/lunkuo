@@ -390,7 +390,7 @@ with col1:
 
 # ---------- 加载数据 ----------
 with st.spinner("加载商品销售数据..."):
-    prod_df = load_product_sales(st.session_state.table_suffix)
+    prod_df = load_product_sales(st.session_state.table_suffix, include_offline=False)
 
 if prod_df.empty:
     st.warning("暂无数据，请先上传订单文件。")
