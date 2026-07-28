@@ -9,7 +9,11 @@ import pandas as pd
 import re
 from datetime import date, timedelta
 
-# ---------- 日期快捷按钮（最终稳定版） ----------
+# ---------- 常量映射 ----------
+SEASON_MAP = {"1": "春", "2": "夏", "3": "秋", "4": "冬"}
+SIZE_MAP = {"001": "S", "002": "M", "003": "L", "004": "XL", "008": "均码"}
+
+# ---------- 日期快捷按钮 ----------
 def date_quick_buttons(start_key, end_key, default_start=None, default_end=None, min_date=None, max_date=None):
     """
     日期选择器 + 快捷按钮。
@@ -99,7 +103,7 @@ def extract_anchor(remark):
     match = re.search(r'主播[：:]([^_]+)', remark)
     return match.group(1).strip() if match else None
 
-# ---------- 货号解析（修正版：取第二部分为商品编码） ----------
+# ---------- 货号解析（旧版正确函数） ----------
 def parse_product_code(remark):
     """
     解析备注中的货号信息，返回字典：
@@ -116,41 +120,35 @@ def parse_product_code(remark):
     }
     若解析失败返回 None
     """
-    if not isinstance(remark, str):
-        return None
-    parts = remark.split('_')
-    if len(parts) < 2:
-        # 如果只有一个部分，尝试直接作为商品编码（兼容旧格式）
-        product_code = parts[0]
-    else:
-        # 新格式：第二个部分是商品编码（例如：16072512213877_G253Y043421001_...）
+    try:
+        parts = remark.split('_')
+        if len(parts) < 2:
+            return None
         product_code = parts[1]
-    
-    # 验证 product_code 是否有效（长度>=8，且首字母为字母）
-    if len(product_code) < 8 or not product_code[0].isalpha():
+        if len(product_code) < 14:
+            return None
+        brand = product_code[0]
+        year_season = product_code[1:4]
+        year = year_season[:2]
+        season_code = year_season[2]
+        category = product_code[4]
+        style = product_code[5:8]
+        color_code = product_code[8:11]
+        size_code = product_code[11:14]
+        style_code = product_code[:8]
+        return {
+            "product_code": product_code,
+            "style_code": style_code,
+            "brand": brand,
+            "year": year,
+            "season": SEASON_MAP.get(season_code, season_code),
+            "category": category,
+            "style": style,
+            "color_code": color_code,
+            "size": SIZE_MAP.get(size_code, size_code)
+        }
+    except:
         return None
-    
-    style_code = product_code[:8]
-    brand = product_code[0] if len(product_code) > 0 else ''
-    year = product_code[1:3] if len(product_code) > 3 else ''
-    season_map = {"1": "春", "2": "夏", "3": "秋", "4": "冬"}
-    season = season_map.get(product_code[3] if len(product_code) > 3 else '', '')
-    category = product_code[4:6] if len(product_code) > 6 else ''
-    style = product_code[6:8] if len(product_code) > 8 else ''
-    # 颜色和尺码可能在其他部分，但此处暂不处理
-    color_code = ''
-    size = ''
-    return {
-        "product_code": product_code,
-        "style_code": style_code,
-        "brand": brand,
-        "year": year,
-        "season": season,
-        "category": category,
-        "style": style,
-        "color_code": color_code,
-        "size": size
-    }
 
 # ---------- 数据权限过滤 ----------
 def apply_data_permission(df):
