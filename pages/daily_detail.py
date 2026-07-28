@@ -341,26 +341,26 @@ if start == end:
             key="export_detail"
         )
 else:
-    # ================== 多日模式（完全重写） ==================
-    # 第一步：确保数据有效且含所需列
-    required = ['total_ship', 'total_return', 'total_net']
-    if df.empty or not all(col in df.columns for col in required):
-        st.warning("数据不完整或为空，请尝试其他日期范围。")
+    # ================== 多日模式（完全重写，无任何强制类型转换） ==================
+    # 确保 df 非空且有必需列
+    if df.empty:
+        st.warning("所选范围内无销售数据")
+        st.stop()
+    required_cols = ['total_ship', 'total_return', 'total_net']
+    if not all(col in df.columns for col in required_cols):
+        st.error(f"数据缺少必需列：{required_cols}")
         st.stop()
 
-    # 第二步：将相关列转换为数值（若无法转换则设为 0）
-    for col in required:
-        df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
-
-    # 第三步：聚合求和，返回 Python 原生 float（不再使用 float() 转换）
-    # 使用 .agg 获得明确 Series，然后取出第一个值（因为只有一行汇总）
-    totals = df[required].agg('sum')
-    # totals 是一个 Series，索引为列名，值为 float
-    total_ship = totals['total_ship']   # 已经是 numpy.float64，但可直接用于运算
+    # 直接求和，得到 Series（或可能是标量，取决于版本）
+    totals = df[required_cols].sum()
+    # 确保每个值都是标量，用 .iloc[0] 或 .item() 提取
+    # 注意：totals 是一个 Series，索引为列名，值为聚合结果（可能是 numpy.float64）
+    # 我们直接使用索引获取值，并判断类型
+    total_ship = totals['total_ship']
     total_return = totals['total_return']
     total_net = totals['total_net']
 
-    # 若因某些原因仍为 Series，强制转为标量
+    # 如果还是 Series（极少见），则取第一个元素
     if isinstance(total_ship, pd.Series):
         total_ship = total_ship.iloc[0]
     if isinstance(total_return, pd.Series):
@@ -368,16 +368,15 @@ else:
     if isinstance(total_net, pd.Series):
         total_net = total_net.iloc[0]
 
-    # 计算退货率（避免除零）
+    # 现在 total_* 是 numpy.float64 或 Python float，可直接运算
     return_rate = (total_return / total_ship * 100) if total_ship > 0 else 0.0
 
-    # 展示卡片
     col1, col2, col3 = st.columns(3)
     col1.metric("总发货", f"¥{total_ship:,.2f}")
     col2.metric("总退货", f"¥{total_return:,.2f}")
     col3.metric("总净额", f"¥{total_net:,.2f}", delta=f"退货率 {return_rate:.2f}%")
 
-    # ---------- 以下部分保持不变（维度汇总、透视表、导出） ----------
+    # ---------- 按维度汇总（未变） ----------
     if group_col in df.columns:
         dim_agg = df.groupby(group_col).agg(
             发货金额=("total_ship", "sum"),
@@ -395,6 +394,7 @@ else:
         st.markdown(f"#### 按 {dim_label} 汇总")
         st.dataframe(dim_agg, use_container_width=True, hide_index=True)
 
+    # ---------- 每日透视表（未变） ----------
     if group_col in df.columns:
         daily_dim = df.groupby(["sale_date", group_col]).agg(
             净销售金额=("total_net", "sum")
@@ -404,6 +404,7 @@ else:
         st.markdown("#### 每日净销售金额明细")
         st.dataframe(pivot, use_container_width=True)
 
+    # ---------- 导出按钮（未变） ----------
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         if group_col in df.columns:
