@@ -83,8 +83,6 @@ st.markdown("""
     }
 
     /* ========== 筛选条件区（卡片） ========== */
-    /* 整个筛选区域用卡片包裹（需在代码中用 st.container 包裹） */
-    /* 这里假设筛选条件在 st.columns 中，我们给 columns 加卡片效果 */
     .stColumns:has(> .stColumn > .stSelectbox) {
         background: rgba(255,255,255,0.6) !important;
         backdrop-filter: blur(8px);
@@ -135,7 +133,6 @@ st.markdown("""
     }
 
     /* ========== 表格区 ========== */
-    /* 去掉卡片背景，只保留表格本身 */
     .stColumn > div:has(.stDataFrame) {
         background: transparent !important;
         backdrop-filter: none !important;
@@ -237,7 +234,6 @@ st.markdown("""
     }
 
     /* ========== 排序与分页区 ========== */
-    /* 排序字段、每页行数等下拉框（只保留文字） */
     .stSelectbox:has(label:contains("排序字段")),
     .stSelectbox:has(label:contains("每页行数")) {
         background: transparent !important;
@@ -298,7 +294,6 @@ st.markdown("""
         box-shadow: 0 24px 80px rgba(0, 20, 40, 0.12) !important;
         padding: 28px !important;
     }
-    /* 对话框内表格无框 */
     div[data-testid="stDialog"] .stDataFrame {
         background: transparent !important;
         border: none !important;
@@ -417,7 +412,7 @@ date_quick_buttons("prod_start", "prod_end",
 start_date = st.session_state.get("prod_start", min_date)
 end_date = st.session_state.get("prod_end", max_date)
 
-# ---------- 筛选条件（修改为一行4列） ----------
+# ---------- 筛选条件（一行4列） ----------
 st.subheader("🔍 筛选条件")
 
 # 第一行：平台、店铺、货号、品牌
@@ -445,7 +440,6 @@ col5, col6, col7, col8 = st.columns(4)
 with col5:
     coupon_filter = st.selectbox("是否首单礼金", ["全部", "仅首单礼金", "非首单礼金"], key="cf")
 with col6:
-    # 主播筛选（仅直播/全部数据）
     selected_anchors = []
     if st.session_state.table_suffix in ["_live", "_all"]:
         if "anchor" in prod_df.columns:
@@ -454,12 +448,9 @@ with col6:
                 selected_anchors = st.multiselect("主播", anchors, key="af")
             else:
                 st.info("未识别到主播信息，请检查备注字段。")
-    # 若没有主播选项，col6 可能为空，但布局保持不变
 with col7:
-    # 留空，供未来扩展
     pass
 with col8:
-    # 留空，供未来扩展
     pass
 
 # ---------- 应用筛选 ----------
@@ -479,8 +470,8 @@ if selected_brand != "全部":
 if selected_anchors:
     filtered = filtered[filtered["anchor"].isin(selected_anchors)]
 
-# ---------- 过滤线下订单（无货号） ----------
-filtered = filtered[filtered["style_code"].notna() & (filtered["style_code"] != "")]
+# ---------- 过滤线下订单（product_code 为空） ----------
+filtered = filtered[filtered["product_code"].notna() & (filtered["product_code"] != "")]
 
 # 礼金标记
 master_df = load_product_master()
