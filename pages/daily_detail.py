@@ -153,7 +153,7 @@ if is_all:
                     target = org_targets.get(org, 0)
                     dept_targets[dept] = dept_targets.get(dept, 0) + target
 
-            # ========== 关键修改：强制零售线上目标为 0 ==========
+            # 强制零售线上目标为 0
             if "零售线上" in dept_targets:
                 dept_targets["零售线上"] = 0
 
@@ -259,7 +259,7 @@ if use_shop_detail and org_filter:
 # ---------- 展示结果 ----------
 st.markdown(f"#### 📊 查询结果（{start} ~ {end}）")
 if start == end:
-    # 单日模式
+    # ---------- 单日模式 ----------
     st.caption("单日明细，同时显示当月累计数据")
     month_start = start.replace(day=1)
     df_mtd = load_aggregated_data(month_start, start, suffix)
@@ -316,13 +316,13 @@ if start == end:
         }
         st.dataframe(merged[display_cols], column_config=column_config, use_container_width=True, hide_index=True)
 
-        total_today_ship = merged["发货金额_日"].sum()
-        total_today_return = merged["退货金额_日"].sum()
-        total_today_net = merged["净销售金额_日"].sum()
-        total_month_ship = merged["发货金额_月"].sum()
-        total_month_return = merged["退货金额_月"].sum()
-        total_month_net = merged["净销售金额_月"].sum()
-        total_target = merged["目标金额"].sum()
+        total_today_ship = float(merged["发货金额_日"].sum())
+        total_today_return = float(merged["退货金额_日"].sum())
+        total_today_net = float(merged["净销售金额_日"].sum())
+        total_month_ship = float(merged["发货金额_月"].sum())
+        total_month_return = float(merged["退货金额_月"].sum())
+        total_month_net = float(merged["净销售金额_月"].sum())
+        total_target = float(merged["目标金额"].sum())
         total_return_rate = (total_month_return / total_month_ship * 100) if total_month_ship != 0 else 0.0
         total_rate = (total_month_net / total_target * 100) if total_target != 0 else 0.0
 
@@ -341,11 +341,17 @@ if start == end:
             key="export_detail"
         )
 else:
-    # 多日模式
-    total_ship = float(df["total_ship"].sum())
-    total_return = float(df["total_return"].sum())
-    total_net = float(df["total_net"].sum())
+    # ---------- 多日模式（已修复退货率计算） ----------
+    # 安全计算汇总数据
+    if not df.empty and all(col in df.columns for col in ['total_ship', 'total_return', 'total_net']):
+        total_ship = float(df['total_ship'].sum())
+        total_return = float(df['total_return'].sum())
+        total_net = float(df['total_net'].sum())
+    else:
+        total_ship = total_return = total_net = 0.0
+
     return_rate = (total_return / total_ship * 100) if total_ship > 0 else 0.0
+
     col1, col2, col3 = st.columns(3)
     col1.metric("总发货", f"¥{total_ship:,.2f}")
     col2.metric("总退货", f"¥{total_return:,.2f}")
