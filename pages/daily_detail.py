@@ -152,6 +152,11 @@ if is_all:
                     dept = row['dept']
                     target = org_targets.get(org, 0)
                     dept_targets[dept] = dept_targets.get(dept, 0) + target
+
+            # ========== 关键修改：强制零售线上目标为 0 ==========
+            if "零售线上" in dept_targets:
+                dept_targets["零售线上"] = 0
+
             target_dict = dept_targets
             use_shop_detail = False
             org_filter = None
@@ -222,7 +227,6 @@ with col1:
 with col2:
     st.date_input("结束日期", key="range_end", min_value=min_date, max_value=max_date)
 
-# 查询按钮
 if st.button("🔍 查询", key="range_query"):
     st.rerun()
 
