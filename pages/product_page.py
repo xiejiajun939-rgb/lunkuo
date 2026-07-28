@@ -470,8 +470,9 @@ if selected_brand != "全部":
 if selected_anchors:
     filtered = filtered[filtered["anchor"].isin(selected_anchors)]
 
-# ---------- 过滤线下订单（product_code 为空） ----------
-filtered = filtered[filtered["product_code"].notna() & (filtered["product_code"] != "")]
+# ---------- 过滤线下订单（remark 以 LA、PA、FA 开头） ----------
+if "remark" in filtered.columns:
+    filtered = filtered[~filtered["remark"].astype(str).str.upper().str.startswith(("LA", "PA", "FA"))]
 
 # 礼金标记
 master_df = load_product_master()
