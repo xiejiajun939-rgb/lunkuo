@@ -134,6 +134,13 @@ def fetch_sales_summary(start_date, end_date, suffix=""):
                     "return_amount": "sum",
                     "net_amount": "sum"
                 })
+                # ===== 修复开始：对离线数据执行相同的列重命名 =====
+                offline_df = offline_df.rename(columns={
+                    "ship_amount": "total_ship",
+                    "return_amount": "total_return",
+                    "net_amount": "total_net"
+                })
+                # ===== 修复结束 =====
                 if not mapping_df.empty:
                     offline_df = offline_df.merge(
                         mapping_df[["shop_name", "anchor_name", "org_name", "dept"]],
@@ -154,6 +161,7 @@ def fetch_sales_summary(start_date, end_date, suffix=""):
                 else:
                     offline_df["org_name"] = "未分配组织"
                     offline_df["dept"] = "未分配部门"
+                # 确保列顺序与 df 一致（df 已经包含 total_* 列名）
                 df = pd.concat([df, offline_df], ignore_index=True)
         else:
             df["org_name"] = None
