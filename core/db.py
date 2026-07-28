@@ -134,7 +134,7 @@ def fetch_sales_summary(start_date, end_date, suffix=""):
                     "return_amount": "sum",
                     "net_amount": "sum"
                 })
-                # ===== 修复开始：对离线数据执行相同的列重命名 =====
+                # ===== 修复：对离线数据执行相同的列重命名 =====
                 offline_df = offline_df.rename(columns={
                     "ship_amount": "total_ship",
                     "return_amount": "total_return",
@@ -280,9 +280,23 @@ def load_product_sales(suffix=None, apply_filter=True, include_offline=True):
         st.error(f"加载商品销售数据失败：{e}")
         return pd.DataFrame()
 
-# ---------- 其他函数（load_product_master, load_org_targets, save_org_targets, load_targets, save_targets, clear_targets） ----------
-# 请保留您原有的这些函数，这里不再重复粘贴以节省篇幅，但确保它们存在于文件中。
-
+# ---------- 获取日期范围（高效，不拉取全表） ----------
+@st.cache_data(ttl=600)
+def get_sales_date_range(suffix=""):
+    """获取指定数据源的最早和最晚销售日期，仅查询聚合值，速度快"""
+    if supabase is None:
+        return None, None
+    try:
+        table_name = get_table_name("product_sales", suffix)
+        # 分别查询 min 和 max
+        min_resp = supabase.table(table_name).select("sale_date").order("sale_date", desc=False).limit(1).execute()
+        max_resp = supabase.table(table_name).select("sale_date").order("sale_date", desc=True).limit(1).execute()
+        min_date = pd.to_datetime(min_resp.data[0]["sale_date"]).date() if min_resp.data else None
+        max_date = pd.to_datetime(max_resp.data[0]["sale_date"]).date() if max_resp.data else None
+        return min_date, max_date
+    except Exception as e:
+        st.error(f"获取日期范围失败：{e}")
+        return None, None
 
 # ---------- 商品主数据加载 ----------
 @st.cache_data(ttl=300)
@@ -369,19 +383,3 @@ def clear_targets(suffix=None):
         supabase.table(table_name).delete().neq("id", 0).execute()
     st.session_state.target_dict = {}
     st.rerun()
-
-# ---------- 辅助函数（从正确版本移植） ----------
-def extract_anchor(remark):
-    """从备注中提取主播名称"""
-    if not isinstance(remark, str):
-        return None
-    import re
-    match = re.search(r'主播[：:]([^_]+)', remark)
-    return match.group(1).strip() if match else None
-
-# ---------- 其他可能用到的函数（从正确版本移植） ----------
-# 如果需要每日业绩相关函数，可参考正确版本，但此处未包含，可按需添加。
-# 目前拆分版中的 daily_detail 页面直接使用 load_product_sales，所以不需要独立的 daily_sales 函数。
-
-# 说明：正确版本中还有 save_product_sales, validate_order_data 等函数，
-# 这些已在主文件中定义，不需要在 db.py 中重复。如果某些子页面需要，可自行导入。
