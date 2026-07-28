@@ -479,6 +479,9 @@ if selected_brand != "全部":
 if selected_anchors:
     filtered = filtered[filtered["anchor"].isin(selected_anchors)]
 
+# ---------- 过滤线下订单（无货号） ----------
+filtered = filtered[filtered["style_code"].notna() & (filtered["style_code"] != "")]
+
 # 礼金标记
 master_df = load_product_master()
 coupon_map = {}
