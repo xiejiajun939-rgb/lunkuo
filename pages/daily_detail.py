@@ -342,9 +342,9 @@ if start == end:
         )
 else:
     # 多日模式
-    total_ship = df["total_ship"].sum()
-    total_return = df["total_return"].sum()
-    total_net = df["total_net"].sum()
+    total_ship = float(df["total_ship"].sum())
+    total_return = float(df["total_return"].sum())
+    total_net = float(df["total_net"].sum())
     return_rate = (total_return / total_ship * 100) if total_ship > 0 else 0.0
     col1, col2, col3 = st.columns(3)
     col1.metric("总发货", f"¥{total_ship:,.2f}")
