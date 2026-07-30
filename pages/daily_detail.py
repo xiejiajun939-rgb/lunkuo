@@ -10,7 +10,7 @@ from core.db import (
     load_org_targets,
     load_dimension_mapping,
     load_targets,
-    get_sales_date_range  # 新增高效日期范围函数
+    get_sales_date_range
 )
 from core.utils import date_quick_buttons
 
@@ -21,6 +21,8 @@ if "table_suffix" not in st.session_state:
     st.session_state.table_suffix = ""
 if "target_dict" not in st.session_state:
     st.session_state.target_dict = {}
+if "diagnose" not in st.session_state:
+    st.session_state.diagnose = False  # 诊断触发标志
 
 # ---------- 页面样式 ----------
 st.markdown("""
@@ -115,7 +117,7 @@ st.info("此处展示任意日期的销售明细，支持按组织/部门/店铺
 suffix = st.session_state.table_suffix
 is_all = suffix == "_all"
 
-# ===== 修改：使用高效的日期范围查询，避免全表加载 =====
+# 获取日期范围（高效）
 min_date, max_date = get_sales_date_range(suffix)
 if min_date is None or max_date is None:
     st.warning("暂无商品销售数据，请先上传订单文件。")
@@ -225,8 +227,18 @@ with col1:
 with col2:
     st.date_input("结束日期", key="range_end", min_value=min_date, max_value=max_date)
 
+# ---------- 查询按钮 ----------
 if st.button("🔍 查询", key="range_query"):
     st.rerun()
+
+# ---------- 诊断按钮 ----------
+col_diag1, col_diag2 = st.columns([1, 5])
+with col_diag1:
+    if st.button("🔍 诊断商品部", key="diagnose_btn"):
+        st.session_state.diagnose = True
+        st.rerun()
+with col_diag2:
+    st.caption("点击后诊断当前查询和月累计中商品部的存在情况（仅单日模式有效）")
 
 # ---------- 加载数据 ----------
 start = st.session_state["range_start"]
@@ -253,6 +265,84 @@ if use_shop_detail and org_filter:
     if df.empty:
         st.warning(f"组织 {org_filter} 无销售数据")
         st.stop()
+
+# ---------- 诊断函数 ----------
+def run_diagnosis(df_current, df_mtd=None, label_current="当前查询", label_mtd="月累计"):
+    """生成诊断信息并显示"""
+    dept_col = "dept"
+    if dept_col not in df_current.columns:
+        st.toast("❌ 当前数据中缺少 'dept' 列", icon="🚨")
+        return
+    # 当前查询
+    current_has = "商品部" in df_current[dept_col].unique()
+    current_count = df_current[df_current[dept_col] == "商品部"].shape[0]
+    current_shops = df_current[df_current[dept_col] == "商品部"]["shop_name"].unique().tolist() if current_has else []
+    
+    # 月累计（如果有）
+    mtd_has = False
+    mtd_count = 0
+    mtd_shops = []
+    if df_mtd is not None and dept_col in df_mtd.columns:
+        mtd_has = "商品部" in df_mtd[dept_col].unique()
+        mtd_count = df_mtd[df_mtd[dept_col] == "商品部"].shape[0]
+        mtd_shops = df_mtd[df_mtd[dept_col] == "商品部"]["shop_name"].unique().tolist() if mtd_has else []
+    
+    # 构建消息
+    msg = f"📊 {label_current}: "
+    if current_has:
+        msg += f"✅ 包含商品部 (记录数 {current_count}, 店铺: {', '.join(current_shops[:3])}{'...' if len(current_shops)>3 else ''})"
+    else:
+        msg += f"❌ 无商品部（涉及店铺: {', '.join(df_current['shop_name'].unique().tolist()[:5])}{'...' if len(df_current['shop_name'].unique())>5 else ''}）"
+    
+    if df_mtd is not None:
+        msg += f"\n📅 {label_mtd}: "
+        if mtd_has:
+            msg += f"✅ 包含商品部 (记录数 {mtd_count}, 店铺: {', '.join(mtd_shops[:3])}{'...' if len(mtd_shops)>3 else ''})"
+        else:
+            msg += f"❌ 无商品部（涉及店铺: {', '.join(df_mtd['shop_name'].unique().tolist()[:5])}{'...' if len(df_mtd['shop_name'].unique())>5 else ''}）"
+    
+    st.toast(msg, icon="🔍")
+    
+    # 显示详细对比
+    with st.expander("📋 商品部诊断详情", expanded=True):
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown(f"**{label_current}**")
+            st.write(f"总行数: {len(df_current)}")
+            st.write(f"部门唯一值: {df_current[dept_col].unique().tolist()}")
+            st.write(f"商品部记录数: {current_count}")
+            if current_has:
+                st.dataframe(df_current[df_current[dept_col] == "商品部"].head(5))
+            else:
+                st.warning("当前查询无商品部")
+                st.write("涉及所有店铺:", df_current["shop_name"].unique().tolist())
+        if df_mtd is not None:
+            with col2:
+                st.markdown(f"**{label_mtd}**")
+                st.write(f"总行数: {len(df_mtd)}")
+                st.write(f"部门唯一值: {df_mtd[dept_col].unique().tolist()}")
+                st.write(f"商品部记录数: {mtd_count}")
+                if mtd_has:
+                    st.dataframe(df_mtd[df_mtd[dept_col] == "商品部"].head(5))
+                else:
+                    st.warning("月累计无商品部")
+                    st.write("涉及所有店铺:", df_mtd["shop_name"].unique().tolist())
+
+# ---------- 如果诊断被触发，执行诊断 ----------
+if st.session_state.diagnose:
+    if start == end:
+        # 单日模式，需要加载月累计数据
+        month_start = start.replace(day=1)
+        df_mtd = load_aggregated_data(month_start, start, suffix)
+        if use_shop_detail and org_filter:
+            df_mtd = df_mtd[df_mtd['org_name'] == org_filter]
+        # 调用诊断
+        run_diagnosis(df, df_mtd, "当日", "月累计")
+    else:
+        # 多日模式，无月累计
+        run_diagnosis(df, None, f"{start} ~ {end}", None)
+    # 重置标志，避免每次刷新都显示
+    st.session_state.diagnose = False
 
 # ---------- 展示结果 ----------
 st.markdown(f"#### 📊 查询结果（{start} ~ {end}）")
