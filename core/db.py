@@ -35,20 +35,16 @@ def extract_anchor(remark):
     match = re.search(r'主播[：:]([^_]+)', remark)
     return match.group(1).strip() if match else None
 
-# ---------- 维度映射加载（短缓存，保证及时更新） ----------
 @st.cache_data(ttl=60)
 def load_dimension_mapping() -> pd.DataFrame:
-    if supabase is None:
-        return pd.DataFrame()
-    try:
-        resp = supabase.table("mapping").select("*").execute()
-        if resp.data:
-            df = pd.DataFrame(resp.data)
-            df['shop_name'] = df['shop_name'].astype(str).str.strip()
-            df['anchor_name'] = df['anchor_name'].fillna('NONE').astype(str).str.strip()
-            df['org_name'] = df['org_name'].fillna('未分配组织').astype(str).str.strip()
-            df['dept'] = df['dept'].fillna('未分配部门').astype(str).str.strip()
-            return df
+    ...
+    if resp.data:
+        df = pd.DataFrame(resp.data)
+        df['shop_name'] = df['shop_name'].astype(str).str.strip().str.upper()
+        df['anchor_name'] = df['anchor_name'].fillna('NONE').astype(str).str.strip().str.upper()
+        df['org_name'] = df['org_name'].fillna('未分配组织').astype(str).str.strip()
+        df['dept'] = df['dept'].fillna('未分配部门').astype(str).str.strip()
+        return df
         else:
             return pd.DataFrame()
     except Exception as e:
