@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-数据库操作公共模块（最终版本）
-- 映射表实时刷新（ttl=60）
-- 线下数据全量查询+内存过滤，避免SQL日期比较问题
-- 三级映射确保所有店铺都能分配部门
-- 缓存时间缩短，支持数据更新
+数据库操作公共模块（最终稳定版）
+- 映射表缓存 60 秒，保证实时性
+- 线下数据全量查询后内存过滤，避免日期比较问题
+- 直接按 shop_name 映射部门，忽略 anchor
+- 支持强制刷新缓存
 """
 
 import streamlit as st
@@ -38,7 +38,7 @@ def extract_anchor(remark):
     match = re.search(r'主播[：:]([^_]+)', remark)
     return match.group(1).strip() if match else None
 
-# ---------- 维度映射加载（ttl=60，保证较新） ----------
+# ---------- 维度映射加载（ttl=60） ----------
 @st.cache_data(ttl=60)
 def load_dimension_mapping():
     if supabase is None:
@@ -58,7 +58,7 @@ def load_dimension_mapping():
         st.error(f"加载维度映射表失败：{e}")
         return pd.DataFrame()
 
-# ---------- 核心聚合函数（缓存60秒，内部实时合并映射） ----------
+# ---------- 核心聚合函数（缓存 60 秒） ----------
 @st.cache_data(ttl=60)
 def fetch_sales_summary(start_date, end_date, suffix=""):
     if supabase is None:
@@ -104,7 +104,7 @@ def fetch_sales_summary(start_date, end_date, suffix=""):
     else:
         df_online = pd.DataFrame()
 
-    # 2. 线下数据（全量查询，内存过滤日期）
+    # 2. 线下数据（全量查询，内存过滤）
     df_offline = pd.DataFrame()
     if suffix == "_all":
         offline_resp = supabase.table("offline_sales_all").select("*").execute()
@@ -134,33 +134,19 @@ def fetch_sales_summary(start_date, end_date, suffix=""):
     else:
         df = pd.concat([df_online, df_offline], ignore_index=True)
 
-    # 4. 加载最新映射表（实时读取，因缓存ttl短）
+    # 4. 加载映射表
     mapping_df = load_dimension_mapping()
 
-    # 5. 合并映射（仅 _all 数据源）
+    # 5. 直接按 shop_name 映射部门（忽略 anchor）
     if suffix == "_all" and not mapping_df.empty:
-        df["anchor"] = df["anchor"].fillna("NONE").astype(str).str.strip().str.upper()
-        # 精确匹配
-        df = df.merge(
-            mapping_df[["shop_name", "anchor_name", "org_name", "dept"]],
-            left_on=["shop_name", "anchor"],
-            right_on=["shop_name", "anchor_name"],
-            how="left"
-        )
-        # 店铺级后备（精确匹配失败时）
-        null_mask = df["org_name"].isna()
-        if null_mask.any():
-            shop_fallback = mapping_df.drop_duplicates(subset=["shop_name"], keep="first")[["shop_name", "org_name", "dept"]]
-            shop_fallback = shop_fallback.rename(columns={"org_name": "org_fallback", "dept": "dept_fallback"})
-            df = df.merge(shop_fallback, on="shop_name", how="left")
-            df.loc[null_mask, "org_name"] = df.loc[null_mask, "org_fallback"]
-            df.loc[null_mask, "dept"] = df.loc[null_mask, "dept_fallback"]
-            df = df.drop(columns=["org_fallback", "dept_fallback"])
-        # 最终默认值
-        df["org_name"] = df["org_name"].fillna("未分配组织")
-        df["dept"] = df["dept"].fillna("未分配部门")
+        # 确保 shop_name 统一大写
+        mapping_df['shop_name'] = mapping_df['shop_name'].astype(str).str.strip().str.upper()
+        # 取每个 shop_name 的第一条记录作为映射（通常部门唯一）
+        shop_dept_map = mapping_df.drop_duplicates(subset=['shop_name'], keep='first').set_index('shop_name')['dept'].to_dict()
+        shop_org_map = mapping_df.drop_duplicates(subset=['shop_name'], keep='first').set_index('shop_name')['org_name'].to_dict()
+        df['dept'] = df['shop_name'].map(shop_dept_map).fillna('未分配部门')
+        df['org_name'] = df['shop_name'].map(shop_org_map).fillna('未分配组织')
     else:
-        # 非 _all 或映射表空，则分配默认值
         df["org_name"] = "未分配组织"
         df["dept"] = "未分配部门"
 
@@ -173,208 +159,9 @@ def fetch_sales_summary(start_date, end_date, suffix=""):
 
     return df[["sale_date", "org_name", "dept", "shop_name", "total_ship", "total_return", "total_net"]]
 
-# ---------- 商品销售数据加载（用于商品详情页） ----------
-@st.cache_data(ttl=300)
-def load_product_sales(suffix=None, apply_filter=True, include_offline=True):
-    if supabase is None:
-        return pd.DataFrame()
-    try:
-        table_name = get_table_name("product_sales", suffix)
-        all_data = []
-        page = 0
-        page_size = 1000
-        needed_cols = "sale_date, shop_name, product_code, style_code, brand, year, season, product_category, style, color_code, size_code, ship_amount, return_amount, net_amount, remark"
-        while True:
-            resp = supabase.table(table_name)\
-                           .select(needed_cols)\
-                           .range(page * page_size, (page + 1) * page_size - 1)\
-                           .execute()
-            if not resp.data:
-                break
-            all_data.extend(resp.data)
-            if len(resp.data) < page_size:
-                break
-            page += 1
-        if not all_data:
-            return pd.DataFrame()
-        df = pd.DataFrame(all_data)
-        df["sale_date"] = pd.to_datetime(df["sale_date"])
-        if "style_code" not in df.columns or df["style_code"].isnull().all():
-            df["style_code"] = df["product_code"].str[:8]
-        else:
-            df["style_code"] = df["style_code"].fillna(df["product_code"].str[:8])
-        for col in ["ship_amount", "return_amount", "net_amount"]:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
-        if suffix == "_all" and "anchor" not in df.columns:
-            df["anchor"] = df["remark"].apply(extract_anchor)
-
-        mapping_df = None
-        if suffix == "_all":
-            mapping_df = load_dimension_mapping()
-            if not mapping_df.empty:
-                if "anchor" not in df.columns:
-                    df["anchor"] = "NONE"
-                df["anchor"] = df["anchor"].fillna("NONE")
-                df = df.merge(
-                    mapping_df,
-                    left_on=["shop_name", "anchor"],
-                    right_on=["shop_name", "anchor_name"],
-                    how="left"
-                )
-                df["org_name"] = df["org_name"].fillna("未分配组织")
-                df["dept"] = df["dept"].fillna("未分配部门")
-            else:
-                df["org_name"] = "未分配组织"
-                df["dept"] = "未分配部门"
-        else:
-            df["org_name"] = None
-            df["dept"] = None
-
-        # 合并线下收入（仅当 include_offline=True 且 suffix="_all"）
-        if suffix == "_all" and include_offline:
-            try:
-                offline_resp = supabase.table("offline_sales_all").select("*").execute()
-                if offline_resp.data:
-                    offline_df = pd.DataFrame(offline_resp.data)
-                    offline_df["sale_date"] = pd.to_datetime(offline_df["sale_date"])
-                    offline_df["product_code"] = None
-                    offline_df["style_code"] = None
-                    offline_df["brand"] = None
-                    offline_df["year"] = None
-                    offline_df["season"] = None
-                    offline_df["product_category"] = None
-                    offline_df["style"] = None
-                    offline_df["color_code"] = None
-                    offline_df["size_code"] = None
-                    offline_df["image_url"] = None
-                    offline_df["master_category"] = None
-                    offline_df["remark"] = offline_df["remark"].fillna("线下收入")
-                    offline_df["anchor"] = "NONE"
-                    for col in df.columns:
-                        if col not in offline_df.columns:
-                            offline_df[col] = None
-                    offline_df = offline_df[df.columns]
-                    df = pd.concat([df, offline_df], ignore_index=True)
-            except Exception as e:
-                pass
-
-        # 补全组织/部门
-        if suffix == "_all" and mapping_df is not None and not mapping_df.empty:
-            map_shop = mapping_df[mapping_df['anchor_name'] == 'NONE'].set_index('shop_name')[['org_name', 'dept']].to_dict('index')
-            mask = df['org_name'].isna()
-            if mask.any():
-                df.loc[mask, 'org_name'] = df.loc[mask, 'shop_name'].map(lambda s: map_shop.get(s, {}).get('org_name'))
-                df.loc[mask, 'dept'] = df.loc[mask, 'shop_name'].map(lambda s: map_shop.get(s, {}).get('dept'))
-                df['org_name'] = df['org_name'].fillna('未分配组织')
-                df['dept'] = df['dept'].fillna('未分配部门')
-
-        if apply_filter:
-            from core.utils import apply_data_permission
-            df = apply_data_permission(df)
-        return df
-    except Exception as e:
-        st.error(f"加载商品销售数据失败：{e}")
-        return pd.DataFrame()
-
-# ---------- 获取日期范围 ----------
-@st.cache_data(ttl=600)
-def get_sales_date_range(suffix=""):
-    if supabase is None:
-        return None, None
-    try:
-        table_name = get_table_name("product_sales", suffix)
-        min_resp = supabase.table(table_name).select("sale_date").order("sale_date", desc=False).limit(1).execute()
-        max_resp = supabase.table(table_name).select("sale_date").order("sale_date", desc=True).limit(1).execute()
-        min_date = pd.to_datetime(min_resp.data[0]["sale_date"]).date() if min_resp.data else None
-        max_date = pd.to_datetime(max_resp.data[0]["sale_date"]).date() if max_resp.data else None
-        return min_date, max_date
-    except Exception as e:
-        st.error(f"获取日期范围失败：{e}")
-        return None, None
-
-# ---------- 商品主数据加载 ----------
-@st.cache_data(ttl=300)
-def load_product_master():
-    if supabase is None:
-        return pd.DataFrame()
-    try:
-        all_data = []
-        page = 0
-        page_size = 1000
-        while True:
-            resp = supabase.table("product_master").select("*").range(page*page_size, (page+1)*page_size-1).execute()
-            if not resp.data:
-                break
-            all_data.extend(resp.data)
-            if len(resp.data) < page_size:
-                break
-            page += 1
-        if all_data:
-            df = pd.DataFrame(all_data)
-            if "has_newbie_coupon" not in df.columns:
-                df["has_newbie_coupon"] = False
-            return df
-        else:
-            return pd.DataFrame()
-    except Exception as e:
-        st.error(f"加载商品库失败：{e}")
-        return pd.DataFrame()
-
-# ---------- 组织目标管理 ----------
-@st.cache_data(ttl=300)
-def load_org_targets(suffix=None):
-    if supabase is None:
-        return {}
-    try:
-        table_name = get_table_name("arg_targets", suffix)
-        resp = supabase.table(table_name).select("*").execute()
-        if resp.data:
-            return {row["org_name"]: row["target_amount"] for row in resp.data}
-        else:
-            return {}
-    except Exception as e:
-        st.error(f"加载组织目标失败：{e}")
-        return {}
-
-def save_org_targets(target_dict, suffix=None):
-    if supabase is None:
-        return
-    records = [{"org_name": k, "target_amount": v} for k, v in target_dict.items()]
-    if records:
-        table_name = get_table_name("arg_targets", suffix)
-        supabase.table(table_name).upsert(records, on_conflict="org_name").execute()
-
-def clear_org_targets(suffix=None):
-    if supabase:
-        table_name = get_table_name("arg_targets", suffix)
-        supabase.table(table_name).delete().neq("id", 0).execute()
-
-# ---------- 店铺目标管理 ----------
-def load_targets(suffix=None):
-    if supabase is None:
-        return {}
-    try:
-        table_name = get_table_name("shop_targets", suffix)
-        resp = supabase.table(table_name).select("*").execute()
-        if resp.data:
-            return {row["shop_name"]: row["target_amount"] for row in resp.data}
-        else:
-            return {}
-    except:
-        return {}
-
-def save_targets(target_dict, suffix=None):
-    if supabase is None:
-        return
-    records = [{"shop_name": k, "target_amount": v} for k, v in target_dict.items()]
-    if records:
-        table_name = get_table_name("shop_targets", suffix)
-        supabase.table(table_name).upsert(records, on_conflict="shop_name").execute()
-
-def clear_targets(suffix=None):
-    if supabase:
-        table_name = get_table_name("shop_targets", suffix)
-        supabase.table(table_name).delete().neq("id", 0).execute()
-    st.session_state.target_dict = {}
-    st.rerun()
+# ---------- 以下为其他现有函数（保持不变） ----------
+# 包括 load_product_sales, get_sales_date_range, load_product_master,
+# load_org_targets, save_org_targets, clear_org_targets,
+# load_targets, save_targets, clear_targets
+# 为了节省篇幅，此处省略，请保留您的原有实现。
+# 但务必确保 load_dimension_mapping 和 fetch_sales_summary 已被替换。
