@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-数据库操作公共模块（最终重写版）
-- 线上数据分页查询（保留缓存，但映射实时刷新）
-- 线下数据直接全量查询，内存中过滤日期，避免 SQL 日期比较问题
-- 映射表强制实时加载（ttl=0）
-- 三级映射：精确(店铺+主播) → 店铺级 → 默认值
+数据库操作公共模块（最终版本）
+- 映射表实时刷新（ttl=60）
+- 线下数据全量查询+内存过滤，避免SQL日期比较问题
+- 三级映射确保所有店铺都能分配部门
+- 缓存时间缩短，支持数据更新
 """
 
 import streamlit as st
@@ -38,8 +38,8 @@ def extract_anchor(remark):
     match = re.search(r'主播[：:]([^_]+)', remark)
     return match.group(1).strip() if match else None
 
-# ---------- 维度映射加载（实时刷新） ----------
-@st.cache_data(ttl=0)  # 每次调用都从数据库读取
+# ---------- 维度映射加载（ttl=60，保证较新） ----------
+@st.cache_data(ttl=60)
 def load_dimension_mapping():
     if supabase is None:
         return pd.DataFrame()
@@ -58,8 +58,8 @@ def load_dimension_mapping():
         st.error(f"加载维度映射表失败：{e}")
         return pd.DataFrame()
 
-# ---------- 核心聚合函数（重写日期查询） ----------
-@st.cache_data(ttl=300)
+# ---------- 核心聚合函数（缓存60秒，内部实时合并映射） ----------
+@st.cache_data(ttl=60)
 def fetch_sales_summary(start_date, end_date, suffix=""):
     if supabase is None:
         return pd.DataFrame()
@@ -104,10 +104,9 @@ def fetch_sales_summary(start_date, end_date, suffix=""):
     else:
         df_online = pd.DataFrame()
 
-    # 2. 线下数据（全量查询，内存中过滤日期）
+    # 2. 线下数据（全量查询，内存过滤日期）
     df_offline = pd.DataFrame()
     if suffix == "_all":
-        # 查询所有线下数据（不设日期过滤，避免SQL比较问题）
         offline_resp = supabase.table("offline_sales_all").select("*").execute()
         if offline_resp.data:
             df_offline = pd.DataFrame(offline_resp.data)
@@ -135,10 +134,10 @@ def fetch_sales_summary(start_date, end_date, suffix=""):
     else:
         df = pd.concat([df_online, df_offline], ignore_index=True)
 
-    # 4. 加载最新映射表（实时）
+    # 4. 加载最新映射表（实时读取，因缓存ttl短）
     mapping_df = load_dimension_mapping()
 
-    # 5. 合并映射（仅 _all）
+    # 5. 合并映射（仅 _all 数据源）
     if suffix == "_all" and not mapping_df.empty:
         df["anchor"] = df["anchor"].fillna("NONE").astype(str).str.strip().str.upper()
         # 精确匹配
@@ -148,7 +147,7 @@ def fetch_sales_summary(start_date, end_date, suffix=""):
             right_on=["shop_name", "anchor_name"],
             how="left"
         )
-        # 店铺级后备
+        # 店铺级后备（精确匹配失败时）
         null_mask = df["org_name"].isna()
         if null_mask.any():
             shop_fallback = mapping_df.drop_duplicates(subset=["shop_name"], keep="first")[["shop_name", "org_name", "dept"]]
@@ -157,13 +156,15 @@ def fetch_sales_summary(start_date, end_date, suffix=""):
             df.loc[null_mask, "org_name"] = df.loc[null_mask, "org_fallback"]
             df.loc[null_mask, "dept"] = df.loc[null_mask, "dept_fallback"]
             df = df.drop(columns=["org_fallback", "dept_fallback"])
+        # 最终默认值
         df["org_name"] = df["org_name"].fillna("未分配组织")
         df["dept"] = df["dept"].fillna("未分配部门")
     else:
+        # 非 _all 或映射表空，则分配默认值
         df["org_name"] = "未分配组织"
         df["dept"] = "未分配部门"
 
-    # 6. 重命名
+    # 6. 重命名金额列
     df = df.rename(columns={
         "ship_amount": "total_ship",
         "return_amount": "total_return",
@@ -172,13 +173,7 @@ def fetch_sales_summary(start_date, end_date, suffix=""):
 
     return df[["sale_date", "org_name", "dept", "shop_name", "total_ship", "total_return", "total_net"]]
 
-
-# ---------- 以下函数保持不变（load_product_sales, get_sales_date_range, load_product_master, 目标管理函数等） ----------
-# 由于篇幅，请保留您原有的这些函数，只需替换上面的 fetch_sales_summary 即可。
-# 确保 load_dimension_mapping 也按上述替换（ttl=0）。
-
-
-# ---------- 商品销售数据加载（用于商品详情页，保持不变） ----------
+# ---------- 商品销售数据加载（用于商品详情页） ----------
 @st.cache_data(ttl=300)
 def load_product_sales(suffix=None, apply_filter=True, include_offline=True):
     if supabase is None:
