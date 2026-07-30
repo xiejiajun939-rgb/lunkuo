@@ -100,7 +100,6 @@ def _fetch_raw_sales(start_date, end_date, suffix=""):
         st.error(f"加载原始销售数据失败：{e}")
         return pd.DataFrame()
 
-# ---------- 聚合函数（实时合并映射，确保最新） ----------
 def fetch_sales_summary(start_date, end_date, suffix=""):
     """
     获取销售汇总，先取原始数据（缓存），再实时合并映射表
@@ -108,10 +107,18 @@ def fetch_sales_summary(start_date, end_date, suffix=""):
     if supabase is None:
         return pd.DataFrame()
 
+    # ---------- 辅助：标准化店铺名称 ----------
+    def clean_shop_names(df):
+        if 'shop_name' in df.columns:
+            df['shop_name'] = df['shop_name'].astype(str).str.strip().str.upper()
+        return df
+
     # 1. 获取线上原始数据
     df = _fetch_raw_sales(start_date, end_date, suffix)
     if df.empty and suffix != "_all":
         return pd.DataFrame()
+    if not df.empty:
+        df = clean_shop_names(df)  # 清洗线上数据
 
     # 2. 如果是全部数据源，额外获取线下数据
     if suffix == "_all":
@@ -124,6 +131,7 @@ def fetch_sales_summary(start_date, end_date, suffix=""):
             offline_df = pd.DataFrame(offline_resp.data)
             offline_df["sale_date"] = pd.to_datetime(offline_df["sale_date"])
             offline_df["anchor"] = "NONE"
+            offline_df = clean_shop_names(offline_df)  # 清洗线下数据
             offline_df = offline_df.groupby(["sale_date", "shop_name", "anchor"], as_index=False).agg({
                 "ship_amount": "sum",
                 "return_amount": "sum",
@@ -137,19 +145,22 @@ def fetch_sales_summary(start_date, end_date, suffix=""):
     if df.empty:
         return pd.DataFrame()
 
-    # 3. 加载最新映射表
+    # 3. 加载最新映射表（并清洗）
     mapping_df = load_dimension_mapping()
+    if not mapping_df.empty:
+        mapping_df['shop_name'] = mapping_df['shop_name'].astype(str).str.strip().str.upper()
+        mapping_df['anchor_name'] = mapping_df['anchor_name'].fillna('NONE').str.upper()
 
     # 4. 合并映射（仅当 suffix == "_all" 且映射表非空）
     if suffix == "_all" and not mapping_df.empty:
-        df["anchor"] = df["anchor"].fillna("NONE")
-        mapping_df["anchor_name"] = mapping_df["anchor_name"].fillna("NONE")
+        df["anchor"] = df["anchor"].fillna("NONE").str.upper()
         df = df.merge(
             mapping_df[["shop_name", "anchor_name", "org_name", "dept"]],
             left_on=["shop_name", "anchor"],
             right_on=["shop_name", "anchor_name"],
             how="left"
         )
+        # 处理未匹配到的店铺（使用 shop_name 级别的默认映射）
         null_mask = df["org_name"].isna()
         if null_mask.any():
             fallback_map = mapping_df.drop_duplicates(subset=["shop_name"], keep="first")[["shop_name", "org_name", "dept"]]
