@@ -21,11 +21,8 @@ if "table_suffix" not in st.session_state:
     st.session_state.table_suffix = ""
 if "target_dict" not in st.session_state:
     st.session_state.target_dict = {}
-if "diagnose" not in st.session_state:
-    st.session_state.diagnose = False
-# 新增：记录当前查询模式，'month' 或 'latest'
-if "query_mode" not in st.session_state:
-    st.session_state.query_mode = "month"  # 默认整月
+if "force_refresh" not in st.session_state:
+    st.session_state.force_refresh = False
 
 # ---------- 页面样式 ----------
 st.markdown("""
@@ -126,6 +123,23 @@ if min_date is None or max_date is None:
     st.warning("暂无商品销售数据，请先上传订单文件。")
     st.stop()
 
+# ---------- 初始化日期范围为整月（本月1日到 max_date） ----------
+default_start = max_date.replace(day=1)
+default_end = max_date
+if "range_start" not in st.session_state:
+    st.session_state["range_start"] = default_start
+if "range_end" not in st.session_state:
+    st.session_state["range_end"] = default_end
+
+# 如果 range_start 或 range_end 是 None 或超出范围，重置为整月
+if st.session_state["range_start"] is None or st.session_state["range_start"] < min_date or st.session_state["range_start"] > max_date:
+    st.session_state["range_start"] = default_start
+if st.session_state["range_end"] is None or st.session_state["range_end"] < min_date or st.session_state["range_end"] > max_date:
+    st.session_state["range_end"] = default_end
+# 确保 start <= end
+if st.session_state["range_start"] > st.session_state["range_end"]:
+    st.session_state["range_start"] = st.session_state["range_end"]
+
 # ---------- 维度选择 ----------
 if is_all:
     mapping_df = load_dimension_mapping()
@@ -187,41 +201,25 @@ else:
     org_filter = None
 
 # ---------- 日期范围选择 ----------
-# 初始化日期：默认整月（本月），如果 query_mode 为 'latest' 则仅今日
-if st.session_state.query_mode == "month":
-    # 本月
-    default_start = max_date.replace(day=1)
-    default_end = max_date
-else:
-    # 最新日
-    default_start = max_date
-    default_end = max_date
-
-# 确保 session_state 中的日期值有效，若未设置或超出范围则用默认值
-if "range_start" not in st.session_state or st.session_state["range_start"] < min_date or st.session_state["range_start"] > max_date:
-    st.session_state["range_start"] = default_start
-if "range_end" not in st.session_state or st.session_state["range_end"] < min_date or st.session_state["range_end"] > max_date:
-    st.session_state["range_end"] = default_end
-
 st.markdown("#### 📅 选择日期范围")
 col_btns = st.columns(5)
 with col_btns[0]:
-    if st.button("📅 最新日"):
+    if st.button("📅 今日"):
         st.session_state["range_start"] = max_date
         st.session_state["range_end"] = max_date
-        st.session_state.query_mode = "latest"
+        st.session_state.force_refresh = True
         st.rerun()
 with col_btns[1]:
     if st.button("📆 近7天"):
         st.session_state["range_start"] = max_date - timedelta(days=6)
         st.session_state["range_end"] = max_date
-        st.session_state.query_mode = "custom"
+        st.session_state.force_refresh = True
         st.rerun()
 with col_btns[2]:
     if st.button("📆 本月"):
         st.session_state["range_start"] = max_date.replace(day=1)
         st.session_state["range_end"] = max_date
-        st.session_state.query_mode = "month"
+        st.session_state.force_refresh = True
         st.rerun()
 with col_btns[3]:
     if st.button("📆 上月"):
@@ -230,13 +228,13 @@ with col_btns[3]:
         first_day_last_month = last_day_last_month.replace(day=1)
         st.session_state["range_start"] = first_day_last_month
         st.session_state["range_end"] = last_day_last_month
-        st.session_state.query_mode = "custom"
+        st.session_state.force_refresh = True
         st.rerun()
 with col_btns[4]:
     if st.button("📆 全部"):
         st.session_state["range_start"] = min_date
         st.session_state["range_end"] = max_date
-        st.session_state.query_mode = "custom"
+        st.session_state.force_refresh = True
         st.rerun()
 
 col1, col2 = st.columns(2)
@@ -245,7 +243,9 @@ with col1:
 with col2:
     st.date_input("结束日期", key="range_end", min_value=min_date, max_value=max_date)
 
+# ---------- 查询按钮 ----------
 if st.button("🔍 查询", key="range_query"):
+    st.session_state.force_refresh = True
     st.rerun()
 
 # ---------- 诊断按钮 ----------
@@ -264,6 +264,11 @@ if start > end:
     start, end = end, start
     st.session_state["range_start"] = start
     st.session_state["range_end"] = end
+
+# ---------- 强制刷新处理 ----------
+if st.session_state.get("force_refresh", False):
+    st.cache_data.clear()
+    st.session_state.force_refresh = False
 
 @st.cache_data(ttl=300)
 def load_aggregated_data(start_date, end_date, suffix):
@@ -291,7 +296,7 @@ def run_diagnosis(df_current, df_mtd=None, label_current="当前查询", label_m
         st.toast("❌ 当前数据中缺少 'dept' 列", icon="🚨")
         return
 
-    # 1. 部门诊断
+    # 1. 部门诊断（原有）
     current_has = "商品部" in df_current[dept_col].unique()
     current_count = df_current[df_current[dept_col] == "商品部"].shape[0]
     current_shops = df_current[df_current[dept_col] == "商品部"]["shop_name"].unique().tolist() if current_has else []
@@ -304,15 +309,15 @@ def run_diagnosis(df_current, df_mtd=None, label_current="当前查询", label_m
         mtd_count = df_mtd[df_mtd[dept_col] == "商品部"].shape[0]
         mtd_shops = df_mtd[df_mtd[dept_col] == "商品部"]["shop_name"].unique().tolist() if mtd_has else []
 
-    # 2. 加载映射表
+    # 2. 加载映射表（获取所有 shop_name 和 dept）
     mapping_df = load_dimension_mapping()
     mapping_shops = set(mapping_df['shop_name'].astype(str).str.strip().str.upper()) if not mapping_df.empty else set()
     
-    # 3. 获取数据中的 shop_name
+    # 3. 获取当前数据中的 shop_name（已清洗）
     current_shops_all = set(df_current['shop_name'].astype(str).str.strip().str.upper())
     mtd_shops_all = set(df_mtd['shop_name'].astype(str).str.strip().str.upper()) if df_mtd is not None else set()
 
-    # 4. Toast 消息
+    # 4. 构建 toast 消息（原有）
     msg = f"📊 {label_current}: "
     if current_has:
         msg += f"✅ 包含商品部 (记录数 {current_count})"
@@ -323,7 +328,7 @@ def run_diagnosis(df_current, df_mtd=None, label_current="当前查询", label_m
         msg += f"✅ 包含商品部" if mtd_has else "❌ 无商品部"
     st.toast(msg, icon="🔍")
 
-    # 5. 展开详情
+    # 5. 显示详细对比（展开）
     with st.expander("📋 商品部诊断详情（含店铺名称对比）", expanded=True):
         col1, col2 = st.columns(2)
         with col1:
@@ -356,6 +361,7 @@ def run_diagnosis(df_current, df_mtd=None, label_current="当前查询", label_m
         if df_mtd is not None:
             st.write("**月累计中的所有 shop_name（去重）:**", sorted(mtd_shops_all))
         
+        # 检查 '商品组' 是否在映射表和数据中
         target_shop = "商品组"
         in_mapping = target_shop in mapping_shops
         in_current = target_shop in current_shops_all
@@ -367,6 +373,7 @@ def run_diagnosis(df_current, df_mtd=None, label_current="当前查询", label_m
         if df_mtd is not None:
             st.write(f"- 月累计中: {'✅' if in_mtd else '❌'}")
         
+        # 如果映射表有但数据中没有，提示可能原因
         if in_mapping and not in_current:
             st.error(f"⚠️ 映射表中存在 '{target_shop}'，但当前查询数据中没有该店铺。请检查数据源（线上/线下）是否包含该店铺，或店铺名称是否存在空格/特殊字符。")
         elif in_mapping and in_current and not current_has:
@@ -377,7 +384,7 @@ def run_diagnosis(df_current, df_mtd=None, label_current="当前查询", label_m
             st.success("✅ 映射表和店铺名称匹配正常，请检查其他原因。")
 
 # ---------- 如果诊断被触发，执行诊断 ----------
-if st.session_state.diagnose:
+if st.session_state.get("diagnose", False):
     if start == end:
         # 单日模式，需要加载月累计数据
         month_start = start.replace(day=1)
@@ -399,7 +406,7 @@ if start == end:
     if use_shop_detail and org_filter:
         df_mtd = df_mtd[df_mtd['org_name'] == org_filter]
 
-    # 确保部门列非空（若按部门分组）
+    # ===== 修复：确保部门列非空（若按部门分组） =====
     if group_col == "dept":
         df[group_col] = df[group_col].fillna("未分配部门")
         df_mtd[group_col] = df_mtd[group_col].fillna("未分配部门")
