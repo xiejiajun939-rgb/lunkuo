@@ -10,7 +10,7 @@ from core.db import (
     load_org_targets,
     load_dimension_mapping,
     load_targets,
-    load_product_sales
+    get_sales_date_range  # 新增高效日期范围函数
 )
 from core.utils import date_quick_buttons
 
@@ -115,13 +115,11 @@ st.info("此处展示任意日期的销售明细，支持按组织/部门/店铺
 suffix = st.session_state.table_suffix
 is_all = suffix == "_all"
 
-# 获取日期范围
-date_df = load_product_sales(suffix, apply_filter=False)
-if date_df.empty:
+# ===== 修改：使用高效的日期范围查询，避免全表加载 =====
+min_date, max_date = get_sales_date_range(suffix)
+if min_date is None or max_date is None:
     st.warning("暂无商品销售数据，请先上传订单文件。")
     st.stop()
-min_date = date_df["sale_date"].min().date()
-max_date = date_df["sale_date"].max().date()
 
 # ---------- 维度选择 ----------
 if is_all:
@@ -266,6 +264,11 @@ if start == end:
     if use_shop_detail and org_filter:
         df_mtd = df_mtd[df_mtd['org_name'] == org_filter]
 
+    # ===== 修复：确保部门列非空（若按部门分组） =====
+    if group_col == "dept":
+        df[group_col] = df[group_col].fillna("未分配部门")
+        df_mtd[group_col] = df_mtd[group_col].fillna("未分配部门")
+
     def aggregate_by_dim(df, group_col, dim_label):
         if df.empty or group_col not in df.columns:
             return pd.DataFrame()
@@ -341,7 +344,7 @@ if start == end:
             key="export_detail"
         )
 else:
-    # ================== 多日模式（完全重写，无任何强制类型转换） ==================
+    # ================== 多日模式 ==================
     # 确保 df 非空且有必需列
     if df.empty:
         st.warning("所选范围内无销售数据")
@@ -353,9 +356,7 @@ else:
 
     # 直接求和，得到 Series（或可能是标量，取决于版本）
     totals = df[required_cols].sum()
-    # 确保每个值都是标量，用 .iloc[0] 或 .item() 提取
-    # 注意：totals 是一个 Series，索引为列名，值为聚合结果（可能是 numpy.float64）
-    # 我们直接使用索引获取值，并判断类型
+    # 确保每个值都是标量
     total_ship = totals['total_ship']
     total_return = totals['total_return']
     total_net = totals['total_net']
@@ -368,7 +369,6 @@ else:
     if isinstance(total_net, pd.Series):
         total_net = total_net.iloc[0]
 
-    # 现在 total_* 是 numpy.float64 或 Python float，可直接运算
     return_rate = (total_return / total_ship * 100) if total_ship > 0 else 0.0
 
     col1, col2, col3 = st.columns(3)
@@ -376,7 +376,7 @@ else:
     col2.metric("总退货", f"¥{total_return:,.2f}")
     col3.metric("总净额", f"¥{total_net:,.2f}", delta=f"退货率 {return_rate:.2f}%")
 
-    # ---------- 按维度汇总（未变） ----------
+    # ---------- 按维度汇总 ----------
     if group_col in df.columns:
         dim_agg = df.groupby(group_col).agg(
             发货金额=("total_ship", "sum"),
@@ -394,7 +394,7 @@ else:
         st.markdown(f"#### 按 {dim_label} 汇总")
         st.dataframe(dim_agg, use_container_width=True, hide_index=True)
 
-    # ---------- 每日透视表（未变） ----------
+    # ---------- 每日透视表 ----------
     if group_col in df.columns:
         daily_dim = df.groupby(["sale_date", group_col]).agg(
             净销售金额=("total_net", "sum")
@@ -404,7 +404,7 @@ else:
         st.markdown("#### 每日净销售金额明细")
         st.dataframe(pivot, use_container_width=True)
 
-    # ---------- 导出按钮（未变） ----------
+    # ---------- 导出 ----------
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         if group_col in df.columns:
