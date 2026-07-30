@@ -103,11 +103,11 @@ def _fetch_raw_sales(start_date, end_date, suffix=""):
 def fetch_sales_summary(start_date, end_date, suffix=""):
     """
     获取销售汇总，先取原始数据（缓存），再实时合并映射表
+    采用三级映射：精确(店铺+主播) → 店铺级 → 默认值
     """
     if supabase is None:
         return pd.DataFrame()
 
-    # ---------- 辅助：标准化店铺名称 ----------
     def clean_shop_names(df):
         if 'shop_name' in df.columns:
             df['shop_name'] = df['shop_name'].astype(str).str.strip().str.upper()
@@ -118,9 +118,9 @@ def fetch_sales_summary(start_date, end_date, suffix=""):
     if df.empty and suffix != "_all":
         return pd.DataFrame()
     if not df.empty:
-        df = clean_shop_names(df)  # 清洗线上数据
+        df = clean_shop_names(df)
 
-    # 2. 如果是全部数据源，额外获取线下数据
+    # 2. 获取线下数据（仅 _all）
     if suffix == "_all":
         offline_resp = supabase.table("offline_sales_all")\
                                .select("sale_date, shop_name, ship_amount, return_amount, net_amount")\
@@ -131,7 +131,7 @@ def fetch_sales_summary(start_date, end_date, suffix=""):
             offline_df = pd.DataFrame(offline_resp.data)
             offline_df["sale_date"] = pd.to_datetime(offline_df["sale_date"])
             offline_df["anchor"] = "NONE"
-            offline_df = clean_shop_names(offline_df)  # 清洗线下数据
+            offline_df = clean_shop_names(offline_df)
             offline_df = offline_df.groupby(["sale_date", "shop_name", "anchor"], as_index=False).agg({
                 "ship_amount": "sum",
                 "return_amount": "sum",
@@ -145,36 +145,42 @@ def fetch_sales_summary(start_date, end_date, suffix=""):
     if df.empty:
         return pd.DataFrame()
 
-    # 3. 加载最新映射表（并清洗）
+    # 3. 加载映射表（已清洗）
     mapping_df = load_dimension_mapping()
     if not mapping_df.empty:
+        # 确保映射表中的 shop_name 也统一清洗（load_dimension_mapping 已做，但为了安全再执行一次）
         mapping_df['shop_name'] = mapping_df['shop_name'].astype(str).str.strip().str.upper()
-        mapping_df['anchor_name'] = mapping_df['anchor_name'].fillna('NONE').str.upper()
+        mapping_df['anchor_name'] = mapping_df['anchor_name'].fillna('NONE').astype(str).str.strip().str.upper()
 
-    # 4. 合并映射（仅当 suffix == "_all" 且映射表非空）
+    # 4. 合并映射（仅 _all）
     if suffix == "_all" and not mapping_df.empty:
-        df["anchor"] = df["anchor"].fillna("NONE").str.upper()
+        # 4.1 精确匹配
+        df["anchor"] = df["anchor"].fillna("NONE").astype(str).str.strip().str.upper()
         df = df.merge(
             mapping_df[["shop_name", "anchor_name", "org_name", "dept"]],
             left_on=["shop_name", "anchor"],
             right_on=["shop_name", "anchor_name"],
             how="left"
         )
-        # 处理未匹配到的店铺（使用 shop_name 级别的默认映射）
+        # 4.2 店铺级别后备（针对精确匹配失败的行）
         null_mask = df["org_name"].isna()
         if null_mask.any():
-            fallback_map = mapping_df.drop_duplicates(subset=["shop_name"], keep="first")[["shop_name", "org_name", "dept"]]
-            fallback_map = fallback_map.rename(columns={"org_name": "org_fallback", "dept": "dept_fallback"})
-            df = df.merge(fallback_map, on="shop_name", how="left")
+            # 构建店铺级映射（每个 shop_name 取第一条记录，假设同一店铺的组织/部门一致）
+            shop_fallback = mapping_df.drop_duplicates(subset=["shop_name"], keep="first")[["shop_name", "org_name", "dept"]]
+            shop_fallback = shop_fallback.rename(columns={"org_name": "org_fallback", "dept": "dept_fallback"})
+            df = df.merge(shop_fallback, on="shop_name", how="left")
             df.loc[null_mask, "org_name"] = df.loc[null_mask, "org_fallback"]
             df.loc[null_mask, "dept"] = df.loc[null_mask, "dept_fallback"]
             df = df.drop(columns=["org_fallback", "dept_fallback"])
+        # 4.3 最终默认值
         df["org_name"] = df["org_name"].fillna("未分配组织")
         df["dept"] = df["dept"].fillna("未分配部门")
     else:
+        # 非 _all 或映射表为空
         df["org_name"] = "未分配组织"
         df["dept"] = "未分配部门"
 
+    # 5. 重命名金额列
     df = df.rename(columns={
         "ship_amount": "total_ship",
         "return_amount": "total_return",
