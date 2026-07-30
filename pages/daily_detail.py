@@ -172,7 +172,7 @@ st.markdown("#### 📅 选择日期范围")
 col_btns = st.columns(5)
 with col_btns[0]:
     if st.button("📆 本月"):
-        st.cache_data.clear()   # 强制清除所有缓存
+        st.cache_data.clear()
         st.session_state["range_start"] = max_date.replace(day=1)
         st.session_state["range_end"] = max_date
         st.rerun()
@@ -242,9 +242,9 @@ if use_shop_detail and org_filter:
         st.warning(f"组织 {org_filter} 无销售数据")
         st.stop()
 
-# ---------- 诊断逻辑 ----------
+# ---------- 诊断逻辑（保留） ----------
 if st.session_state.diagnose:
-    st.session_state.diagnose = False  # 重置
+    st.session_state.diagnose = False
     st.markdown("### 🛠️ 诊断信息")
     with st.expander("点击展开调试数据", expanded=True):
         st.write(f"总行数: {len(df)}")
@@ -278,7 +278,7 @@ if st.session_state.diagnose:
 # ---------- 展示结果 ----------
 st.markdown(f"#### 📊 查询结果（{start} ~ {end}）")
 
-# 1. 指标卡
+# 1. 总体指标卡
 total_ship = df["total_ship"].sum()
 total_return = df["total_return"].sum()
 total_net = df["total_net"].sum()
@@ -289,7 +289,43 @@ col_m1.metric("总发货", f"¥{total_ship:,.2f}")
 col_m2.metric("总退货", f"¥{total_return:,.2f}")
 col_m3.metric("总净额", f"¥{total_net:,.2f}", delta=f"退货率 {return_rate:.2f}%")
 
-# 2. 按维度汇总
+# ========== 新增：商品部业绩专区 ==========
+st.markdown("---")
+st.markdown("#### 🏷️ 商品部业绩专区")
+if 'dept' in df.columns:
+    dept_data = df[df['dept'] == '商品部']
+    if not dept_data.empty:
+        dept_ship = dept_data["total_ship"].sum()
+        dept_return = dept_data["total_return"].sum()
+        dept_net = dept_data["total_net"].sum()
+        dept_records = len(dept_data)
+        dept_shops = dept_data["shop_name"].nunique()
+        # 计算占比
+        dept_ratio = (dept_ship / total_ship * 100) if total_ship > 0 else 0.0
+        col_d1, col_d2, col_d3, col_d4, col_d5 = st.columns(5)
+        col_d1.metric("商品部发货", f"¥{dept_ship:,.2f}", delta=f"{dept_ratio:.1f}% 占比")
+        col_d2.metric("商品部退货", f"¥{dept_return:,.2f}")
+        col_d3.metric("商品部净额", f"¥{dept_net:,.2f}")
+        col_d4.metric("记录条数", f"{dept_records}")
+        col_d5.metric("涉及店铺", f"{dept_shops}")
+        # 可展开查看店铺列表
+        with st.expander("查看商品部涉及店铺"):
+            st.write(dept_data["shop_name"].unique().tolist())
+    else:
+        st.warning("当前查询中无「商品部」数据")
+        # 检查映射表中是否存在商品部
+        mapping_df = load_dimension_mapping()
+        if not mapping_df.empty:
+            possible_shops = mapping_df[mapping_df['dept'] == '商品部']['shop_name'].unique().tolist()
+            if possible_shops:
+                st.info(f"映射表中属于商品部的店铺有：{possible_shops}，但当前查询中未包含这些店铺的销售数据。请检查日期范围或数据源。")
+            else:
+                st.info("映射表中未定义「商品部」，请先在 mapping 表中添加部门为「商品部」的店铺记录。")
+        else:
+            st.info("映射表为空，无法判断商品部配置。")
+# ======================================
+
+# 2. 按维度汇总（原有）
 if group_col in df.columns:
     dim_agg = df.groupby(group_col).agg(
         发货金额=("total_ship", "sum"),
