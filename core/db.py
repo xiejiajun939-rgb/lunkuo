@@ -37,14 +37,26 @@ def extract_anchor(remark):
 
 @st.cache_data(ttl=60)
 def load_dimension_mapping() -> pd.DataFrame:
-    ...
-    if resp.data:
-        df = pd.DataFrame(resp.data)
-        df['shop_name'] = df['shop_name'].astype(str).str.strip().str.upper()
-        df['anchor_name'] = df['anchor_name'].fillna('NONE').astype(str).str.strip().str.upper()
-        df['org_name'] = df['org_name'].fillna('未分配组织').astype(str).str.strip()
-        df['dept'] = df['dept'].fillna('未分配部门').astype(str).str.strip()
-        return df
+    """
+    加载维度映射表（mapping），并对关键字段进行清洗：
+    - shop_name: 去除首尾空格，转为大写
+    - anchor_name: 填充 NONE，去除首尾空格，转为大写
+    - org_name, dept: 填充默认值，去除首尾空格
+    """
+    if supabase is None:
+        return pd.DataFrame()
+    try:
+        resp = supabase.table("mapping").select("*").execute()
+        if resp.data:
+            df = pd.DataFrame(resp.data)
+            # 清洗 shop_name
+            df['shop_name'] = df['shop_name'].astype(str).str.strip().str.upper()
+            # 清洗 anchor_name
+            df['anchor_name'] = df['anchor_name'].fillna('NONE').astype(str).str.strip().str.upper()
+            # 清洗组织名和部门名
+            df['org_name'] = df['org_name'].fillna('未分配组织').astype(str).str.strip()
+            df['dept'] = df['dept'].fillna('未分配部门').astype(str).str.strip()
+            return df
         else:
             return pd.DataFrame()
     except Exception as e:
