@@ -35,25 +35,24 @@ def extract_anchor(remark):
     match = re.search(r'主播[：:]([^_]+)', remark)
     return match.group(1).strip() if match else None
 
+# ---------- 维度映射加载（支持强制刷新） ----------
 @st.cache_data(ttl=60)
-def load_dimension_mapping() -> pd.DataFrame:
+def load_dimension_mapping(force_refresh=False):
     """
-    加载维度映射表（mapping），并对关键字段进行清洗：
-    - shop_name: 去除首尾空格，转为大写
-    - anchor_name: 填充 NONE，去除首尾空格，转为大写
-    - org_name, dept: 填充默认值，去除首尾空格
+    加载维度映射表，支持强制刷新以清除缓存。
+    force_refresh=True 时清除缓存并重新查询。
     """
+    if force_refresh:
+        load_dimension_mapping.clear()
     if supabase is None:
         return pd.DataFrame()
     try:
         resp = supabase.table("mapping").select("*").execute()
         if resp.data:
             df = pd.DataFrame(resp.data)
-            # 清洗 shop_name
+            # 统一清洗：去除空格，转大写
             df['shop_name'] = df['shop_name'].astype(str).str.strip().str.upper()
-            # 清洗 anchor_name
             df['anchor_name'] = df['anchor_name'].fillna('NONE').astype(str).str.strip().str.upper()
-            # 清洗组织名和部门名
             df['org_name'] = df['org_name'].fillna('未分配组织').astype(str).str.strip()
             df['dept'] = df['dept'].fillna('未分配部门').astype(str).str.strip()
             return df
@@ -108,17 +107,21 @@ def _fetch_raw_sales(start_date, end_date, suffix=""):
         st.error(f"加载原始销售数据失败：{e}")
         return pd.DataFrame()
 
+# ---------- 聚合函数（实时合并映射，强制刷新映射表） ----------
 def fetch_sales_summary(start_date, end_date, suffix=""):
     """
-    获取销售汇总，先取原始数据（缓存），再实时合并映射表
+    获取销售汇总，先取原始数据（缓存），再实时合并映射表（强制刷新）
     采用三级映射：精确(店铺+主播) → 店铺级 → 默认值
     """
     if supabase is None:
         return pd.DataFrame()
 
-    def clean_shop_names(df):
+    # 辅助：清洗 shop_name 和 anchor
+    def clean_names(df):
         if 'shop_name' in df.columns:
             df['shop_name'] = df['shop_name'].astype(str).str.strip().str.upper()
+        if 'anchor' in df.columns:
+            df['anchor'] = df['anchor'].fillna('NONE').astype(str).str.strip().str.upper()
         return df
 
     # 1. 获取线上原始数据
@@ -126,7 +129,7 @@ def fetch_sales_summary(start_date, end_date, suffix=""):
     if df.empty and suffix != "_all":
         return pd.DataFrame()
     if not df.empty:
-        df = clean_shop_names(df)
+        df = clean_names(df)
 
     # 2. 获取线下数据（仅 _all）
     if suffix == "_all":
@@ -139,7 +142,7 @@ def fetch_sales_summary(start_date, end_date, suffix=""):
             offline_df = pd.DataFrame(offline_resp.data)
             offline_df["sale_date"] = pd.to_datetime(offline_df["sale_date"])
             offline_df["anchor"] = "NONE"
-            offline_df = clean_shop_names(offline_df)
+            offline_df = clean_names(offline_df)
             offline_df = offline_df.groupby(["sale_date", "shop_name", "anchor"], as_index=False).agg({
                 "ship_amount": "sum",
                 "return_amount": "sum",
@@ -153,27 +156,22 @@ def fetch_sales_summary(start_date, end_date, suffix=""):
     if df.empty:
         return pd.DataFrame()
 
-    # 3. 加载映射表（已清洗）
-    mapping_df = load_dimension_mapping()
-    if not mapping_df.empty:
-        # 确保映射表中的 shop_name 也统一清洗（load_dimension_mapping 已做，但为了安全再执行一次）
-        mapping_df['shop_name'] = mapping_df['shop_name'].astype(str).str.strip().str.upper()
-        mapping_df['anchor_name'] = mapping_df['anchor_name'].fillna('NONE').astype(str).str.strip().str.upper()
+    # 3. 加载映射表（强制刷新，确保最新）
+    mapping_df = load_dimension_mapping(force_refresh=True)
 
     # 4. 合并映射（仅 _all）
     if suffix == "_all" and not mapping_df.empty:
-        # 4.1 精确匹配
-        df["anchor"] = df["anchor"].fillna("NONE").astype(str).str.strip().str.upper()
+        # 4.1 精确匹配（shop_name + anchor）
         df = df.merge(
             mapping_df[["shop_name", "anchor_name", "org_name", "dept"]],
             left_on=["shop_name", "anchor"],
             right_on=["shop_name", "anchor_name"],
             how="left"
         )
-        # 4.2 店铺级别后备（针对精确匹配失败的行）
+        # 4.2 店铺级后备（对精确匹配失败的行）
         null_mask = df["org_name"].isna()
         if null_mask.any():
-            # 构建店铺级映射（每个 shop_name 取第一条记录，假设同一店铺的组织/部门一致）
+            # 构建店铺级映射（每个 shop_name 取第一条记录）
             shop_fallback = mapping_df.drop_duplicates(subset=["shop_name"], keep="first")[["shop_name", "org_name", "dept"]]
             shop_fallback = shop_fallback.rename(columns={"org_name": "org_fallback", "dept": "dept_fallback"})
             df = df.merge(shop_fallback, on="shop_name", how="left")
@@ -235,7 +233,7 @@ def load_product_sales(suffix=None, apply_filter=True, include_offline=True):
 
         mapping_df = None
         if suffix == "_all":
-            mapping_df = load_dimension_mapping()
+            mapping_df = load_dimension_mapping(force_refresh=False)  # 此处无需强制刷新，因为商品详情页不依赖最新映射（仅用于展示）
             if not mapping_df.empty:
                 if "anchor" not in df.columns:
                     df["anchor"] = "NONE"
