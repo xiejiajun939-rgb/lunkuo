@@ -217,9 +217,9 @@ with col_btns[1]:
         st.rerun()
 with col_btns[2]:
     if st.button("📆 本月"):
+        st.cache_data.clear()          # 清除所有缓存
         st.session_state["range_start"] = max_date.replace(day=1)
         st.session_state["range_end"] = max_date
-        st.session_state.force_refresh = True
         st.rerun()
 with col_btns[3]:
     if st.button("📆 上月"):
