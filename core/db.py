@@ -1,7 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-数据库操作公共模块（重构版）
-采用分离缓存策略：原始销售数据缓存 + 映射实时加载
+数据库操作公共模块（终极重构版）
+- 完全禁用线上数据缓存，每次实时查询
+- 映射表强制刷新
+- 三级映射：精确(店铺+主播) → 店铺级 → 默认值
 """
 
 import streamlit as st
@@ -35,22 +37,19 @@ def extract_anchor(remark):
     match = re.search(r'主播[：:]([^_]+)', remark)
     return match.group(1).strip() if match else None
 
-# ---------- 维度映射加载（支持强制刷新） ----------
-@st.cache_data(ttl=60)
-def load_dimension_mapping(force_refresh=False):
+# ---------- 维度映射加载（强制刷新可用） ----------
+@st.cache_data(ttl=0)  # 禁用缓存，每次重新查询
+def load_dimension_mapping():
     """
-    加载维度映射表，支持强制刷新以清除缓存。
-    force_refresh=True 时清除缓存并重新查询。
+    加载维度映射表（mapping），并进行清洗。
+    设置 ttl=0 确保每次调用都获取最新数据。
     """
-    if force_refresh:
-        load_dimension_mapping.clear()
     if supabase is None:
         return pd.DataFrame()
     try:
         resp = supabase.table("mapping").select("*").execute()
         if resp.data:
             df = pd.DataFrame(resp.data)
-            # 统一清洗：去除空格，转大写
             df['shop_name'] = df['shop_name'].astype(str).str.strip().str.upper()
             df['anchor_name'] = df['anchor_name'].fillna('NONE').astype(str).str.strip().str.upper()
             df['org_name'] = df['org_name'].fillna('未分配组织').astype(str).str.strip()
@@ -62,76 +61,57 @@ def load_dimension_mapping(force_refresh=False):
         st.error(f"加载维度映射表失败：{e}")
         return pd.DataFrame()
 
-# ---------- 核心函数：只缓存原始销售数据（不含映射） ----------
-@st.cache_data(ttl=300)
-def _fetch_raw_sales(start_date, end_date, suffix=""):
+# ---------- 核心聚合函数（无缓存） ----------
+def fetch_sales_summary(start_date, end_date, suffix=""):
     """
-    从商品销售表中获取原始数据，按日期、店铺、主播聚合（不含组织/部门）
-    返回列：sale_date, shop_name, anchor, ship_amount, return_amount, net_amount
+    获取销售汇总，直接查询线上和线下数据，实时合并映射表（无缓存）
     """
     if supabase is None:
         return pd.DataFrame()
-    try:
-        product_table = get_table_name("product_sales", suffix)
-        all_data = []
-        page = 0
-        page_size = 1000
-        while True:
-            resp = supabase.table(product_table)\
-                           .select("sale_date, shop_name, remark, ship_amount, return_amount, net_amount")\
-                           .gte("sale_date", start_date.isoformat())\
-                           .lte("sale_date", end_date.isoformat())\
-                           .range(page * page_size, (page + 1) * page_size - 1)\
-                           .execute()
-            if not resp.data:
-                break
-            all_data.extend(resp.data)
-            if len(resp.data) < page_size:
-                break
-            page += 1
-        if not all_data:
-            return pd.DataFrame()
-        df = pd.DataFrame(all_data)
-        df["sale_date"] = pd.to_datetime(df["sale_date"])
+
+    def clean_shop_names(df):
+        if 'shop_name' in df.columns:
+            df['shop_name'] = df['shop_name'].astype(str).str.strip().str.upper()
+        return df
+
+    # 1. 查询线上数据（直接分页查询，不缓存）
+    product_table = get_table_name("product_sales", suffix)
+    online_data = []
+    page = 0
+    page_size = 1000
+    while True:
+        resp = supabase.table(product_table)\
+                       .select("sale_date, shop_name, remark, ship_amount, return_amount, net_amount")\
+                       .gte("sale_date", start_date.isoformat())\
+                       .lte("sale_date", end_date.isoformat())\
+                       .range(page * page_size, (page + 1) * page_size - 1)\
+                       .execute()
+        if not resp.data:
+            break
+        online_data.extend(resp.data)
+        if len(resp.data) < page_size:
+            break
+        page += 1
+
+    # 构建线上 DataFrame
+    if online_data:
+        df_online = pd.DataFrame(online_data)
+        df_online["sale_date"] = pd.to_datetime(df_online["sale_date"])
         if suffix == "_all":
-            df["anchor"] = df["remark"].apply(extract_anchor).fillna("NONE")
+            df_online["anchor"] = df_online["remark"].apply(extract_anchor).fillna("NONE")
         else:
-            df["anchor"] = "NONE"
-        df = df.groupby(["sale_date", "shop_name", "anchor"], as_index=False).agg({
+            df_online["anchor"] = "NONE"
+        df_online = df_online.groupby(["sale_date", "shop_name", "anchor"], as_index=False).agg({
             "ship_amount": "sum",
             "return_amount": "sum",
             "net_amount": "sum"
         })
-        return df
-    except Exception as e:
-        st.error(f"加载原始销售数据失败：{e}")
-        return pd.DataFrame()
+        df_online = clean_shop_names(df_online)
+    else:
+        df_online = pd.DataFrame()
 
-# ---------- 聚合函数（实时合并映射，强制刷新映射表） ----------
-def fetch_sales_summary(start_date, end_date, suffix=""):
-    """
-    获取销售汇总，先取原始数据（缓存），再实时合并映射表（强制刷新）
-    采用三级映射：精确(店铺+主播) → 店铺级 → 默认值
-    """
-    if supabase is None:
-        return pd.DataFrame()
-
-    # 辅助：清洗 shop_name 和 anchor
-    def clean_names(df):
-        if 'shop_name' in df.columns:
-            df['shop_name'] = df['shop_name'].astype(str).str.strip().str.upper()
-        if 'anchor' in df.columns:
-            df['anchor'] = df['anchor'].fillna('NONE').astype(str).str.strip().str.upper()
-        return df
-
-    # 1. 获取线上原始数据
-    df = _fetch_raw_sales(start_date, end_date, suffix)
-    if df.empty and suffix != "_all":
-        return pd.DataFrame()
-    if not df.empty:
-        df = clean_names(df)
-
-    # 2. 获取线下数据（仅 _all）
+    # 2. 查询线下数据（仅 _all）
+    df_offline = pd.DataFrame()
     if suffix == "_all":
         offline_resp = supabase.table("offline_sales_all")\
                                .select("sale_date, shop_name, ship_amount, return_amount, net_amount")\
@@ -139,54 +119,57 @@ def fetch_sales_summary(start_date, end_date, suffix=""):
                                .lte("sale_date", end_date.isoformat())\
                                .execute()
         if offline_resp.data:
-            offline_df = pd.DataFrame(offline_resp.data)
-            offline_df["sale_date"] = pd.to_datetime(offline_df["sale_date"])
-            offline_df["anchor"] = "NONE"
-            offline_df = clean_names(offline_df)
-            offline_df = offline_df.groupby(["sale_date", "shop_name", "anchor"], as_index=False).agg({
+            df_offline = pd.DataFrame(offline_resp.data)
+            df_offline["sale_date"] = pd.to_datetime(df_offline["sale_date"])
+            df_offline["anchor"] = "NONE"
+            df_offline = df_offline.groupby(["sale_date", "shop_name", "anchor"], as_index=False).agg({
                 "ship_amount": "sum",
                 "return_amount": "sum",
                 "net_amount": "sum"
             })
-            if df.empty:
-                df = offline_df
-            else:
-                df = pd.concat([df, offline_df], ignore_index=True)
+            df_offline = clean_shop_names(df_offline)
 
-    if df.empty:
+    # 3. 合并线上和线下
+    if df_online.empty and df_offline.empty:
         return pd.DataFrame()
+    elif df_online.empty:
+        df = df_offline
+    elif df_offline.empty:
+        df = df_online
+    else:
+        df = pd.concat([df_online, df_offline], ignore_index=True)
 
-    # 3. 加载映射表（强制刷新，确保最新）
-    mapping_df = load_dimension_mapping(force_refresh=True)
+    # 4. 加载最新映射表（强制刷新）
+    mapping_df = load_dimension_mapping()  # ttl=0 确保最新
 
-    # 4. 合并映射（仅 _all）
+    # 5. 合并映射
     if suffix == "_all" and not mapping_df.empty:
-        # 4.1 精确匹配（shop_name + anchor）
+        # 清洗 df 中的 anchor
+        df["anchor"] = df["anchor"].fillna("NONE").astype(str).str.strip().str.upper()
+        # 精确匹配
         df = df.merge(
             mapping_df[["shop_name", "anchor_name", "org_name", "dept"]],
             left_on=["shop_name", "anchor"],
             right_on=["shop_name", "anchor_name"],
             how="left"
         )
-        # 4.2 店铺级后备（对精确匹配失败的行）
+        # 店铺级后备（针对精确匹配失败的行）
         null_mask = df["org_name"].isna()
         if null_mask.any():
-            # 构建店铺级映射（每个 shop_name 取第一条记录）
             shop_fallback = mapping_df.drop_duplicates(subset=["shop_name"], keep="first")[["shop_name", "org_name", "dept"]]
             shop_fallback = shop_fallback.rename(columns={"org_name": "org_fallback", "dept": "dept_fallback"})
             df = df.merge(shop_fallback, on="shop_name", how="left")
             df.loc[null_mask, "org_name"] = df.loc[null_mask, "org_fallback"]
             df.loc[null_mask, "dept"] = df.loc[null_mask, "dept_fallback"]
             df = df.drop(columns=["org_fallback", "dept_fallback"])
-        # 4.3 最终默认值
+        # 最终默认值
         df["org_name"] = df["org_name"].fillna("未分配组织")
         df["dept"] = df["dept"].fillna("未分配部门")
     else:
-        # 非 _all 或映射表为空
         df["org_name"] = "未分配组织"
         df["dept"] = "未分配部门"
 
-    # 5. 重命名金额列
+    # 6. 重命名金额列
     df = df.rename(columns={
         "ship_amount": "total_ship",
         "return_amount": "total_return",
@@ -195,7 +178,8 @@ def fetch_sales_summary(start_date, end_date, suffix=""):
 
     return df[["sale_date", "org_name", "dept", "shop_name", "total_ship", "total_return", "total_net"]]
 
-# ---------- 商品销售数据加载（用于商品详情页，保留原逻辑） ----------
+
+# ---------- 商品销售数据加载（用于商品详情页，保持不变） ----------
 @st.cache_data(ttl=300)
 def load_product_sales(suffix=None, apply_filter=True, include_offline=True):
     if supabase is None:
@@ -233,7 +217,7 @@ def load_product_sales(suffix=None, apply_filter=True, include_offline=True):
 
         mapping_df = None
         if suffix == "_all":
-            mapping_df = load_dimension_mapping(force_refresh=False)  # 此处无需强制刷新，因为商品详情页不依赖最新映射（仅用于展示）
+            mapping_df = load_dimension_mapping()
             if not mapping_df.empty:
                 if "anchor" not in df.columns:
                     df["anchor"] = "NONE"
