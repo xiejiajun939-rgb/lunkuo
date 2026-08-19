@@ -14,7 +14,13 @@ if st.session_state.get("role") != "admin":
     st.error("您没有管理员权限，无法访问系统设置。")
     st.stop()
 
-# ---------- 辅助函数（从主文件复制） ----------
+# ---------- 从主文件导入页面定义 ----------
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from websale_main import all_pages
+
+# ---------- 辅助函数 ----------
 supabase = init_supabase()
 
 def load_sub_accounts_from_db():
@@ -70,18 +76,19 @@ def delete_sub_account_from_db(username):
     except Exception as e:
         return False, str(e)
 
-# ---------- 定义基础选项卡列表（同主文件） ----------
-base_tabs = [
+# ---------- 默认页面权限（新子账号只拥有这些页面） ----------
+# 只包含最核心的四个页面，其他页面需要管理员手动授权
+DEFAULT_TABS = [
     "📊 经营驾驶舱",
     "📋 每日明细",
     "📦 商品分析",
-    "🎤 主播分析",
     "📈 销售分布与品牌"
 ]
 
 # ---------- 页面内容 ----------
 st.subheader("👥 账号管理与权限设置（按数据源分别设置）")
 st.info("对每个子账号，可分别配置其在“非直播数据”、“直播数据”、“全部数据”下能看到的选项卡。")
+st.caption("默认权限仅包含核心四个页面，如需增加“主播分析”、“商品库导出”、“组织与部门分析”等，请手动勾选。")
 
 if st.button("🔄 重新从数据库加载账号"):
     st.session_state.sub_users = load_sub_accounts_from_db()
@@ -99,16 +106,15 @@ if st.session_state.get("sub_users"):
             
             suffix_display = {"": "非直播数据", "_live": "直播数据", "_all": "全部数据"}
             
-            # 使用 st.form 包裹配置，防止即时刷新
             with st.form(key=f"form_{username}"):
                 new_perms = {}
                 for suf, display_name in suffix_display.items():
-                    # 构建选项列表：全部数据时额外添加“组织与部门分析”
+                    # 根据数据源构建选项列表
                     if suf == "_all":
-                        all_options = base_tabs + ["🏢 组织与部门分析"]
+                        all_options = [label for label in all_pages.keys() if label != "⚙️ 系统设置"]
                     else:
-                        all_options = base_tabs
-                    # 默认选中当前权限
+                        all_options = [label for label in all_pages.keys() if label not in ["⚙️ 系统设置", "🏢 组织与部门分析"]]
+                    
                     default_val = [tab for tab in perms.get(suf, []) if tab in all_options]
                     selected = st.multiselect(
                         f"{display_name} 允许的选项卡",
@@ -120,7 +126,7 @@ if st.session_state.get("sub_users"):
                 
                 # 默认数据源
                 current_default = info.get("default_suffix", "")
-                default_options = {"非直播数据": "", "全部数据": "_all"}
+                default_options = {"非直播数据": "", "直播数据": "_live", "全部数据": "_all"}
                 default_display = [k for k, v in default_options.items() if v == current_default]
                 default_display = default_display[0] if default_display else "非直播数据"
                 new_default_display = st.selectbox(
@@ -142,7 +148,6 @@ if st.session_state.get("sub_users"):
                     key=f"platform_{username}"
                 )
                 
-                # 获取所有店铺/主播名称（用于过滤）
                 @st.cache_data(ttl=600)
                 def get_all_shop_names():
                     df = load_product_sales(apply_filter=False)
@@ -168,7 +173,6 @@ if st.session_state.get("sub_users"):
                     key=f"shops_{username}"
                 )
 
-                # 提交按钮：保存所有权限
                 submitted = st.form_submit_button("💾 保存全部权限")
                 if submitted:
                     st.session_state.sub_users[username]["permissions"] = new_perms
@@ -181,7 +185,6 @@ if st.session_state.get("sub_users"):
                     else:
                         st.error(f"保存失败：{msg}")
             
-            # 删除按钮（放在表单外部，单独操作）
             if st.button(f"删除账号", key=f"del_{username}"):
                 ok, msg = delete_sub_account_from_db(username)
                 if ok:
@@ -199,14 +202,15 @@ with st.expander("➕ 创建新子账号"):
         new_username = st.text_input("用户名", key="new_username_sys")
         new_password = st.text_input("密码", type="password", key="new_password_sys")
     with col2:
-        default_suffix = st.selectbox("默认数据源", ["非直播数据", "全部数据"], key="new_default_suffix_sys")
-        suffix_map = {"非直播数据": "", "全部数据": "_all"}
+        default_suffix = st.selectbox("默认数据源", ["非直播数据", "直播数据", "全部数据"], key="new_default_suffix_sys")
+        suffix_map = {"非直播数据": "", "直播数据": "_live", "全部数据": "_all"}
+        
+        # 默认权限：所有数据源都使用 DEFAULT_TABS（核心四个页面）
         default_perms = {}
         for suf in ["", "_live", "_all"]:
-            if suf == "_all":
-                default_perms[suf] = base_tabs + ["🏢 组织与部门分析"]
-            else:
-                default_perms[suf] = base_tabs
+            # 对于全部数据，默认也不包含组织与部门分析
+            default_perms[suf] = DEFAULT_TABS.copy()
+        
         default_platform = "all"
     if st.button("创建子账号", key="create_sys"):
         if new_username and new_password:
@@ -228,3 +232,6 @@ with st.expander("➕ 创建新子账号"):
                     st.rerun()
                 else:
                     st.error(f"创建失败：{msg}")
+
+st.markdown("---")
+st.caption("💡 提示：子账号默认只拥有“经营驾驶舱”、“每日明细”、“商品分析”、“销售分布与品牌”四个核心页面。其他页面（如主播分析、商品库导出、组织与部门分析等）需要管理员在此手动为对应数据源勾选添加。")
