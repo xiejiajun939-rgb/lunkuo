@@ -866,6 +866,45 @@ if st.session_state.get("org_ai_summary"):
 else:
     st.info("点击上方按钮生成 AI 智能总结。")
 
+# ======================== 🔍 调试：线下唯品会 8月18日原始数据 ========================
+st.markdown("---")
+st.markdown("#### 🔍 调试：线下唯品会 8月18日销售明细")
+
+if st.session_state.get("table_suffix") == "_all":
+    try:
+        supabase = init_supabase()
+        if supabase:
+            # 查询 offline_sales_all 表 2024-08-18 唯品会相关数据
+            # 假设唯品会的 shop_name 或 org_name 包含 "唯品会" 或 "VIP"
+            # 先不限制列，查看所有字段
+            resp = supabase.table("offline_sales_all")\
+                .select("*")\
+                .eq("sale_date", "2026-08-18")\
+                .execute()
+            if resp.data:
+                df_debug = pd.DataFrame(resp.data)
+                # 筛选出 shop_name 或 org_name 包含 '唯品会' 的记录（不区分大小写）
+                mask = df_debug['shop_name'].str.contains('唯品会', case=False, na=False) | \
+                       df_debug['org_name'].str.contains('唯品会', case=False, na=False)
+                df_vip = df_debug[mask]
+                if not df_vip.empty:
+                    st.success(f"找到 {len(df_vip)} 条唯品会相关线下记录")
+                    st.dataframe(df_vip, use_container_width=True)
+                    # 汇总
+                    total = df_vip['net_amount'].sum()
+                    st.metric("总净额", f"¥{total:,.2f}")
+                else:
+                    st.info("未找到唯品会相关记录，以下是当天所有线下数据（前20行）：")
+                    st.dataframe(df_debug.head(20), use_container_width=True)
+            else:
+                st.warning("2026-08-18 没有线下数据")
+        else:
+            st.error("无法连接数据库")
+    except Exception as e:
+        st.error(f"调试查询失败：{e}")
+else:
+    st.info("当前非全部数据模式，无法查询线下表。")
+
 # ---------- 底部信息 ----------
 st.markdown("---")
 st.caption(f"📌 数据最后更新：{pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')} | 数据源：全部数据")
