@@ -355,7 +355,7 @@ def clear_targets(suffix=None):
     st.session_state.target_dict = {}
     st.rerun()
 
-# ===================== 修改点 1: save_product_sales 增加 anchor_name =====================
+# ===================== 修改：线上数据增加 anchor_name =====================
 def save_product_sales(df_orders, suffix=None):
     if supabase is None:
         return
@@ -379,7 +379,7 @@ def save_product_sales(df_orders, suffix=None):
         short_code = parsed["style_code"]
         img = master_map.get(short_code, {}).get("image_url")
         cat = master_map.get(short_code, {}).get("master_category")
-        # ✅ 从 remark 中提取主播名称
+        # 提取主播名称
         anchor_name = extract_anchor(remark) or "NONE"
         if remark not in temp_records:
             temp_records[remark] = {
@@ -407,7 +407,6 @@ def save_product_sales(df_orders, suffix=None):
             existing["ship_amount"] += max(amount, 0)
             existing["return_amount"] += max(-amount, 0)
             existing["net_amount"] += amount
-            # 如果已有记录的 anchor_name 为空，尝试更新
             if existing.get("anchor_name") in [None, "", "NONE"] and anchor_name not in [None, "", "NONE"]:
                 existing["anchor_name"] = anchor_name
     records = list(temp_records.values())
@@ -418,7 +417,7 @@ def save_product_sales(df_orders, suffix=None):
             batch = records[i:i+batch_size]
             supabase.table(table_name).upsert(batch, on_conflict="remark").execute()
 
-# ===================== 修改点 2: save_offline_sales 增加 anchor_name =====================
+# ===================== 线下数据不增加 anchor_name =====================
 def save_offline_sales(df_orders):
     if supabase is None or df_orders.empty:
         return
@@ -430,9 +429,8 @@ def save_offline_sales(df_orders):
     df['return_amount'] = (-df['amount']).clip(lower=0)
     df['net_amount'] = df['amount']
     df['remark'] = df['备注'].astype(str).str.strip()
-    # ✅ 线下数据默认 anchor_name = 'NONE'
-    df['anchor_name'] = 'NONE'
-    records = df[['sale_date', 'shop_name', 'ship_amount', 'return_amount', 'net_amount', 'remark', 'anchor_name']].to_dict(orient='records')
+    # 线下数据不包含 anchor_name 字段
+    records = df[['sale_date', 'shop_name', 'ship_amount', 'return_amount', 'net_amount', 'remark']].to_dict(orient='records')
     if not records:
         return
     table_name = "offline_sales_all"
@@ -449,7 +447,7 @@ def save_offline_sales(df_orders):
                 time.sleep(2 ** attempt)
     refresh_materialized_view("_all")
 
-# ========== 其他函数保持不变 ==========
+# ========== 其他函数（validate_order_data, process_uploaded_file 等保持不变） ==========
 def validate_order_data(df):
     try:
         required = ["日期", "金额/时间", "备注"]
@@ -703,14 +701,12 @@ if not pages_to_show:
         Page("pages/product_page.py", title="📦 商品分析"),
     ]
 
-# 创建导航并运行（关键：必须调用 .run()）
+# 创建导航并运行
 nav = st.navigation(pages_to_show, position="sidebar")
-nav.run()  # <-- 这一行是必须的，否则页面无法切换
+nav.run()
 
-# ========== 侧边栏额外内容（在导航下方） ==========
-# 注意：导航菜单已经占据了侧边栏顶部，我们在此添加其他内容
+# ========== 侧边栏额外内容 ==========
 with st.sidebar:
-    # 主页链接（使用 Markdown，稳定可靠）
     st.sidebar.markdown("---")
     st.sidebar.markdown("[🏠 主页](/)")
     st.sidebar.markdown("---")
@@ -747,7 +743,6 @@ with st.sidebar:
         if new_suffix != st.session_state.table_suffix:
             st.session_state.table_suffix = new_suffix
             st.cache_data.clear()
-            # 刷新页面以更新导航
             st.rerun()
     st.markdown("---")
 
@@ -755,43 +750,29 @@ with st.sidebar:
     if st.session_state.role == "admin":
         current_display_suffix = st.session_state.table_suffix
         
-        # ========== 多文件上传处理函数 ==========
         def handle_multiple_upload(uploaded_files, suffix, file_type="order"):
-            """处理多个文件上传"""
             if st.session_state.processing_upload:
                 st.warning("上一个文件正在处理中，请稍后...")
                 return
-            
             if not uploaded_files:
                 st.warning("请先选择文件")
                 return
-            
             total_success = 0
             total_fail = 0
             results = []
-            
-            # 显示进度
             progress_bar = st.progress(0, text="正在处理文件...")
             status_text = st.empty()
-            
             for i, uploaded_file in enumerate(uploaded_files):
                 status_text.text(f"正在处理: {uploaded_file.name} ({i+1}/{len(uploaded_files)})")
-                
-                # 计算文件hash用于去重
                 file_content = uploaded_file.getvalue()
                 file_hash = hashlib.md5(file_content).hexdigest()
-                
-                # 检查是否已上传过
                 if file_type == "order" and file_hash in st.session_state.uploaded_file_hashes:
                     results.append(f"⏭️ {uploaded_file.name}: 已上传过，跳过")
                     progress_bar.progress((i + 1) / len(uploaded_files))
                     continue
-                
                 try:
-                    # 重置文件指针
                     uploaded_file.seek(0)
                     file_bytes = io.BytesIO(file_content)
-                    
                     if file_type == "order":
                         ok, msg = process_uploaded_file(file_bytes, suffix)
                         if ok:
@@ -812,20 +793,13 @@ with st.sidebar:
                 except Exception as e:
                     total_fail += 1
                     results.append(f"❌ {uploaded_file.name}: 处理异常 - {str(e)}")
-                
                 progress_bar.progress((i + 1) / len(uploaded_files))
-            
-            # 清除进度显示
             progress_bar.empty()
             status_text.empty()
-            
-            # 显示结果
             st.markdown("---")
             st.subheader(f"📊 处理完成：成功 {total_success}，失败 {total_fail}")
             for result in results:
                 st.text(result)
-            
-            # 如果有成功的，刷新数据
             if total_success > 0:
                 st.cache_data.clear()
                 rebuild_daily_data(suffix)
@@ -835,76 +809,56 @@ with st.sidebar:
             else:
                 st.warning("没有文件被成功处理，请检查文件格式和内容")
         
-        # ========== 非直播数据上传（多文件） ==========
+        # 非直播数据上传
         if current_display_suffix == "":
             st.subheader("📁 非直播数据上传")
             uploaded_orders = st.file_uploader(
-                "选择订单文件 (Excel)，支持多选", 
-                type=["xlsx", "xls"], 
-                key="order_uploader_normal_multi",
-                accept_multiple_files=True
+                "选择订单文件 (Excel)，支持多选", type=["xlsx", "xls"], 
+                key="order_uploader_normal_multi", accept_multiple_files=True
             )
             if uploaded_orders and st.button("📤 确认上传", key="confirm_upload_normal_multi"):
                 handle_multiple_upload(uploaded_orders, "", "order")
-            
             target_files = st.file_uploader(
-                "选择目标文件 (Excel)，支持多选", 
-                type=["xlsx", "xls"], 
-                key="target_upload_normal_multi",
-                accept_multiple_files=True
+                "选择目标文件 (Excel)，支持多选", type=["xlsx", "xls"],
+                key="target_upload_normal_multi", accept_multiple_files=True
             )
             if target_files and st.button("📤 确认上传目标", key="confirm_target_normal_multi"):
                 handle_multiple_upload(target_files, "", "target")
         
-        # ========== 直播数据上传（多文件） ==========
         elif current_display_suffix == "_live":
             st.subheader("🎥 直播数据上传")
             uploaded_orders = st.file_uploader(
-                "选择订单文件 (Excel)，支持多选", 
-                type=["xlsx", "xls"], 
-                key="order_uploader_live_multi",
-                accept_multiple_files=True
+                "选择订单文件 (Excel)，支持多选", type=["xlsx", "xls"],
+                key="order_uploader_live_multi", accept_multiple_files=True
             )
             if uploaded_orders and st.button("📤 确认上传", key="confirm_upload_live_multi"):
                 handle_multiple_upload(uploaded_orders, "_live", "order")
-            
             target_files = st.file_uploader(
-                "选择目标文件 (Excel)，支持多选", 
-                type=["xlsx", "xls"], 
-                key="target_upload_live_multi",
-                accept_multiple_files=True
+                "选择目标文件 (Excel)，支持多选", type=["xlsx", "xls"],
+                key="target_upload_live_multi", accept_multiple_files=True
             )
             if target_files and st.button("📤 确认上传目标", key="confirm_target_live_multi"):
                 handle_multiple_upload(target_files, "_live", "target")
         
-        # ========== 全部数据上传（多文件） ==========
         else:
             st.subheader("📊 全部数据上传")
             uploaded_orders = st.file_uploader(
-                "选择订单文件 (Excel)，支持多选", 
-                type=["xlsx", "xls"], 
-                key="order_uploader_all_multi",
-                accept_multiple_files=True
+                "选择订单文件 (Excel)，支持多选", type=["xlsx", "xls"],
+                key="order_uploader_all_multi", accept_multiple_files=True
             )
             if uploaded_orders and st.button("📤 确认上传", key="confirm_upload_all_multi"):
                 handle_multiple_upload(uploaded_orders, "_all", "order")
-            
             target_files = st.file_uploader(
-                "选择目标文件 (Excel)，支持多选", 
-                type=["xlsx", "xls"], 
-                key="target_upload_all_multi",
-                accept_multiple_files=True
+                "选择目标文件 (Excel)，支持多选", type=["xlsx", "xls"],
+                key="target_upload_all_multi", accept_multiple_files=True
             )
             if target_files and st.button("📤 确认上传目标", key="confirm_target_all_multi"):
                 handle_multiple_upload(target_files, "_all", "target")
-            
             st.markdown("---")
             st.subheader("🏷️ 线下收入上传")
             uploaded_offline = st.file_uploader(
-                "选择线下收入文件 (Excel)，支持多选", 
-                type=["xlsx", "xls"], 
-                key="offline_uploader_multi",
-                accept_multiple_files=True
+                "选择线下收入文件 (Excel)，支持多选", type=["xlsx", "xls"],
+                key="offline_uploader_multi", accept_multiple_files=True
             )
             if uploaded_offline and st.button("📤 上传线下收入", key="upload_offline_multi"):
                 try:
@@ -931,10 +885,8 @@ with st.sidebar:
             st.markdown("---")
             st.subheader("📊 组织目标管理")
             uploaded_org_target = st.file_uploader(
-                "上传组织目标文件 (Excel)，支持多选", 
-                type=["xlsx", "xls"], 
-                key="org_target_upload_multi",
-                accept_multiple_files=True
+                "上传组织目标文件 (Excel)，支持多选", type=["xlsx", "xls"],
+                key="org_target_upload_multi", accept_multiple_files=True
             )
             if uploaded_org_target and st.button("📤 上传组织目标", key="upload_org_target_btn_multi"):
                 try:
@@ -966,7 +918,6 @@ with st.sidebar:
             st.session_state.uploaded_file_hashes = []
             st.success("已重置上传记录，现在可以重新上传相同文件")
             st.rerun()
-        
         if st.button("🗑️ 清除当前用户的目标记忆", key="clear_targets_final"):
             clear_targets(st.session_state.table_suffix)
         if st.button("🔄 强制刷新所有数据", key="force_refresh_final"):
@@ -994,7 +945,6 @@ with st.sidebar:
         st.info("您只有查看权限，无法上传文件。如需上传，请联系管理员。")
     st.markdown("---")
     
-    # ========== 退出登录 ==========
     if st.button("🚪 退出登录", key="logout_final"):
         st.session_state.authenticated = False
         for key in ["username", "role", "table_suffix"]:
@@ -1002,13 +952,8 @@ with st.sidebar:
                 del st.session_state[key]
         st.rerun()
 
-# ========== 主内容区（仅当处于根路径时显示欢迎信息） ==========
-# 检测当前是否为根路径（即没有选择任何子页面）
-# 方法：检查 query_params 中的 "page" 参数，或者判断当前路径。
-# Streamlit 在子页面时会在 URL 中显示 "/page_name"，根路径为 "/"
-# 通过 st.query_params 判断
+# ========== 主内容区（根路径欢迎信息） ==========
 if "page" not in st.query_params:
-    # 仅在根路径显示欢迎信息
     st.markdown("""
     <div style="display: flex; justify-content: center; align-items: center; height: 50vh; flex-direction: column;">
         <h1 style="color: #1e293b;">📊 欢迎使用数据罗盘</h1>
