@@ -56,17 +56,9 @@ def load_dimension_mapping():
         return pd.DataFrame()
 
 # ---------- 核心聚合函数（缓存60秒） ----------
+# ---------- 核心聚合函数（已修复线下数据拉取与映射） ----------
 @st.cache_data(ttl=60)
 def fetch_sales_summary(start_date, end_date, suffix="", view_mode=None):
-    """
-    获取销售汇总数据，返回明细（含组织、部门、店铺、主播），用于组织排行、部门排行及线下明细。
-    返回字段：sale_date, org_name, dept, shop_name, anchor, source, total_ship, total_return, total_net
-
-    关键逻辑：
-    - 线上数据：使用 (shop_name, anchor) 匹配 mapping 表的 (shop_name, anchor_name)
-    - 线下数据：直接使用 shop_name 匹配 mapping 表的 shop_name，得到 org_name 和 dept
-    - 线下数据不涉及任何 anchor 字段
-    """
     required_columns = ["sale_date", "org_name", "dept", "shop_name", "anchor", "source", "total_ship", "total_return", "total_net"]
     
     if supabase is None:
@@ -87,16 +79,19 @@ def fetch_sales_summary(start_date, end_date, suffix="", view_mode=None):
     online_data = []
     page = 0
     page_size = 1000
+    start_str = start_date.isoformat()
+    end_str = f"{end_date.isoformat()}T23:59:59"
+
     while True:
         try:
+            select_cols = "sale_date, shop_name, remark, ship_amount, return_amount, net_amount"
             if use_anchor:
-                select_cols = "sale_date, shop_name, remark, ship_amount, return_amount, net_amount, anchor_name"
-            else:
-                select_cols = "sale_date, shop_name, remark, ship_amount, return_amount, net_amount"
+                select_cols += ", anchor_name"
+
             resp = supabase.table(product_table)\
                            .select(select_cols)\
-                           .gte("sale_date", start_date.isoformat())\
-                           .lte("sale_date", end_date.isoformat())\
+                           .gte("sale_date", start_str)\
+                           .lte("sale_date", end_str)\
                            .range(page * page_size, (page + 1) * page_size - 1)\
                            .execute()
             if not resp.data:
@@ -114,67 +109,102 @@ def fetch_sales_summary(start_date, end_date, suffix="", view_mode=None):
         df_online = pd.DataFrame(online_data)
         df_online["sale_date"] = pd.to_datetime(df_online["sale_date"])
         if use_anchor and "anchor_name" in df_online.columns:
-            df_online["anchor"] = df_online["anchor_name"].fillna("NONE")
+            df_online["anchor"] = df_online["anchor_name"].fillna("NONE").replace('', 'NONE')
         else:
-            df_online["anchor"] = df_online["remark"].apply(extract_anchor).fillna("NONE")
+            df_online["anchor"] = df_online["remark"].apply(extract_anchor).fillna("NONE").replace('', 'NONE')
+        
         df_online['shop_name'] = df_online['shop_name'].astype(str).str.strip().str.upper()
         df_online['anchor'] = df_online['anchor'].astype(str).str.strip().str.upper()
+        
         df_online = df_online.groupby(["sale_date", "shop_name", "anchor"], as_index=False).agg({
             "ship_amount": "sum",
             "return_amount": "sum",
             "net_amount": "sum"
         })
-        # 线上映射：使用 (shop_name, anchor) 匹配
+        
         if mapping_exists:
             mapping_clean = mapping_df.copy()
             mapping_clean['shop_name'] = mapping_clean['shop_name'].astype(str).str.strip().str.upper()
             mapping_clean['anchor_name'] = mapping_clean['anchor_name'].astype(str).str.strip().str.upper()
-            mapping_unique = mapping_clean.drop_duplicates(subset=['shop_name', 'anchor_name'], keep='first')
-            key_to_org = mapping_unique.set_index(['shop_name', 'anchor_name'])['org_name'].to_dict()
-            key_to_dept = mapping_unique.set_index(['shop_name', 'anchor_name'])['dept'].to_dict()
-            df_online['org_name'] = df_online.apply(lambda row: key_to_org.get((row['shop_name'], row['anchor']), '未分配组织'), axis=1)
-            df_online['dept'] = df_online.apply(lambda row: key_to_dept.get((row['shop_name'], row['anchor']), '未分配部门'), axis=1)
+            
+            # 双级映射逻辑：优先匹配 (shop_name, anchor_name)，若匹配不到降级使用 shop_name 匹配
+            mapping_anchor = mapping_clean.drop_duplicates(subset=['shop_name', 'anchor_name'], keep='first')
+            key_to_org = mapping_anchor.set_index(['shop_name', 'anchor_name'])['org_name'].to_dict()
+            key_to_dept = mapping_anchor.set_index(['shop_name', 'anchor_name'])['dept'].to_dict()
+
+            mapping_shop = mapping_clean.drop_duplicates(subset=['shop_name'], keep='first')
+            shop_to_org = mapping_shop.set_index('shop_name')['org_name'].to_dict()
+            shop_to_dept = mapping_shop.set_index('shop_name')['dept'].to_dict()
+
+            def get_dept(row):
+                dept = key_to_dept.get((row['shop_name'], row['anchor']))
+                if not dept or dept == '未分配部门':
+                    dept = shop_to_dept.get(row['shop_name'], '未分配部门')
+                return dept
+
+            def get_org(row):
+                org = key_to_org.get((row['shop_name'], row['anchor']))
+                if not org or org == '未分配组织':
+                    org = shop_to_org.get(row['shop_name'], '未分配组织')
+                return org
+
+            df_online['dept'] = df_online.apply(get_dept, axis=1)
+            df_online['org_name'] = df_online.apply(get_org, axis=1)
         else:
             df_online['org_name'] = '未分配组织'
             df_online['dept'] = '未分配部门'
         df_online['source'] = 'online'
 
-    # ---- 线下数据处理（仅当 suffix == "_all"） ----
+    # ---- 线下数据处理（已修复：添加服务端日期筛选与分页循环） ----
     df_offline = pd.DataFrame()
     if suffix == "_all":
         try:
-            offline_resp = supabase.table("offline_sales_all").select("*").execute()
-            if offline_resp.data:
-                df_offline = pd.DataFrame(offline_resp.data)
+            offline_data = []
+            page = 0
+            
+            while True:
+                offline_resp = supabase.table("offline_sales_all")\
+                                       .select("*")\
+                                       .gte("sale_date", start_str)\
+                                       .lte("sale_date", end_str)\
+                                       .range(page * page_size, (page + 1) * page_size - 1)\
+                                       .execute()
+                if not offline_resp.data:
+                    break
+                offline_data.extend(offline_resp.data)
+                if len(offline_resp.data) < page_size:
+                    break
+                page += 1
+
+            if offline_data:
+                df_offline = pd.DataFrame(offline_data)
                 df_offline["sale_date"] = pd.to_datetime(df_offline["sale_date"])
-                start_ts = pd.Timestamp(start_date)
-                end_ts = pd.Timestamp(end_date) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
-                df_offline = df_offline[(df_offline["sale_date"] >= start_ts) & (df_offline["sale_date"] <= end_ts)]
                 if not df_offline.empty:
                     df_offline['shop_name'] = df_offline['shop_name'].astype(str).str.strip().str.upper()
-                    # 按日期、shop_name 聚合
+                    
                     df_offline = df_offline.groupby(["sale_date", "shop_name"], as_index=False).agg({
                         "ship_amount": "sum",
                         "return_amount": "sum",
                         "net_amount": "sum"
                     })
-                    # 线下映射：直接用 shop_name 匹配 mapping 表（不使用 anchor）
+                    
                     if mapping_exists:
-                        # 按 shop_name 去重，取第一条
                         mapping_unique_offline = mapping_df.drop_duplicates(subset=['shop_name'], keep='first')
                         shop_to_org = mapping_unique_offline.set_index('shop_name')['org_name'].to_dict()
                         shop_to_dept = mapping_unique_offline.set_index('shop_name')['dept'].to_dict()
+                        
                         df_offline['org_name'] = df_offline['shop_name'].map(shop_to_org).fillna('未分配组织')
                         df_offline['dept'] = df_offline['shop_name'].map(shop_to_dept).fillna('未分配部门')
                     else:
                         df_offline['org_name'] = '未分配组织'
                         df_offline['dept'] = '未分配部门'
+                        
                     df_offline['anchor'] = 'NONE'
                     df_offline['source'] = 'offline'
         except Exception as e:
             st.warning(f"查询线下数据出错：{e}")
 
-    # ---- 合并 ----
+    # ---- 合并数据 ----
     if df_online.empty and df_offline.empty:
         return pd.DataFrame(columns=required_columns)
     elif df_online.empty:
@@ -184,14 +214,12 @@ def fetch_sales_summary(start_date, end_date, suffix="", view_mode=None):
     else:
         df = pd.concat([df_online, df_offline], ignore_index=True)
 
-    # ---- 重命名 ----
     df = df.rename(columns={
         "ship_amount": "total_ship",
         "return_amount": "total_return",
         "net_amount": "total_net"
     })
 
-    # ---- 确保列存在 ----
     for col in required_columns:
         if col not in df.columns:
             if col in ["total_ship", "total_return", "total_net"]:
@@ -201,7 +229,6 @@ def fetch_sales_summary(start_date, end_date, suffix="", view_mode=None):
             else:
                 df[col] = "未知"
 
-    # ---- view_mode 过滤 ----
     view_mode_to_use = view_mode if view_mode is not None else st.session_state.get("view_mode")
     if view_mode_to_use == "shop":
         if 'dept' in df.columns:
@@ -210,118 +237,6 @@ def fetch_sales_summary(start_date, end_date, suffix="", view_mode=None):
             df = pd.DataFrame(columns=required_columns)
 
     return df[required_columns]
-
-# ---------- 完整的销售汇总（兼容旧版） ----------
-@st.cache_data(ttl=60)
-def fetch_complete_sales_summary(start_date, end_date, suffix="_all", view_mode=None):
-    return fetch_sales_summary(start_date, end_date, suffix, view_mode=view_mode)
-
-# ---------- 商品销售数据加载（用于商品详情页） ----------
-@st.cache_data(ttl=300)
-def load_product_sales(suffix=None, apply_filter=True, include_offline=True):
-    if supabase is None:
-        return pd.DataFrame()
-    try:
-        table_name = get_table_name("product_sales", suffix)
-        
-        use_anchor = True
-        try:
-            supabase.table(table_name).select("anchor_name").limit(1).execute()
-        except Exception as e:
-            if "does not exist" in str(e).lower() or "column" in str(e).lower():
-                use_anchor = False
-            else:
-                raise
-
-        base_cols = "sale_date, shop_name, product_code, style_code, brand, year, season, product_category, style, color_code, size_code, ship_amount, return_amount, net_amount, remark"
-        select_cols = base_cols + ", anchor_name" if use_anchor else base_cols
-
-        all_data = []
-        page = 0
-        page_size = 1000
-        while True:
-            resp = supabase.table(table_name).select(select_cols).range(page*page_size, (page+1)*page_size-1).execute()
-            if not resp.data:
-                break
-            all_data.extend(resp.data)
-            if len(resp.data) < page_size:
-                break
-            page += 1
-
-        if not all_data:
-            return pd.DataFrame()
-
-        df = pd.DataFrame(all_data)
-        df["sale_date"] = pd.to_datetime(df["sale_date"])
-        if "style_code" not in df.columns or df["style_code"].isnull().all():
-            df["style_code"] = df["product_code"].str[:8]
-        else:
-            df["style_code"] = df["style_code"].fillna(df["product_code"].str[:8])
-        for col in ["ship_amount", "return_amount", "net_amount"]:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
-
-        if use_anchor and "anchor_name" in df.columns:
-            df["anchor"] = df["anchor_name"].fillna("NONE")
-        else:
-            df["anchor"] = df["remark"].apply(extract_anchor).fillna("NONE")
-
-        # 合并线下数据（仅 _all）
-        if suffix == "_all" and include_offline:
-            try:
-                offline_resp = supabase.table("offline_sales_all").select("*").execute()
-                if offline_resp.data:
-                    offline_df = pd.DataFrame(offline_resp.data)
-                    offline_df["sale_date"] = pd.to_datetime(offline_df["sale_date"])
-                    offline_df["product_code"] = None
-                    offline_df["style_code"] = None
-                    offline_df["brand"] = None
-                    offline_df["year"] = None
-                    offline_df["season"] = None
-                    offline_df["product_category"] = None
-                    offline_df["style"] = None
-                    offline_df["color_code"] = None
-                    offline_df["size_code"] = None
-                    offline_df["image_url"] = None
-                    offline_df["master_category"] = None
-                    offline_df["remark"] = offline_df["remark"].fillna("线下收入")
-                    offline_df["anchor"] = "NONE"
-                    for col in df.columns:
-                        if col not in offline_df.columns:
-                            offline_df[col] = None
-                    offline_df = offline_df[df.columns]
-                    df = pd.concat([df, offline_df], ignore_index=True)
-            except Exception as e:
-                pass
-
-        mapping_df = load_dimension_mapping()
-        if suffix == "_all" and not mapping_df.empty:
-            mapping_df['shop_name'] = mapping_df['shop_name'].astype(str).str.strip().str.upper()
-            mapping_df['anchor_name'] = mapping_df['anchor_name'].astype(str).str.strip().str.upper()
-            mapping_unique = mapping_df.drop_duplicates(subset=['shop_name', 'anchor_name'], keep='first')
-            key_to_org = mapping_unique.set_index(['shop_name', 'anchor_name'])['org_name'].to_dict()
-            key_to_dept = mapping_unique.set_index(['shop_name', 'anchor_name'])['dept'].to_dict()
-            df['org_name'] = df.apply(lambda row: key_to_org.get((row['shop_name'], row['anchor']), '未分配组织'), axis=1)
-            df['dept'] = df.apply(lambda row: key_to_dept.get((row['shop_name'], row['anchor']), '未分配部门'), axis=1)
-        else:
-            df["org_name"] = "未分配组织"
-            df["dept"] = "未分配部门"
-
-        view_mode_to_use = st.session_state.get("view_mode")
-        if view_mode_to_use == "shop":
-            if 'dept' in df.columns:
-                df = df[df['dept'] == '小店运营']
-            else:
-                df = pd.DataFrame()
-
-        if apply_filter:
-            from core.utils import apply_data_permission
-            df = apply_data_permission(df)
-        return df
-    except Exception as e:
-        st.error(f"加载商品销售数据失败：{e}")
-        return pd.DataFrame()
-
 # ---------- 获取日期范围 ----------
 @st.cache_data(ttl=600)
 def get_sales_date_range(suffix=""):
