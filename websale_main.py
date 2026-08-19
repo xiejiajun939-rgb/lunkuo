@@ -726,7 +726,6 @@ nav.run()
 with st.sidebar:
     if st.session_state.role != "admin":
         # 非管理员：只显示数据源切换 + 退出登录
-        st.subheader("🔄 数据源模式切换")
         suffix_names = {"": "非直播数据", "_all": "全部数据"}
         current_source_name = suffix_names.get(st.session_state.table_suffix, "未知")
         user_info = st.session_state.sub_users.get(st.session_state.username, {})
