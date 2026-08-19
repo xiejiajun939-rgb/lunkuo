@@ -35,13 +35,6 @@ def extract_anchor(remark):
     match = re.search(r'主播[：:]([^_]+)', remark)
     return match.group(1).strip() if match else None
 
-# ---------- 辅助：从备注中提取组织名称（备用） ----------
-def extract_org_from_remark(remark):
-    if not remark or not isinstance(remark, str):
-        return None
-    # 仅用于无法匹配时的备用逻辑，此处简化
-    return None
-
 # ---------- 维度映射加载（ttl=60） ----------
 @st.cache_data(ttl=60)
 def load_dimension_mapping():
@@ -69,6 +62,7 @@ def fetch_sales_summary(start_date, end_date, suffix=""):
     获取销售汇总数据
     线上数据：使用 (shop_name, anchor) 匹配 mapping
     线下数据：使用 shop_name + 固定 anchor='NONE' 匹配 mapping
+    返回列包含 anchor 以便于明细追溯。
     """
     if supabase is None:
         return pd.DataFrame()
@@ -160,17 +154,13 @@ def fetch_sales_summary(start_date, end_date, suffix=""):
         # 创建 (shop_name, anchor_name) -> (org_name, dept) 的映射字典
         mapping_df['shop_name'] = mapping_df['shop_name'].astype(str).str.strip().str.upper()
         mapping_df['anchor_name'] = mapping_df['anchor_name'].astype(str).str.strip().str.upper()
-        # 去重
         mapping_unique = mapping_df.drop_duplicates(subset=['shop_name', 'anchor_name'], keep='first')
-        # 创建复合键字典
         key_to_org = mapping_unique.set_index(['shop_name', 'anchor_name'])['org_name'].to_dict()
         key_to_dept = mapping_unique.set_index(['shop_name', 'anchor_name'])['dept'].to_dict()
         
-        # 应用映射
         df['org_name'] = df.apply(lambda row: key_to_org.get((row['shop_name'], row['anchor']), None), axis=1)
         df['dept'] = df.apply(lambda row: key_to_dept.get((row['shop_name'], row['anchor']), None), axis=1)
         
-        # 对于未能映射的，使用 '未分配组织' 和 '未分配部门'
         df['org_name'] = df['org_name'].fillna('未分配组织')
         df['dept'] = df['dept'].fillna('未分配部门')
     else:
@@ -184,15 +174,17 @@ def fetch_sales_summary(start_date, end_date, suffix=""):
         "net_amount": "total_net"
     })
 
-    # 7. 确保所有必要的列都存在
-    for col in ["sale_date", "org_name", "dept", "shop_name", "total_ship", "total_return", "total_net"]:
+    # 7. 确保所有必要的列都存在（包括 anchor）
+    for col in ["sale_date", "org_name", "dept", "shop_name", "anchor", "total_ship", "total_return", "total_net"]:
         if col not in df.columns:
             if col in ["total_ship", "total_return", "total_net"]:
                 df[col] = 0
+            elif col == "anchor":
+                df[col] = "NONE"
             else:
                 df[col] = "未知"
 
-    return df[["sale_date", "org_name", "dept", "shop_name", "total_ship", "total_return", "total_net"]]
+    return df[["sale_date", "org_name", "dept", "shop_name", "anchor", "total_ship", "total_return", "total_net"]]
 
 # ---------- 完整的销售汇总（兼容旧版） ----------
 @st.cache_data(ttl=60)
