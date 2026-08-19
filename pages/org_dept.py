@@ -72,11 +72,12 @@ def load_all_depts():
     depts = [d for d in depts if d and d.strip() and d != '未分配部门']
     return sorted(depts)
 
-# ---------- 获取部门汇总数据（包含所有部门） ----------
+# ---------- 获取部门汇总数据（包含所有部门，无数据部门显示0） ----------
 def get_dept_summary_with_all(start_date, end_date, suffix="_all"):
     """
     获取部门汇总数据，包含所有部门（即使无数据也显示为0）
-    返回DataFrame包含：dept, org_name, total_ship, total_return, total_net
+    返回DataFrame包含：dept, total_ship, total_return, total_net
+    部门数据为该部门下所有组织的业绩汇总
     """
     # 1. 获取所有部门列表
     all_depts = load_all_depts()
@@ -84,20 +85,15 @@ def get_dept_summary_with_all(start_date, end_date, suffix="_all"):
     # 2. 获取实际销售数据
     df_data = fetch_complete_sales_summary(start_date, end_date, suffix)
     
-    # 3. 按部门聚合实际数据
+    # 3. 按部门聚合实际数据（所有组织汇总）
     if not df_data.empty:
         dept_actual = df_data.groupby('dept').agg({
             'total_ship': 'sum',
             'total_return': 'sum',
             'total_net': 'sum'
         }).reset_index()
-        # 获取每个部门对应的组织（取销售额最大的组织作为代表）
-        org_for_dept = df_data.groupby('dept').agg({
-            'org_name': lambda x: x.value_counts().index[0] if not x.empty else '未分配组织'
-        }).reset_index()
-        dept_actual = dept_actual.merge(org_for_dept, on='dept', how='left')
     else:
-        dept_actual = pd.DataFrame(columns=['dept', 'total_ship', 'total_return', 'total_net', 'org_name'])
+        dept_actual = pd.DataFrame(columns=['dept', 'total_ship', 'total_return', 'total_net'])
     
     # 4. 创建所有部门的DataFrame
     all_depts_df = pd.DataFrame({'dept': all_depts})
@@ -109,7 +105,6 @@ def get_dept_summary_with_all(start_date, end_date, suffix="_all"):
     result['total_ship'] = result['total_ship'].fillna(0)
     result['total_return'] = result['total_return'].fillna(0)
     result['total_net'] = result['total_net'].fillna(0)
-    result['org_name'] = result['org_name'].fillna('未分配组织')
     
     # 7. 排序（按净额降序）
     result = result.sort_values('total_net', ascending=False)
@@ -143,7 +138,6 @@ org_targets = load_org_targets("_all")
 total_target = sum(org_targets.values()) if org_targets else 0
 
 with st.spinner("加载 KPI 数据..."):
-    # 使用完整的销售汇总函数
     df_today = fetch_complete_sales_summary(latest_date, latest_date, suffix)
     df_mtd = fetch_complete_sales_summary(month_start, latest_date, suffix)
 
@@ -291,7 +285,7 @@ with st.spinner(f"加载 {period_label} 数据..."):
     df_period_main = fetch_complete_sales_summary(start_date, end_date, suffix)
 
 if not df_period_main.empty:
-    # 数据概览
+    # 数据概览（包含组织与部门映射）
     with st.expander("📋 数据概览（查看所有组织/部门映射情况）"):
         org_list = df_period_main['org_name'].unique().tolist()
         dept_list = df_period_main['dept'].unique().tolist()
@@ -327,6 +321,7 @@ if not df_period_main.empty:
     
     col_org, col_dept = st.columns(2)
     with col_org:
+        # 组织排行（正确）
         org_agg = df_period_main.groupby('org_name')['total_net'].sum().reset_index()
         org_agg = org_agg.sort_values('total_net', ascending=False)
         
@@ -353,6 +348,7 @@ if not df_period_main.empty:
         st.dataframe(org_display[['org_name', '净额']], hide_index=True, use_container_width=True)
             
     with col_dept:
+        # 部门汇总（所有组织汇总，显示所有部门）
         dept_summary_full = get_dept_summary_with_all(start_date, end_date, suffix)
         dept_agg = dept_summary_full[dept_summary_full['total_net'] != 0].copy()
         if not dept_agg.empty:
@@ -369,7 +365,7 @@ if not df_period_main.empty:
             dept_display['净额'] = dept_display['total_net'].apply(lambda x: f"¥{x:,.2f}")
             dept_display['发货额'] = dept_display['total_ship'].apply(lambda x: f"¥{x:,.2f}")
             dept_display['退货额'] = dept_display['total_return'].apply(lambda x: f"¥{x:,.2f}")
-            st.dataframe(dept_display[['dept', 'org_name', '净额', '发货额', '退货额']], 
+            st.dataframe(dept_display[['dept', '净额', '发货额', '退货额']], 
                          hide_index=True, use_container_width=True)
         else:
             st.info("无部门数据")
@@ -422,7 +418,7 @@ if not df_return.empty:
             dept_display['净额'] = dept_display['total_net'].apply(lambda x: f"¥{x:,.2f}")
             dept_display['发货额'] = dept_display['total_ship'].apply(lambda x: f"¥{x:,.2f}")
             dept_display['退货额'] = dept_display['total_return'].apply(lambda x: f"¥{x:,.2f}")
-            st.dataframe(dept_display[['dept', 'org_name', '净额', '发货额', '退货额', '退货率']], 
+            st.dataframe(dept_display[['dept', '净额', '发货额', '退货额', '退货率']], 
                          hide_index=True, use_container_width=True)
         
         zero_ship_returns = dept_return[(dept_return['total_ship'] == 0) & (dept_return['total_return'] > 0)]
@@ -567,14 +563,13 @@ if not dept_summary_full.empty:
     depts_with_data = dept_summary_full[dept_summary_full['total_net'] != 0].shape[0]
     st.caption(f"共 {total_depts} 个部门，其中 {depts_with_data} 个有销售数据，{total_depts - depts_with_data} 个无数据（显示为0）")
     
-    display_cols = ['净额排名', 'org_name', 'dept', '净额', '发货额', '退货额', '退货率显示']
+    display_cols = ['净额排名', 'dept', '净额', '发货额', '退货额', '退货率显示']
     st.dataframe(
         dept_summary_full[display_cols].sort_values('净额排名'),
         hide_index=True,
         use_container_width=True,
         column_config={
             "净额排名": st.column_config.NumberColumn("排名", width="small"),
-            "org_name": st.column_config.TextColumn("组织", width="medium"),
             "dept": st.column_config.TextColumn("部门", width="medium"),
             "净额": st.column_config.TextColumn("净销售额", width="medium"),
             "发货额": st.column_config.TextColumn("发货额", width="medium"),
@@ -601,8 +596,8 @@ if not dept_summary_full.empty:
     with col_export2:
         export_cols = st.multiselect(
             "选择要导出的列",
-            options=['org_name', 'dept', 'total_ship', 'total_return', 'total_net', '退货率'],
-            default=['org_name', 'dept', 'total_ship', 'total_return', 'total_net', '退货率'],
+            options=['dept', 'total_ship', 'total_return', 'total_net', '退货率'],
+            default=['dept', 'total_ship', 'total_return', 'total_net', '退货率'],
             key="export_cols_select"
         )
     with col_export3:
@@ -611,7 +606,6 @@ if not dept_summary_full.empty:
     def prepare_export_data():
         export_df = dept_summary_full.copy()
         export_cols_mapping = {
-            'org_name': '组织',
             'dept': '部门',
             'total_ship': '发货额',
             'total_return': '退货额',
