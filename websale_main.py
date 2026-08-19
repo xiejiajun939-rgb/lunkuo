@@ -724,8 +724,13 @@ nav.run()
 
 # ========== 侧边栏额外内容 ==========
 with st.sidebar:
+    # ===== 显示当前登录用户 =====
+    st.markdown(f"**👤 {st.session_state.username}** ({st.session_state.role})")
+    st.markdown("---")
+
     if st.session_state.role != "admin":
         # 非管理员：只显示数据源切换 + 退出登录
+        st.subheader("🔄 数据源模式切换")
         suffix_names = {"": "非直播数据", "_all": "全部数据"}
         current_source_name = suffix_names.get(st.session_state.table_suffix, "未知")
         user_info = st.session_state.sub_users.get(st.session_state.username, {})
@@ -746,7 +751,6 @@ with st.sidebar:
             new_suffix = available[selected_source]
             if new_suffix != st.session_state.table_suffix:
                 st.session_state.table_suffix = new_suffix
-                # 同步更新 view_mode
                 if new_suffix == "":
                     st.session_state.view_mode = "normal"
                 elif new_suffix == "_all":
@@ -994,7 +998,6 @@ with st.sidebar:
         with st.expander("📦 批量礼金标签管理"):
             batch_manage_newbie_coupon()
 
-        # 管理员也显示退出登录
         st.markdown("---")
         if st.button("🚪 退出登录", key="logout_admin"):
             st.session_state.authenticated = False
