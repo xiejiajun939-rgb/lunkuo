@@ -76,7 +76,7 @@ def load_all_depts():
 def get_dept_summary_with_all(start_date, end_date, suffix="_all"):
     """
     获取部门汇总数据，包含所有部门（即使无数据也显示为0）
-    返回DataFrame包含：dept, org_name（可能多个组织共享部门，我们取主要组织）, total_ship, total_return, total_net
+    返回DataFrame包含：dept, org_name, total_ship, total_return, total_net
     """
     # 1. 获取所有部门列表
     all_depts = load_all_depts()
@@ -109,13 +109,9 @@ def get_dept_summary_with_all(start_date, end_date, suffix="_all"):
     result['total_ship'] = result['total_ship'].fillna(0)
     result['total_return'] = result['total_return'].fillna(0)
     result['total_net'] = result['total_net'].fillna(0)
-    # 对于没有数据的部门，尝试从mapping表中获取组织
     result['org_name'] = result['org_name'].fillna('未分配组织')
     
-    # 7. 补充可能存在于实际数据但不在mapping表中的部门（比如线下数据可能产生新部门）
-    # 但以mapping表为准，所以不需要补充
-    
-    # 8. 排序（按净额降序）
+    # 7. 排序（按净额降序）
     result = result.sort_values('total_net', ascending=False)
     
     return result
@@ -151,7 +147,6 @@ with st.spinner("加载 KPI 数据..."):
     df_today = fetch_complete_sales_summary(latest_date, latest_date, suffix)
     df_mtd = fetch_complete_sales_summary(month_start, latest_date, suffix)
 
-# 调试信息 - 检查数据是否正常加载
 if df_today.empty:
     st.info(f"📌 提示：{latest_date} 无销售数据，显示月累计数据。")
     today_ship = 0
@@ -296,15 +291,13 @@ with st.spinner(f"加载 {period_label} 数据..."):
     df_period_main = fetch_complete_sales_summary(start_date, end_date, suffix)
 
 if not df_period_main.empty:
-    # 数据概览 - 帮助识别是否有数据遗漏
+    # 数据概览
     with st.expander("📋 数据概览（查看所有组织/部门映射情况）"):
-        # 显示组织列表
         org_list = df_period_main['org_name'].unique().tolist()
         dept_list = df_period_main['dept'].unique().tolist()
         st.write(f"共识别到 **{len(org_list)}** 个组织：{', '.join(org_list)}")
         st.write(f"共识别到 **{len(dept_list)}** 个部门：{', '.join(dept_list[:20])}{'...' if len(dept_list) > 20 else ''}")
         
-        # 显示各组织的汇总数据
         org_summary = df_period_main.groupby('org_name').agg({
             'total_net': 'sum',
             'total_ship': 'sum',
@@ -315,14 +308,13 @@ if not df_period_main.empty:
         st.dataframe(org_summary[['org_name', '净额', 'total_ship', 'total_return']], 
                      hide_index=True, use_container_width=True)
         
-        # 显示部门汇总（包含所有部门，即使无数据）
+        # 显示所有部门（包含无数据）
         all_depts = load_all_depts()
         dept_summary = df_period_main.groupby('dept').agg({
             'total_net': 'sum',
             'total_ship': 'sum',
             'total_return': 'sum'
         }).reset_index()
-        # 创建完整部门列表
         dept_full = pd.DataFrame({'dept': all_depts})
         dept_summary_full = dept_full.merge(dept_summary, on='dept', how='left')
         dept_summary_full['total_net'] = dept_summary_full['total_net'].fillna(0)
@@ -335,11 +327,9 @@ if not df_period_main.empty:
     
     col_org, col_dept = st.columns(2)
     with col_org:
-        # 组织汇总 - 显示所有组织（包括负值）
         org_agg = df_period_main.groupby('org_name')['total_net'].sum().reset_index()
         org_agg = org_agg.sort_values('total_net', ascending=False)
         
-        # 分离正负值用于显示
         org_agg_positive = org_agg[org_agg['total_net'] > 0].copy()
         org_agg_negative = org_agg[org_agg['total_net'] < 0].copy()
         
@@ -352,24 +342,20 @@ if not df_period_main.empty:
         else:
             st.info("无盈利阿米巴")
         
-        # 显示负值组织警告
         if not org_agg_negative.empty:
             neg_text = ", ".join([f"{row['org_name']} (¥{row['total_net']:,.2f})" 
                                  for _, row in org_agg_negative.iterrows()])
             st.warning(f"⚠️ 以下组织净销售额为负：{neg_text}")
         
-        # 显示组织排行（所有组织）
         st.markdown("**组织排行（完整）**")
         org_display = org_agg.copy()
         org_display['净额'] = org_display['total_net'].apply(lambda x: f"¥{x:,.2f}")
         st.dataframe(org_display[['org_name', '净额']], hide_index=True, use_container_width=True)
             
     with col_dept:
-        # 使用所有部门（包括无数据的）
         dept_summary_full = get_dept_summary_with_all(start_date, end_date, suffix)
         dept_agg = dept_summary_full[dept_summary_full['total_net'] != 0].copy()
         if not dept_agg.empty:
-            # 显示所有部门，但图表只显示TOP10
             top10 = dept_agg.head(10)
             fig_dept = px.bar(top10, x='total_net', y='dept', orientation='h',
                               title=f'部门净销售额排行（TOP10，{period_label}）',
@@ -378,7 +364,6 @@ if not df_period_main.empty:
             fig_dept.update_layout(yaxis={'categoryorder': 'total ascending'})
             st.plotly_chart(fig_dept, use_container_width=True)
             
-            # 显示所有部门（包括0）
             st.markdown("**部门排行（完整，含无数据部门）**")
             dept_display = dept_summary_full.copy()
             dept_display['净额'] = dept_display['total_net'].apply(lambda x: f"¥{x:,.2f}")
@@ -414,14 +399,12 @@ with st.spinner(f"加载退货率数据（{period_label_r}）..."):
     df_return = fetch_complete_sales_summary(start_date_r, end_date_r, suffix)
 
 if not df_return.empty:
-    # 使用所有部门
     dept_summary_full = get_dept_summary_with_all(start_date_r, end_date_r, suffix)
     dept_return = dept_summary_full.copy()
     dept_return['退货率'] = (dept_return['total_return'] / (dept_return['total_ship'] + 1e-5) * 100).round(2)
     dept_return_sorted = dept_return.sort_values('退货率', ascending=False)
     
     if not dept_return_sorted.empty:
-        # 图表显示TOP10（只显示有发货的部门，避免无穷大）
         dept_return_with_ship = dept_return_sorted[dept_return_sorted['total_ship'] > 0]
         top_return = dept_return_with_ship.head(10)
         if not top_return.empty:
@@ -433,7 +416,6 @@ if not df_return.empty:
             fig_return.add_hline(y=30, line_dash="dash", line_color="orange", annotation_text="注意线 30%")
             st.plotly_chart(fig_return, use_container_width=True)
         
-        # 显示所有部门退货率（包含无数据的）
         with st.expander("📋 所有部门退货率明细"):
             dept_display = dept_return_sorted.copy()
             dept_display['退货率'] = dept_display['退货率'].apply(lambda x: f"{x:.2f}%")
@@ -443,7 +425,6 @@ if not df_return.empty:
             st.dataframe(dept_display[['dept', 'org_name', '净额', '发货额', '退货额', '退货率']], 
                          hide_index=True, use_container_width=True)
         
-        # 显示零发货但有退货的异常部门
         zero_ship_returns = dept_return[(dept_return['total_ship'] == 0) & (dept_return['total_return'] > 0)]
         if not zero_ship_returns.empty:
             st.warning(f"⚠️ 以下部门有退货但无发货记录：{', '.join(zero_ship_returns['dept'].tolist())}")
@@ -475,7 +456,6 @@ with st.spinner(f"加载透视数据（{period_label_p}）..."):
     df_pivot = fetch_complete_sales_summary(start_date_p, end_date_p, suffix)
 
 if not df_pivot.empty:
-    # 平台分类
     def classify_platform(shop_name):
         if not shop_name or not isinstance(shop_name, str):
             return '其他'
@@ -503,7 +483,6 @@ if not df_pivot.empty:
     
     df_pivot['platform'] = df_pivot['shop_name'].apply(classify_platform)
     
-    # 按组织、部门、平台、店铺聚合
     grouped = df_pivot.groupby(['org_name', 'dept', 'platform', 'shop_name']).agg(
         ship=('total_ship', 'sum'),
         return_amt=('total_return', 'sum'),
@@ -512,21 +491,17 @@ if not df_pivot.empty:
     grouped['退货率'] = (grouped['return_amt'] / (grouped['ship'] + 1e-5) * 100).round(2)
     grouped['退货率显示'] = grouped['退货率'].apply(lambda x: f"{x:.2f}%")
 
-    # 按组织净额排序
     org_order = grouped.groupby('org_name')['net'].sum().sort_values(ascending=False).index
     
-    # 显示所有组织
     for org in org_order:
         org_data = grouped[grouped['org_name'] == org]
         org_net = org_data['net'].sum()
         org_ship = org_data['ship'].sum()
         org_return = org_data['return_amt'].sum()
         
-        # 颜色标识：负值用红色
         color_icon = "🔴" if org_net < 0 else "🟢"
         with st.expander(f"{color_icon} 🏢 {org}  | 净额 ¥{org_net:,.2f} | 发货 ¥{org_ship:,.2f} | 退货 ¥{org_return:,.2f}"):
             
-            # 按部门展开
             dept_order = org_data.groupby('dept')['net'].sum().sort_values(ascending=False).index
             for dept in dept_order:
                 dept_data = org_data[org_data['dept'] == dept]
@@ -538,7 +513,6 @@ if not df_pivot.empty:
                 
                 with st.expander(f"{dept_color} 📊 {dept}  | 净额 ¥{dept_net:,.2f} | 退货率 {dept_return_rate:.1f}%"):
                     
-                    # 按平台展开
                     platform_order = dept_data.groupby('platform')['net'].sum().sort_values(ascending=False).index
                     for plat in platform_order:
                         plat_data = dept_data[dept_data['platform'] == plat]
@@ -555,11 +529,10 @@ if not df_pivot.empty:
 else:
     st.warning(f"{period_label_p} 无数据，无法显示透视表。")
 
-# ---------- 3.4 部门明细汇总表（包含所有部门，无数据显示0） ----------
+# ---------- 3.4 部门明细汇总表（包含所有部门） ----------
 st.markdown("---")
 st.markdown("#### 📋 部门明细汇总表（所有部门）")
 
-# 选择周期
 time_mode_detail = st.radio(
     "选择查看周期",
     options=["近7天", "月累计"],
@@ -578,29 +551,22 @@ else:
     period_label_detail = f"月累计（{base_date.strftime('%Y-%m')}）"
 
 with st.spinner(f"加载部门明细数据（{period_label_detail}）..."):
-    # 使用包含所有部门的汇总函数
     dept_summary_full = get_dept_summary_with_all(start_date_detail, end_date_detail, suffix)
 
 if not dept_summary_full.empty:
-    # 计算退货率
     dept_summary_full['退货率'] = (dept_summary_full['total_return'] / (dept_summary_full['total_ship'] + 1e-5) * 100).round(2)
     dept_summary_full['退货率显示'] = dept_summary_full['退货率'].apply(lambda x: f"{x:.2f}%")
     
-    # 格式化金额
     dept_summary_full['发货额'] = dept_summary_full['total_ship'].apply(lambda x: f"¥{x:,.2f}")
     dept_summary_full['退货额'] = dept_summary_full['total_return'].apply(lambda x: f"¥{x:,.2f}")
     dept_summary_full['净额'] = dept_summary_full['total_net'].apply(lambda x: f"¥{x:,.2f}")
-    
-    # 添加排名（按净额，但0值也参与排名）
     dept_summary_full['净额排名'] = dept_summary_full['total_net'].rank(ascending=False, method='min').astype(int)
     
-    # 显示汇总表
     st.markdown(f"**📊 部门明细汇总表（{period_label_detail}）**")
     total_depts = len(dept_summary_full)
     depts_with_data = dept_summary_full[dept_summary_full['total_net'] != 0].shape[0]
     st.caption(f"共 {total_depts} 个部门，其中 {depts_with_data} 个有销售数据，{total_depts - depts_with_data} 个无数据（显示为0）")
     
-    # 显示表格
     display_cols = ['净额排名', 'org_name', 'dept', '净额', '发货额', '退货额', '退货率显示']
     st.dataframe(
         dept_summary_full[display_cols].sort_values('净额排名'),
@@ -617,43 +583,33 @@ if not dept_summary_full.empty:
         }
     )
     
-    # 高亮无数据部门
     zero_depts = dept_summary_full[dept_summary_full['total_net'] == 0]['dept'].tolist()
     if zero_depts:
         st.info(f"📌 以下部门无销售数据：{', '.join(zero_depts)}")
     
-    # ========== 部门明细导出功能 ==========
+    # 导出功能
     st.markdown("---")
     st.markdown("#### 📥 导出部门明细数据")
     
-    # 导出选项
     col_export1, col_export2, col_export3 = st.columns(3)
-    
     with col_export1:
         export_format = st.selectbox(
             "选择导出格式",
             options=["Excel (.xlsx)", "CSV (.csv)"],
             key="export_format_select"
         )
-    
     with col_export2:
-        # 选择要导出的列
         export_cols = st.multiselect(
             "选择要导出的列",
             options=['org_name', 'dept', 'total_ship', 'total_return', 'total_net', '退货率'],
             default=['org_name', 'dept', 'total_ship', 'total_return', 'total_net', '退货率'],
             key="export_cols_select"
         )
-    
     with col_export3:
-        # 选择是否包含汇总行
         include_summary = st.checkbox("包含汇总行", value=True, key="export_include_summary")
     
-    # 准备导出数据
     def prepare_export_data():
         export_df = dept_summary_full.copy()
-        
-        # 只选择用户指定的列
         export_cols_mapping = {
             'org_name': '组织',
             'dept': '部门',
@@ -662,19 +618,13 @@ if not dept_summary_full.empty:
             'total_net': '净销售额',
             '退货率': '退货率(%)'
         }
-        
         selected_export_cols = [col for col in export_cols if col in export_cols_mapping]
         if not selected_export_cols:
             selected_export_cols = list(export_cols_mapping.keys())
-        
         export_df = export_df[selected_export_cols].copy()
         export_df.columns = [export_cols_mapping[col] for col in selected_export_cols]
-        
-        # 按净销售额排序（降序）
         if '净销售额' in export_df.columns:
             export_df = export_df.sort_values('净销售额', ascending=False)
-        
-        # 添加汇总行
         if include_summary:
             summary_row = {}
             for col in export_df.columns:
@@ -687,20 +637,16 @@ if not dept_summary_full.empty:
                 else:
                     summary_row[col] = '合计'
             export_df = pd.concat([export_df, pd.DataFrame([summary_row])], ignore_index=True)
-        
         return export_df
     
-    # 导出按钮
     if st.button("📥 下载部门明细数据", key="export_dept_detail"):
         try:
             export_df = prepare_export_data()
-            
             if export_format == "Excel (.xlsx)":
                 output = io.BytesIO()
                 with pd.ExcelWriter(output, engine='openpyxl') as writer:
                     export_df.to_excel(writer, sheet_name='部门明细', index=False)
                 output.seek(0)
-                
                 st.download_button(
                     label="✅ 点击下载 Excel 文件",
                     data=output,
@@ -709,7 +655,6 @@ if not dept_summary_full.empty:
                     key="download_excel_btn"
                 )
             else:
-                # CSV 导出
                 csv_data = export_df.to_csv(index=False, encoding='utf-8-sig')
                 st.download_button(
                     label="✅ 点击下载 CSV 文件",
@@ -722,14 +667,10 @@ if not dept_summary_full.empty:
         except Exception as e:
             st.error(f"导出失败：{e}")
     
-    # 预览导出数据
     with st.expander("👁️ 预览导出数据"):
         preview_df = prepare_export_data()
         st.dataframe(preview_df, hide_index=True, use_container_width=True)
-        
-        # 显示统计信息
         st.caption(f"📊 共 {len(preview_df)} 行数据（包含汇总行）")
-    
 else:
     st.warning(f"{period_label_detail} 无数据，无法显示部门明细。")
 
@@ -737,7 +678,6 @@ else:
 st.markdown("---")
 st.markdown("#### ⚠️ 异常决策预警")
 
-# 使用月累计数据或近7天数据
 if not df_period_main.empty:
     alert_df = df_period_main.groupby(['org_name', 'dept', 'shop_name']).agg(
         ship=('total_ship', 'sum'),
@@ -746,26 +686,20 @@ if not df_period_main.empty:
     ).reset_index()
     alert_df['退货率'] = (alert_df['return_amt'] / (alert_df['ship'] + 1e-5) * 100)
     
-    # 净额为负的店铺
     alert_negative = alert_df[alert_df['net'] < 0]
-    # 退货率>65%的店铺
     alert_high_return = alert_df[alert_df['退货率'] > 65]
-    # 退货率>80%的严重异常
     alert_critical_return = alert_df[alert_df['退货率'] > 80]
     
-    # 显示严重异常
     if not alert_critical_return.empty:
         st.error(f"🚨🚨 严重异常：{len(alert_critical_return)} 个店铺退货率超过80%：")
         for _, row in alert_critical_return.iterrows():
             st.error(f"  • {row['org_name']} → {row['dept']} → {row['shop_name']}，退货率 {row['退货率']:.1f}%，净额 ¥{row['net']:,.2f}")
     
-    # 显示净额为负
     if not alert_negative.empty:
         st.error(f"🚨 净销售额为负：{len(alert_negative)} 个店铺：")
         for _, row in alert_negative.iterrows():
             st.error(f"  • {row['org_name']} → {row['dept']} → {row['shop_name']}，净额 ¥{row['net']:,.2f}")
     
-    # 显示退货率偏高
     if not alert_high_return.empty:
         st.warning(f"⚠️ 退货率异常偏高（>65%）：{len(alert_high_return)} 个店铺：")
         for _, row in alert_high_return.iterrows():
@@ -774,12 +708,10 @@ if not df_period_main.empty:
     if alert_negative.empty and alert_high_return.empty and alert_critical_return.empty:
         st.success("🎉 所有部门/店铺运营正常，无重大异常。")
     
-    # 统计信息
     total_orgs = alert_df['org_name'].nunique()
     total_depts = alert_df['dept'].nunique()
     total_shops = alert_df['shop_name'].nunique()
     st.caption(f"📊 共分析 {total_orgs} 个组织，{total_depts} 个部门，{total_shops} 个店铺")
-    
 else:
     st.info("当前周期无数据，无法预警。")
 
@@ -803,7 +735,6 @@ selected_model_name = st.selectbox(
 selected_model = model_options[selected_model_name]
 
 if st.button("🚀 生成智能总结", key="org_generate_ai_summary"):
-    # 准备数据
     total_net = mtd_net if not df_mtd.empty else 0
     return_rate = mtd_return_rate if not df_mtd.empty else 0
     
@@ -818,11 +749,9 @@ if st.button("🚀 生成智能总结", key="org_generate_ai_summary"):
         net_prev = 0
         change_7d = 0
     
-    # 组织排行
     if not df_period_main.empty:
         org_net = df_period_main.groupby('org_name')['total_net'].sum().sort_values(ascending=False).head(5)
         org_text = "\n".join([f"{i+1}. {org}: ¥{amt:,.0f}" for i, (org, amt) in enumerate(org_net.items())]) if not org_net.empty else "暂无"
-        # 负值组织
         org_negative = df_period_main.groupby('org_name')['total_net'].sum()
         org_negative = org_negative[org_negative < 0]
         neg_org_text = "\n".join([f"{org}: ¥{amt:,.0f}" for org, amt in org_negative.items()]) if not org_negative.empty else "无"
@@ -830,7 +759,6 @@ if st.button("🚀 生成智能总结", key="org_generate_ai_summary"):
         org_text = "暂无"
         neg_org_text = "无"
     
-    # 部门退货率排行（从完整部门列表获取）
     dept_summary_full = get_dept_summary_with_all(month_start, latest_date, suffix)
     if not dept_summary_full.empty:
         dept_summary_full['退货率'] = (dept_summary_full['total_return'] / (dept_summary_full['total_ship'] + 1e-5) * 100)
@@ -839,7 +767,6 @@ if st.button("🚀 生成智能总结", key="org_generate_ai_summary"):
     else:
         dept_text = "暂无"
     
-    # 统计信息（包含所有部门）
     all_depts = load_all_depts()
     total_depts_all = len(all_depts)
     depts_with_data = dept_summary_full[dept_summary_full['total_net'] != 0].shape[0] if not dept_summary_full.empty else 0
