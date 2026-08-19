@@ -369,6 +369,18 @@ def save_product_sales(df_orders, suffix=None):
                 "master_category": row.get("category", None),
                 "has_newbie_coupon": row.get("has_newbie_coupon", False)
             }
+
+    # ---- 探测 anchor_name 列是否存在 ----
+    table_name = get_table_name("product_sales", suffix)
+    use_anchor = True
+    try:
+        supabase.table(table_name).select("anchor_name").limit(1).execute()
+    except Exception as e:
+        if "does not exist" in str(e).lower() or "column" in str(e).lower():
+            use_anchor = False
+        else:
+            raise
+
     temp_records = {}
     for _, row in df_orders.iterrows():
         remark = row["备注"]
@@ -379,10 +391,10 @@ def save_product_sales(df_orders, suffix=None):
         short_code = parsed["style_code"]
         img = master_map.get(short_code, {}).get("image_url")
         cat = master_map.get(short_code, {}).get("master_category")
-        # 提取主播名称
         anchor_name = extract_anchor(remark) or "NONE"
+
         if remark not in temp_records:
-            temp_records[remark] = {
+            rec = {
                 "remark": remark,
                 "sale_date": row["日期"].strftime("%Y-%m-%d"),
                 "shop_name": row["店铺名称"],
@@ -399,19 +411,22 @@ def save_product_sales(df_orders, suffix=None):
                 "return_amount": max(-amount, 0),
                 "net_amount": amount,
                 "image_url": img,
-                "master_category": cat,
-                "anchor_name": anchor_name   # ✅ 新增
+                "master_category": cat
             }
+            # 仅当列存在时才添加 anchor_name
+            if use_anchor:
+                rec["anchor_name"] = anchor_name
+            temp_records[remark] = rec
         else:
             existing = temp_records[remark]
             existing["ship_amount"] += max(amount, 0)
             existing["return_amount"] += max(-amount, 0)
             existing["net_amount"] += amount
-            if existing.get("anchor_name") in [None, "", "NONE"] and anchor_name not in [None, "", "NONE"]:
+            if use_anchor and existing.get("anchor_name") in [None, "", "NONE"] and anchor_name not in [None, "", "NONE"]:
                 existing["anchor_name"] = anchor_name
+
     records = list(temp_records.values())
     if records:
-        table_name = get_table_name("product_sales", suffix)
         batch_size = 500
         for i in range(0, len(records), batch_size):
             batch = records[i:i+batch_size]
