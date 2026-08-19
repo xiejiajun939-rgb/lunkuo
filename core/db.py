@@ -58,7 +58,13 @@ def load_dimension_mapping():
 # ---------- 核心聚合函数（缓存60秒） ----------
 @st.cache_data(ttl=60)
 def fetch_sales_summary(start_date, end_date, suffix="", view_mode=None):
+    """
+    获取销售汇总数据
+    线上数据：使用 (shop_name, anchor) 匹配 mapping
+    线下数据：直接使用 shop_name 匹配 mapping（anchor_name='NONE'）
+    """
     required_columns = ["sale_date", "org_name", "dept", "shop_name", "anchor", "total_ship", "total_return", "total_net"]
+    
     if supabase is None:
         return pd.DataFrame(columns=required_columns)
 
@@ -67,7 +73,7 @@ def fetch_sales_summary(start_date, end_date, suffix="", view_mode=None):
             df['shop_name'] = df['shop_name'].astype(str).str.strip().str.upper()
         return df
 
-    # ---- 探测 anchor_name 列 ----
+    # ---- 探测 anchor_name 列是否存在 ----
     product_table = get_table_name("product_sales", suffix)
     use_anchor = True
     try:
@@ -79,7 +85,7 @@ def fetch_sales_summary(start_date, end_date, suffix="", view_mode=None):
             raise
 
     # ============================================================
-    # 1. 线上数据处理
+    # 1. 线上数据处理（使用 anchor）
     # ============================================================
     online_data = []
     page = 0
@@ -106,6 +112,7 @@ def fetch_sales_summary(start_date, end_date, suffix="", view_mode=None):
             st.warning(f"查询线上数据出错：{e}")
             break
 
+    # 处理线上数据
     if online_data:
         df_online = pd.DataFrame(online_data)
         df_online["sale_date"] = pd.to_datetime(df_online["sale_date"])
@@ -113,17 +120,20 @@ def fetch_sales_summary(start_date, end_date, suffix="", view_mode=None):
             df_online["anchor"] = df_online["anchor_name"].fillna("NONE")
         else:
             df_online["anchor"] = df_online["remark"].apply(extract_anchor).fillna("NONE")
+        # 聚合
         df_online = df_online.groupby(["sale_date", "shop_name", "anchor"], as_index=False).agg({
             "ship_amount": "sum",
             "return_amount": "sum",
             "net_amount": "sum"
         })
         df_online = clean_shop_names(df_online)
+        # 标记来源
+        df_online["source"] = "online"
     else:
         df_online = pd.DataFrame()
 
     # ============================================================
-    # 2. 线下数据处理
+    # 2. 线下数据处理（无 anchor，直接用 shop_name）
     # ============================================================
     df_offline = pd.DataFrame()
     if suffix == "_all":
@@ -136,57 +146,61 @@ def fetch_sales_summary(start_date, end_date, suffix="", view_mode=None):
                 end_ts = pd.Timestamp(end_date) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
                 df_offline = df_offline[(df_offline["sale_date"] >= start_ts) & (df_offline["sale_date"] <= end_ts)]
                 if not df_offline.empty:
-                    # 线下数据没有 anchor，但我们需要一个占位符，后续映射不会用它
-                    df_offline["anchor"] = "OFFLINE_PLACEHOLDER"
+                    # 线下数据没有 anchor，设为 None
+                    df_offline["anchor"] = None
                     df_offline = df_offline.groupby(["sale_date", "shop_name", "anchor"], as_index=False).agg({
                         "ship_amount": "sum",
                         "return_amount": "sum",
                         "net_amount": "sum"
                     })
                     df_offline = clean_shop_names(df_offline)
+                    df_offline["source"] = "offline"
         except Exception as e:
             st.warning(f"查询线下数据出错：{e}")
 
     # ============================================================
-    # 3. 分别映射
+    # 3. 加载 mapping 表，准备映射字典
     # ============================================================
     mapping_df = load_dimension_mapping()
     if suffix == "_all" and not mapping_df.empty:
         mapping_df['shop_name'] = mapping_df['shop_name'].astype(str).str.strip().str.upper()
         mapping_df['anchor_name'] = mapping_df['anchor_name'].astype(str).str.strip().str.upper()
         mapping_unique = mapping_df.drop_duplicates(subset=['shop_name', 'anchor_name'], keep='first')
-
-        # 线上映射字典 (shop_name, anchor)
+        
+        # ----- 线上映射字典 (shop_name, anchor) -> (org_name, dept) -----
         key_to_org = mapping_unique.set_index(['shop_name', 'anchor_name'])['org_name'].to_dict()
         key_to_dept = mapping_unique.set_index(['shop_name', 'anchor_name'])['dept'].to_dict()
-
-        # 线下映射字典：只取 anchor_name='NONE' 的记录，按 shop_name 映射
+        
+        # ----- 线下映射字典 shop_name -> (org_name, dept)  只取 anchor_name='NONE' 的记录 -----
         mapping_none = mapping_unique[mapping_unique['anchor_name'] == 'NONE']
         shop_to_org = mapping_none.set_index('shop_name')['org_name'].to_dict()
         shop_to_dept = mapping_none.set_index('shop_name')['dept'].to_dict()
-
-        # 映射线上
-        if not df_online.empty:
-            df_online['org_name'] = df_online.apply(lambda row: key_to_org.get((row['shop_name'], row['anchor']), None), axis=1)
-            df_online['dept'] = df_online.apply(lambda row: key_to_dept.get((row['shop_name'], row['anchor']), None), axis=1)
-            df_online['org_name'] = df_online['org_name'].fillna('未分配组织')
-            df_online['dept'] = df_online['dept'].fillna('未分配部门')
-
-        # 映射线下
-        if not df_offline.empty:
-            df_offline['org_name'] = df_offline['shop_name'].map(shop_to_org).fillna('未分配组织')
-            df_offline['dept'] = df_offline['shop_name'].map(shop_to_dept).fillna('未分配部门')
     else:
-        # 没有 mapping 表时，全部置为未分配
-        if not df_online.empty:
-            df_online['org_name'] = '未分配组织'
-            df_online['dept'] = '未分配部门'
-        if not df_offline.empty:
-            df_offline['org_name'] = '未分配组织'
-            df_offline['dept'] = '未分配部门'
+        key_to_org = {}
+        key_to_dept = {}
+        shop_to_org = {}
+        shop_to_dept = {}
 
     # ============================================================
-    # 4. 合并
+    # 4. 分别映射线上和线下数据
+    # ============================================================
+    # 4.1 线上数据映射
+    if not df_online.empty:
+        # 使用 (shop_name, anchor) 映射
+        df_online['org_name'] = df_online.apply(lambda row: key_to_org.get((row['shop_name'], row['anchor']), None), axis=1)
+        df_online['dept'] = df_online.apply(lambda row: key_to_dept.get((row['shop_name'], row['anchor']), None), axis=1)
+        df_online['org_name'] = df_online['org_name'].fillna('未分配组织')
+        df_online['dept'] = df_online['dept'].fillna('未分配部门')
+    
+    # 4.2 线下数据映射（直接用 shop_name）
+    if not df_offline.empty:
+        df_offline['org_name'] = df_offline['shop_name'].map(shop_to_org).fillna('未分配组织')
+        df_offline['dept'] = df_offline['shop_name'].map(shop_to_dept).fillna('未分配部门')
+        # 线下数据的 anchor 应该置为 'NONE' 或 None，但为了统一，我们设置一个字符串值，便于后续处理（但不会用于映射）
+        df_offline['anchor'] = 'NONE'   # 统一，因为线下没有主播
+
+    # ============================================================
+    # 5. 合并线上和线下
     # ============================================================
     if df_online.empty and df_offline.empty:
         return pd.DataFrame(columns=required_columns)
@@ -197,14 +211,14 @@ def fetch_sales_summary(start_date, end_date, suffix="", view_mode=None):
     else:
         df = pd.concat([df_online, df_offline], ignore_index=True)
 
-    # 重命名列
+    # ---- 重命名 ----
     df = df.rename(columns={
         "ship_amount": "total_ship",
         "return_amount": "total_return",
         "net_amount": "total_net"
     })
 
-    # 确保列存在
+    # ---- 确保所有列存在 ----
     for col in required_columns:
         if col not in df.columns:
             if col in ["total_ship", "total_return", "total_net"]:
@@ -214,7 +228,7 @@ def fetch_sales_summary(start_date, end_date, suffix="", view_mode=None):
             else:
                 df[col] = "未知"
 
-    # view_mode 过滤
+    # ---- view_mode 过滤 ----
     view_mode_to_use = view_mode if view_mode is not None else st.session_state.get("view_mode")
     if view_mode_to_use == "shop":
         if 'dept' in df.columns:
