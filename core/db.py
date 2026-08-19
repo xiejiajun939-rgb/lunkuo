@@ -152,21 +152,16 @@ def fetch_sales_summary(start_date, end_date, suffix="", view_mode=None):
                         "net_amount": "sum"
                     })
                     if mapping_exists:
-                        mapping_clean = mapping_df.copy()
-                        mapping_clean['shop_name'] = mapping_clean['shop_name'].astype(str).str.strip().str.upper()
-                        mapping_clean['org_name'] = mapping_clean['org_name'].astype(str).str.strip().str.upper()
-                        mapping_clean['dept'] = mapping_clean['dept'].astype(str).str.strip().str.upper()
-                        # 只取 anchor_name='NONE' 的记录（线下匹配）
-                        mapping_none = mapping_clean[mapping_clean['anchor_name'] == 'NONE']
-                        # 1. 用 shop_name 匹配 org_name
-                        shop_to_org = mapping_none.drop_duplicates(subset=['shop_name'], keep='first').set_index('shop_name')['org_name'].to_dict()
-                        # 2. 构建 (shop_name, org_name) -> dept 的映射
-                        key_to_dept = mapping_none.drop_duplicates(subset=['shop_name', 'org_name'], keep='first').set_index(['shop_name', 'org_name'])['dept'].to_dict()
+                        # 构建线下映射：shop_name -> org_name, dept
+                        # 只取 anchor_name='NONE' 的记录（线下数据无主播）
+                        mapping_none = mapping_df[mapping_df['anchor_name'] == 'NONE'].copy()
+                        # 按 shop_name 去重，保留第一条
+                        mapping_none_unique = mapping_none.drop_duplicates(subset=['shop_name'], keep='first')
+                        shop_to_org = mapping_none_unique.set_index('shop_name')['org_name'].to_dict()
+                        shop_to_dept = mapping_none_unique.set_index('shop_name')['dept'].to_dict()
                         # 应用映射
                         df_offline['org_name'] = df_offline['shop_name'].map(shop_to_org).fillna('未分配组织')
-                        df_offline['dept'] = df_offline.apply(
-                            lambda row: key_to_dept.get((row['shop_name'], row['org_name']), '未分配部门'), axis=1
-                        )
+                        df_offline['dept'] = df_offline['shop_name'].map(shop_to_dept).fillna('未分配部门')
                     else:
                         df_offline['org_name'] = '未分配组织'
                         df_offline['dept'] = '未分配部门'
