@@ -173,7 +173,6 @@ def login():
                 st.session_state.username = username
                 st.session_state.role = users[username]["role"]
                 st.session_state.table_suffix = users[username]["default_suffix"]
-                # 根据默认后缀设置 view_mode
                 if st.session_state.table_suffix == "":
                     st.session_state.view_mode = "normal"
                 elif st.session_state.table_suffix == "_all":
@@ -369,7 +368,6 @@ def clear_targets(suffix=None):
     st.session_state.target_dict = {}
     st.rerun()
 
-# ========== save_product_sales 自动探测 anchor_name 列 ==========
 def save_product_sales(df_orders, suffix=None):
     if supabase is None:
         return
@@ -444,7 +442,6 @@ def save_product_sales(df_orders, suffix=None):
             batch = records[i:i+batch_size]
             supabase.table(table_name).upsert(batch, on_conflict="remark").execute()
 
-# ========== save_offline_sales（线下数据不加 anchor_name） ==========
 def save_offline_sales(df_orders):
     if supabase is None or df_orders.empty:
         return
@@ -473,7 +470,6 @@ def save_offline_sales(df_orders):
                 time.sleep(2 ** attempt)
     refresh_materialized_view("_all")
 
-# ========== 其他辅助函数 ==========
 def validate_order_data(df):
     try:
         required = ["日期", "金额/时间", "备注"]
@@ -680,7 +676,6 @@ if st.session_state.target_dict == {}:
 # ========== 构建导航页面（根据权限动态显示） ==========
 from streamlit import navigation, Page
 
-# 定义所有可用页面（显示名称 → 文件路径）
 all_pages = {
     "📊 经营驾驶舱": "pages/dashboard.py",
     "📋 每日明细": "pages/daily_detail.py",
@@ -692,7 +687,6 @@ all_pages = {
     "⚙️ 系统设置": "pages/settings.py",
 }
 
-# 根据角色和权限过滤
 role = st.session_state.role
 username = st.session_state.username
 current_suffix = st.session_state.table_suffix
@@ -707,22 +701,17 @@ else:
         allowed = perms[""]
     allowed_labels = allowed
 
-# 构建 Page 对象列表
 pages_to_show = []
 for label, path in all_pages.items():
-    # 系统设置仅管理员
     if label == "⚙️ 系统设置" and role != "admin":
         continue
-    # 组织与部门分析仅 _all
     if label == "🏢 组织与部门分析" and current_suffix != "_all":
         continue
-    # 主播分析仅在直播或全部数据时显示
     if label == "🎤 主播分析" and current_suffix not in ["_live", "_all"]:
         continue
     if label in allowed_labels:
         pages_to_show.append(Page(path, title=label))
 
-# 如果没有任何页面，则显示默认（防止空导航）
 if not pages_to_show:
     pages_to_show = [
         Page("pages/dashboard.py", title="📊 经营驾驶舱"),
@@ -730,20 +719,55 @@ if not pages_to_show:
         Page("pages/product_page.py", title="📦 商品分析"),
     ]
 
-# 创建导航并运行
 nav = st.navigation(pages_to_show, position="sidebar")
 nav.run()
 
 # ========== 侧边栏额外内容 ==========
-# 注意：导航菜单已经占据了侧边栏顶部，我们在此添加其他内容
-# 非管理员只显示退出登录，管理员显示完整功能
 with st.sidebar:
-    if st.session_state.role == "admin":
+    if st.session_state.role != "admin":
+        # 非管理员：只显示数据源切换 + 退出登录
+        st.subheader("🔄 数据源模式切换")
+        suffix_names = {"": "非直播数据", "_all": "全部数据"}
+        current_source_name = suffix_names.get(st.session_state.table_suffix, "未知")
+        user_info = st.session_state.sub_users.get(st.session_state.username, {})
+        perms = user_info.get("permissions", {})
+        available = {}
+        for name, suf in [("非直播数据", ""), ("全部数据", "_all")]:
+            if suf in perms and perms[suf]:
+                available[name] = suf
+        if not available:
+            available = {"非直播数据": ""}
+        options = list(available.keys())
+        if current_source_name in options:
+            default_index = options.index(current_source_name)
+        else:
+            default_index = 0
+        selected_source = st.selectbox("选择数据源", options=options, index=default_index, key="source_selectbox_nonadmin")
+        if st.button("✅ 确认切换", key="confirm_switch_nonadmin"):
+            new_suffix = available[selected_source]
+            if new_suffix != st.session_state.table_suffix:
+                st.session_state.table_suffix = new_suffix
+                # 同步更新 view_mode
+                if new_suffix == "":
+                    st.session_state.view_mode = "normal"
+                elif new_suffix == "_all":
+                    st.session_state.view_mode = "all"
+                else:
+                    st.session_state.view_mode = "live"
+                st.cache_data.clear()
+                st.rerun()
+        st.markdown("---")
+        if st.button("🚪 退出登录", key="logout_final"):
+            st.session_state.authenticated = False
+            for key in ["username", "role", "table_suffix", "view_mode"]:
+                if key in st.session_state:
+                    del st.session_state[key]
+            st.rerun()
+    else:
+        # 管理员完整侧边栏
         st.sidebar.markdown("---")
         st.sidebar.markdown("[🏠 主页](/)")
         st.sidebar.markdown("---")
-
-        # 数据加载
         st.header("📂 数据加载")
         st.subheader("🔄 数据源切换")
         suffix_names = {"": "非直播数据", "_all": "全部数据"}
@@ -778,7 +802,6 @@ with st.sidebar:
                 st.rerun()
         st.markdown("---")
 
-        # 文件上传与工具（仅管理员）
         current_display_suffix = st.session_state.table_suffix
         current_view_mode = st.session_state.view_mode
 
@@ -841,7 +864,6 @@ with st.sidebar:
             else:
                 st.warning("没有文件被成功处理，请检查文件格式和内容")
 
-        # 根据 view_mode 显示不同的上传控件
         if current_view_mode == "normal":
             st.subheader("📁 非直播数据上传")
             uploaded_orders = st.file_uploader(
@@ -973,17 +995,18 @@ with st.sidebar:
         with st.expander("📦 批量礼金标签管理"):
             batch_manage_newbie_coupon()
 
-    # 退出登录（对所有用户显示）
-    st.markdown("---")
-    if st.button("🚪 退出登录", key="logout_final"):
-        st.session_state.authenticated = False
-        for key in ["username", "role", "table_suffix", "view_mode"]:
-            if key in st.session_state:
-                del st.session_state[key]
-        st.rerun()
+        # 管理员也显示退出登录
+        st.markdown("---")
+        if st.button("🚪 退出登录", key="logout_admin"):
+            st.session_state.authenticated = False
+            for key in ["username", "role", "table_suffix", "view_mode"]:
+                if key in st.session_state:
+                    del st.session_state[key]
+            st.rerun()
 
 # ========== 主内容区（根路径欢迎信息） ==========
 if "page" not in st.query_params:
+    suffix_names = {"": "非直播数据", "_all": "全部数据"}
     st.markdown("""
     <div style="display: flex; justify-content: center; align-items: center; height: 50vh; flex-direction: column;">
         <h1 style="color: #1e293b;">📊 欢迎使用数据罗盘</h1>
