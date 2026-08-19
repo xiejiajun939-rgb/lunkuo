@@ -177,10 +177,9 @@ def login():
                 if st.session_state.table_suffix == "":
                     st.session_state.view_mode = "normal"
                 elif st.session_state.table_suffix == "_all":
-                    # 默认全部数据模式为 all，但可由用户切换
                     st.session_state.view_mode = "all"
                 else:
-                    st.session_state.view_mode = "live"  # 直播模式暂不处理
+                    st.session_state.view_mode = "live"
                 st.cache_data.clear()
                 st.rerun()
             else:
@@ -211,12 +210,10 @@ if "monthly_actual" not in st.session_state:
 if "processing_upload" not in st.session_state:
     st.session_state.processing_upload = False
 if "table_suffix" not in st.session_state:
-    st.session_state.table_suffix = ""   # 默认非直播
+    st.session_state.table_suffix = ""
 if "uploaded_file_hashes" not in st.session_state:
     st.session_state.uploaded_file_hashes = []
-# 新增 view_mode：normal / shop / all
 if "view_mode" not in st.session_state:
-    # 根据 table_suffix 智能设置
     if st.session_state.table_suffix == "":
         st.session_state.view_mode = "normal"
     elif st.session_state.table_suffix == "_all":
@@ -387,7 +384,6 @@ def save_product_sales(df_orders, suffix=None):
                 "has_newbie_coupon": row.get("has_newbie_coupon", False)
             }
 
-    # ---- 探测 anchor_name 列是否存在 ----
     table_name = get_table_name("product_sales", suffix)
     use_anchor = True
     try:
@@ -681,7 +677,7 @@ rebuild_daily_data(st.session_state.table_suffix)
 if st.session_state.target_dict == {}:
     st.session_state.target_dict = load_targets(st.session_state.table_suffix)
 
-# ========== 构建导航页面（根据 view_mode 动态显示） ==========
+# ========== 构建导航页面（根据权限动态显示） ==========
 from streamlit import navigation, Page
 
 # 定义所有可用页面（显示名称 → 文件路径）
@@ -700,9 +696,7 @@ all_pages = {
 role = st.session_state.role
 username = st.session_state.username
 current_suffix = st.session_state.table_suffix
-view_mode = st.session_state.view_mode
 
-# 基础权限过滤（子账号）
 if role == "admin":
     allowed_labels = list(all_pages.keys())
 else:
@@ -719,17 +713,12 @@ for label, path in all_pages.items():
     # 系统设置仅管理员
     if label == "⚙️ 系统设置" and role != "admin":
         continue
-    # 根据 view_mode 过滤
-    if view_mode == "normal":
-        # 非直播模式：隐藏主播分析、组织与部门分析（组织与部门分析仅在 _all 下显示，这里也隐藏）
-        if label in ["🎤 主播分析", "🏢 组织与部门分析"]:
-            continue
-    elif view_mode == "shop":
-        # 小店运营模式：隐藏主播分析、组织与部门分析（数据源为 _all，但显示非直播页面）
-        if label in ["🎤 主播分析", "🏢 组织与部门分析"]:
-            continue
-    # view_mode == "all"：显示所有页面，不做额外过滤（但组织与部门分析仅在 _all 后缀下有意义，不过 view_mode=all 时后缀一定是 _all，所以没问题）
-    # 权限过滤
+    # 组织与部门分析仅 _all
+    if label == "🏢 组织与部门分析" and current_suffix != "_all":
+        continue
+    # 主播分析仅在直播或全部数据时显示
+    if label == "🎤 主播分析" and current_suffix not in ["_live", "_all"]:
+        continue
     if label in allowed_labels:
         pages_to_show.append(Page(path, title=label))
 
@@ -746,55 +735,53 @@ nav = st.navigation(pages_to_show, position="sidebar")
 nav.run()
 
 # ========== 侧边栏额外内容 ==========
+# 注意：导航菜单已经占据了侧边栏顶部，我们在此添加其他内容
+# 非管理员只显示退出登录，管理员显示完整功能
 with st.sidebar:
-    st.sidebar.markdown("---")
-    st.sidebar.markdown("[🏠 主页](/)")
-    st.sidebar.markdown("---")
-
-    # 数据加载
-    st.header("📂 数据加载")
-    st.subheader("🔄 数据源模式切换")
-    
-    # 模式定义
-    mode_options = {
-        "非直播数据": {"view_mode": "normal", "suffix": ""},
-        "小店运营": {"view_mode": "shop", "suffix": "_all"},
-        "全部数据": {"view_mode": "all", "suffix": "_all"},
-    }
-    # 确定当前选中的模式名称
-    current_mode_name = None
-    for name, opts in mode_options.items():
-        if opts["view_mode"] == st.session_state.view_mode and opts["suffix"] == st.session_state.table_suffix:
-            current_mode_name = name
-            break
-    if current_mode_name is None:
-        # 可能处于非法状态，默认非直播
-        current_mode_name = "非直播数据"
-    
-    selected_mode = st.selectbox(
-        "选择模式",
-        options=list(mode_options.keys()),
-        index=list(mode_options.keys()).index(current_mode_name),
-        key="mode_selectbox_sidebar"
-    )
-    if st.button("✅ 确认切换", key="confirm_mode_switch_sidebar"):
-        new_mode = mode_options[selected_mode]
-        st.session_state.view_mode = new_mode["view_mode"]
-        st.session_state.table_suffix = new_mode["suffix"]
-        st.cache_data.clear()
-        st.rerun()
-    st.markdown("---")
-
-    # 显示当前数据源信息
-    suffix_names = {"": "非直播数据", "_all": "全部数据（含线下）"}
-    current_source_name = suffix_names.get(st.session_state.table_suffix, "未知")
-    st.info(f"📌 当前数据源：**{current_source_name}** | 模式：**{selected_mode}**")
-
-    # 文件上传与工具（仅管理员）
     if st.session_state.role == "admin":
+        st.sidebar.markdown("---")
+        st.sidebar.markdown("[🏠 主页](/)")
+        st.sidebar.markdown("---")
+
+        # 数据加载
+        st.header("📂 数据加载")
+        st.subheader("🔄 数据源切换")
+        suffix_names = {"": "非直播数据", "_all": "全部数据"}
+        current_source_name = suffix_names.get(st.session_state.table_suffix, "未知")
+        st.info(f"📌 当前正在查看：**{current_source_name}**")
+
+        if st.session_state.role == "admin":
+            available_suffixes = {"非直播数据": "", "全部数据": "_all"}
+        else:
+            user_info = st.session_state.sub_users.get(st.session_state.username, {})
+            default_suffix = user_info.get("default_suffix", "")
+            perms = user_info.get("permissions", {})
+            available = {}
+            for name, suf in [("非直播数据", ""), ("全部数据", "_all")]:
+                if suf in perms and perms[suf]:
+                    available[name] = suf
+            if not available:
+                available = {"非直播数据": ""}
+            available_suffixes = available
+
+        options = list(available_suffixes.keys())
+        if current_source_name in options:
+            default_index = options.index(current_source_name)
+        else:
+            default_index = 0
+        selected_source = st.selectbox("选择数据源", options=options, index=default_index, key="source_selectbox_sidebar")
+        if st.button("✅ 确认切换", key="confirm_switch_sidebar"):
+            new_suffix = available_suffixes[selected_source]
+            if new_suffix != st.session_state.table_suffix:
+                st.session_state.table_suffix = new_suffix
+                st.cache_data.clear()
+                st.rerun()
+        st.markdown("---")
+
+        # 文件上传与工具（仅管理员）
         current_display_suffix = st.session_state.table_suffix
         current_view_mode = st.session_state.view_mode
-        
+
         def handle_multiple_upload(uploaded_files, suffix, file_type="order"):
             if st.session_state.processing_upload:
                 st.warning("上一个文件正在处理中，请稍后...")
@@ -853,13 +840,12 @@ with st.sidebar:
                 st.rerun()
             else:
                 st.warning("没有文件被成功处理，请检查文件格式和内容")
-        
+
         # 根据 view_mode 显示不同的上传控件
         if current_view_mode == "normal":
-            # 非直播模式：上传到空后缀
             st.subheader("📁 非直播数据上传")
             uploaded_orders = st.file_uploader(
-                "选择订单文件 (Excel)，支持多选", type=["xlsx", "xls"], 
+                "选择订单文件 (Excel)，支持多选", type=["xlsx", "xls"],
                 key="order_uploader_normal_multi", accept_multiple_files=True
             )
             if uploaded_orders and st.button("📤 确认上传", key="confirm_upload_normal_multi"):
@@ -870,12 +856,10 @@ with st.sidebar:
             )
             if target_files and st.button("📤 确认上传目标", key="confirm_target_normal_multi"):
                 handle_multiple_upload(target_files, "", "target")
-        
         elif current_view_mode == "shop":
-            # 小店运营模式：上传到 _all 但只显示订单和目标（与非直播相同界面）
             st.subheader("🏪 小店运营数据上传")
             uploaded_orders = st.file_uploader(
-                "选择订单文件 (Excel)，支持多选", type=["xlsx", "xls"], 
+                "选择订单文件 (Excel)，支持多选", type=["xlsx", "xls"],
                 key="order_uploader_shop_multi", accept_multiple_files=True
             )
             if uploaded_orders and st.button("📤 确认上传", key="confirm_upload_shop_multi"):
@@ -886,9 +870,7 @@ with st.sidebar:
             )
             if target_files and st.button("📤 确认上传目标", key="confirm_target_shop_multi"):
                 handle_multiple_upload(target_files, "_all", "target")
-        
-        else:  # view_mode == "all"
-            # 全部数据模式：显示完整上传面板（含线下收入、组织目标等）
+        else:
             st.subheader("📊 全部数据上传")
             uploaded_orders = st.file_uploader(
                 "选择订单文件 (Excel)，支持多选", type=["xlsx", "xls"],
@@ -926,10 +908,9 @@ with st.sidebar:
                     st.rerun()
                 except Exception as e:
                     st.error(f"上传失败：{e}")
-        
+
         st.markdown("---")
         st.header("⚙️ 工具")
-        # 组织目标管理只在全部数据模式下显示（view_mode == "all"）
         if st.session_state.view_mode == "all":
             st.markdown("---")
             st.subheader("📊 组织目标管理")
@@ -956,13 +937,13 @@ with st.sidebar:
                     st.rerun()
                 except Exception as e:
                     st.error(f"上传失败：{e}")
-        
+
         template_df = pd.DataFrame({"店铺名称": ["示例店铺A", "示例店铺B"], "目标金额": [100000, 200000]})
         template_bytes = io.BytesIO()
         with pd.ExcelWriter(template_bytes, engine='openpyxl') as writer:
             template_df.to_excel(writer, index=False)
         st.download_button("📄 下载目标模板", data=template_bytes.getvalue(), file_name="目标模板.xlsx", key="download_template_final")
-        
+
         if st.button("🔄 重置上传记录（允许重新上传相同文件）", key="reset_upload_hashes"):
             st.session_state.uploaded_file_hashes = []
             st.success("已重置上传记录，现在可以重新上传相同文件")
@@ -991,10 +972,9 @@ with st.sidebar:
             manage_newbie_coupon()
         with st.expander("📦 批量礼金标签管理"):
             batch_manage_newbie_coupon()
-    else:
-        st.info("您只有查看权限，无法上传文件。如需上传，请联系管理员。")
+
+    # 退出登录（对所有用户显示）
     st.markdown("---")
-    
     if st.button("🚪 退出登录", key="logout_final"):
         st.session_state.authenticated = False
         for key in ["username", "role", "table_suffix", "view_mode"]:
