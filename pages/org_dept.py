@@ -874,17 +874,6 @@ if st.session_state.get("table_suffix") == "_all":
     try:
         supabase = init_supabase()
         if supabase:
-            # 先获取表的所有列名（用于展示）
-            # 使用 head(0) 获取空 DataFrame 的列结构（实际上我们直接查询一条数据获取列）
-            test_resp = supabase.table("offline_sales_all").select("*").limit(1).execute()
-            if test_resp.data:
-                df_test = pd.DataFrame(test_resp.data)
-                cols = df_test.columns.tolist()
-                st.write("线下表列名：", cols)
-            else:
-                cols = []
-                st.info("线下表无数据")
-            
             # 查询 2026-08-18 的数据
             resp = supabase.table("offline_sales_all")\
                 .select("*")\
@@ -893,14 +882,9 @@ if st.session_state.get("table_suffix") == "_all":
             if resp.data:
                 df_debug = pd.DataFrame(resp.data)
                 st.write(f"2026-08-18 共有 {len(df_debug)} 条线下记录")
-                
-                # 尝试筛选包含'唯品会'的记录（不区分大小写）
+                # 尝试筛选包含'唯品会'的记录
                 mask = df_debug['shop_name'].str.contains('唯品会', case=False, na=False)
-                # 如果存在 org_name 列，也加入筛选
-                if 'org_name' in df_debug.columns:
-                    mask = mask | df_debug['org_name'].str.contains('唯品会', case=False, na=False)
                 df_vip = df_debug[mask]
-                
                 if not df_vip.empty:
                     st.success(f"找到 {len(df_vip)} 条唯品会相关记录")
                     st.dataframe(df_vip, use_container_width=True)
