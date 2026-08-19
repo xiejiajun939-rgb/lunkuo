@@ -67,11 +67,6 @@ def fetch_sales_summary(start_date, end_date, suffix="", view_mode=None):
     if supabase is None:
         return pd.DataFrame(columns=required_columns)
 
-    def clean_str_upper(s):
-        if isinstance(s, str):
-            return s.strip().upper()
-        return s
-
     # ---- 加载 mapping 表 ----
     mapping_df = load_dimension_mapping()
     mapping_exists = suffix == "_all" and not mapping_df.empty
@@ -161,21 +156,18 @@ def fetch_sales_summary(start_date, end_date, suffix="", view_mode=None):
                         mapping_clean['shop_name'] = mapping_clean['shop_name'].astype(str).str.strip().str.upper()
                         mapping_clean['org_name'] = mapping_clean['org_name'].astype(str).str.strip().str.upper()
                         mapping_clean['dept'] = mapping_clean['dept'].astype(str).str.strip().str.upper()
-                        dept_lookup = {}
-                        shop_to_dept = mapping_clean.drop_duplicates(subset=['shop_name'], keep='first').set_index('shop_name')['dept'].to_dict()
-                        dept_lookup.update(shop_to_dept)
-                        org_to_dept = mapping_clean.drop_duplicates(subset=['org_name'], keep='first').set_index('org_name')['dept'].to_dict()
-                        for k, v in org_to_dept.items():
-                            if k not in dept_lookup:
-                                dept_lookup[k] = v
-                        for d in mapping_clean['dept'].unique():
-                            if d not in dept_lookup:
-                                dept_lookup[d] = d
-                        df_offline['dept'] = df_offline['shop_name'].map(dept_lookup).fillna('未分配部门')
-                        df_offline['org_name'] = df_offline['shop_name']
+                        # 只取 anchor_name='NONE' 的记录（线下匹配）
+                        mapping_none = mapping_clean[mapping_clean['anchor_name'] == 'NONE']
+                        # 按 shop_name 去重，保留第一个
+                        mapping_none_unique = mapping_none.drop_duplicates(subset=['shop_name'], keep='first')
+                        shop_to_org = mapping_none_unique.set_index('shop_name')['org_name'].to_dict()
+                        shop_to_dept = mapping_none_unique.set_index('shop_name')['dept'].to_dict()
+                        # 映射
+                        df_offline['org_name'] = df_offline['shop_name'].map(shop_to_org).fillna('未分配组织')
+                        df_offline['dept'] = df_offline['shop_name'].map(shop_to_dept).fillna('未分配部门')
                     else:
+                        df_offline['org_name'] = '未分配组织'
                         df_offline['dept'] = '未分配部门'
-                        df_offline['org_name'] = df_offline['shop_name']
                     df_offline['anchor'] = 'NONE'
                     df_offline['source'] = 'offline'
         except Exception as e:
