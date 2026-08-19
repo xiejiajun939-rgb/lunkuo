@@ -1,12 +1,17 @@
-# pages/5_org_dept.py
+# pages/org_dept.py
 # -*- coding: utf-8 -*-
+"""
+组织与部门分析页面
+展示阿米巴组织、部门、店铺的多维度业绩分析
+"""
+
 import streamlit as st
 import pandas as pd
 from datetime import date, timedelta
 import plotly.express as px
 import plotly.graph_objects as go
 
-from core.db import init_supabase, get_table_name, fetch_sales_summary, load_org_targets
+from core.db import init_supabase, get_table_name, fetch_sales_summary, load_org_targets, fetch_complete_sales_summary
 from core.ai import get_ai_summary
 
 st.set_page_config(page_title="组织与部门分析", layout="wide")
@@ -34,15 +39,18 @@ def get_date_range(suffix):
         resp = supabase.table(table_name).select("sale_date").order("sale_date", desc=True).limit(1).execute()
         if resp.data:
             max_dates.append(pd.to_datetime(resp.data[0]["sale_date"]).date())
-            
+        
         # 查询 offline_sales_all 表（全部数据时）
         if suffix == "_all":
-            offline_resp = supabase.table("offline_sales_all").select("sale_date").order("sale_date", desc=False).limit(1).execute()
-            if offline_resp.data:
-                min_dates.append(pd.to_datetime(offline_resp.data[0]["sale_date"]).date())
-            offline_resp = supabase.table("offline_sales_all").select("sale_date").order("sale_date", desc=True).limit(1).execute()
-            if offline_resp.data:
-                max_dates.append(pd.to_datetime(offline_resp.data[0]["sale_date"]).date())
+            try:
+                offline_resp = supabase.table("offline_sales_all").select("sale_date").order("sale_date", desc=False).limit(1).execute()
+                if offline_resp.data:
+                    min_dates.append(pd.to_datetime(offline_resp.data[0]["sale_date"]).date())
+                offline_resp = supabase.table("offline_sales_all").select("sale_date").order("sale_date", desc=True).limit(1).execute()
+                if offline_resp.data:
+                    max_dates.append(pd.to_datetime(offline_resp.data[0]["sale_date"]).date())
+            except:
+                pass
         
         if min_dates and max_dates:
             return min(min_dates), max(max_dates)
@@ -50,128 +58,6 @@ def get_date_range(suffix):
     except Exception as e:
         st.error(f"获取日期范围失败：{e}")
         return None, None
-
-# ---------- 新增：从多个数据源获取完整数据 ----------
-@st.cache_data(ttl=300)
-def fetch_complete_sales_summary(start_date, end_date, suffix="_all"):
-    """
-    从 product_sales 和 offline_sales 两个表获取完整数据，
-    并补充组织名称和部门信息
-    """
-    supabase = init_supabase()
-    if supabase is None:
-        return pd.DataFrame()
-    
-    all_records = []
-    
-    try:
-        # 1. 从 product_sales 获取数据
-        table_name = get_table_name("product_sales", suffix)
-        resp = supabase.table(table_name)\
-            .select("sale_date, shop_name, net_amount, ship_amount, return_amount, remark")\
-            .gte("sale_date", start_date.strftime("%Y-%m-%d"))\
-            .lte("sale_date", end_date.strftime("%Y-%m-%d"))\
-            .execute()
-        
-        if resp.data:
-            for row in resp.data:
-                # 提取组织名称（从 remark 中提取）
-                remark = row.get("remark", "")
-                # 尝试从 remark 中提取组织信息
-                org_name = extract_org_from_remark(remark)
-                # 如果提取不到，使用 shop_name 作为备选
-                if not org_name:
-                    org_name = row.get("shop_name", "未知组织")
-                
-                all_records.append({
-                    "sale_date": row["sale_date"],
-                    "shop_name": row.get("shop_name", "未知店铺"),
-                    "org_name": org_name,
-                    "dept": row.get("shop_name", "未知渠道"),  # 默认使用 shop_name 作为渠道
-                    "net_amount": float(row.get("net_amount", 0)),
-                    "ship_amount": float(row.get("ship_amount", 0)),
-                    "return_amount": float(row.get("return_amount", 0)),
-                    "source": "product_sales"
-                })
-        
-        # 2. 从 offline_sales 获取数据（仅 _all 模式）
-        if suffix == "_all":
-            offline_resp = supabase.table("offline_sales_all")\
-                .select("sale_date, shop_name, net_amount, ship_amount, return_amount, remark")\
-                .gte("sale_date", start_date.strftime("%Y-%m-%d"))\
-                .lte("sale_date", end_date.strftime("%Y-%m-%d"))\
-                .execute()
-            
-            if offline_resp.data:
-                for row in offline_resp.data:
-                    shop_name = row.get("shop_name", "未知店铺")
-                    # 从 shop_name 或 remark 提取组织
-                    org_name = extract_org_from_remark(row.get("remark", "")) or shop_name
-                    
-                    all_records.append({
-                        "sale_date": row["sale_date"],
-                        "shop_name": shop_name,
-                        "org_name": org_name,
-                        "dept": shop_name,  # 线下默认使用店铺名作为渠道
-                        "net_amount": float(row.get("net_amount", 0)),
-                        "ship_amount": float(row.get("ship_amount", 0)),
-                        "return_amount": float(row.get("return_amount", 0)),
-                        "source": "offline_sales"
-                    })
-        
-        if not all_records:
-            return pd.DataFrame()
-        
-        df = pd.DataFrame(all_records)
-        df["sale_date"] = pd.to_datetime(df["sale_date"])
-        
-        # 按日期、店铺、组织聚合
-        df_agg = df.groupby(["sale_date", "shop_name", "org_name", "dept"], as_index=False).agg({
-            "net_amount": "sum",
-            "ship_amount": "sum",
-            "return_amount": "sum"
-        })
-        
-        # 重命名列为标准格式
-        df_agg.rename(columns={
-            "net_amount": "total_net",
-            "ship_amount": "total_ship",
-            "return_amount": "total_return"
-        }, inplace=True)
-        
-        return df_agg
-        
-    except Exception as e:
-        st.error(f"获取数据失败：{e}")
-        return pd.DataFrame()
-
-def extract_org_from_remark(remark):
-    """从备注中提取组织名称"""
-    if not remark or not isinstance(remark, str):
-        return None
-    
-    # 常见的组织标识模式
-    import re
-    patterns = [
-        r'组织[：:]\s*([^\s_]+)',
-        r'部门[：:]\s*([^\s_]+)',
-        r'阿米巴[：:]\s*([^\s_]+)',
-        r'([^_\s]+)组',
-        r'([^_\s]+)部',
-    ]
-    
-    for pattern in patterns:
-        match = re.search(pattern, remark)
-        if match:
-            return match.group(1).strip()
-    
-    # 如果都没有匹配，尝试从 _ 分割中提取
-    parts = remark.split('_')
-    if len(parts) >= 2:
-        # 通常第一个部分可能是组织标识
-        return parts[0].strip()
-    
-    return None
 
 # ---------- 日期选择 ----------
 min_date, max_date = get_date_range("_all")
@@ -200,12 +86,13 @@ org_targets = load_org_targets("_all")
 total_target = sum(org_targets.values()) if org_targets else 0
 
 with st.spinner("加载 KPI 数据..."):
-    # 使用新的完整数据获取函数
+    # 使用完整的销售汇总函数
     df_today = fetch_complete_sales_summary(latest_date, latest_date, suffix)
     df_mtd = fetch_complete_sales_summary(month_start, latest_date, suffix)
 
+# 调试信息 - 检查数据是否正常加载
 if df_today.empty:
-    st.warning(f"所选日期 {latest_date} 无销售数据，以下显示月累计数据。")
+    st.info(f"📌 提示：{latest_date} 无销售数据，显示月累计数据。")
     today_ship = 0
     today_return = 0
     today_net = 0
@@ -348,10 +235,13 @@ with st.spinner(f"加载 {period_label} 数据..."):
     df_period_main = fetch_complete_sales_summary(start_date, end_date, suffix)
 
 if not df_period_main.empty:
-    # 显示数据概览，帮助识别是否有数据遗漏
-    with st.expander("📋 数据概览（检查是否有组织被遗漏）"):
+    # 数据概览 - 帮助识别是否有数据遗漏
+    with st.expander("📋 数据概览（查看所有组织/部门映射情况）"):
+        # 显示组织列表
         org_list = df_period_main['org_name'].unique().tolist()
+        dept_list = df_period_main['dept'].unique().tolist()
         st.write(f"共识别到 **{len(org_list)}** 个组织：{', '.join(org_list)}")
+        st.write(f"共识别到 **{len(dept_list)}** 个部门：{', '.join(dept_list[:20])}{'...' if len(dept_list) > 20 else ''}")
         
         # 显示各组织的汇总数据
         org_summary = df_period_main.groupby('org_name').agg({
@@ -360,13 +250,26 @@ if not df_period_main.empty:
             'total_return': 'sum'
         }).reset_index()
         org_summary['净额'] = org_summary['total_net'].apply(lambda x: f"¥{x:,.2f}")
+        org_summary = org_summary.sort_values('total_net', ascending=False)
         st.dataframe(org_summary[['org_name', '净额', 'total_ship', 'total_return']], 
+                     hide_index=True, use_container_width=True)
+        
+        # 显示部门汇总
+        dept_summary = df_period_main.groupby('dept').agg({
+            'total_net': 'sum',
+            'total_ship': 'sum',
+            'total_return': 'sum'
+        }).reset_index()
+        dept_summary['净额'] = dept_summary['total_net'].apply(lambda x: f"¥{x:,.2f}")
+        dept_summary = dept_summary.sort_values('total_net', ascending=False)
+        st.dataframe(dept_summary[['dept', '净额', 'total_ship', 'total_return']], 
                      hide_index=True, use_container_width=True)
     
     col_org, col_dept = st.columns(2)
     with col_org:
-        # 修改：显示所有组织（包括负值），但用不同颜色区分
+        # 组织汇总 - 显示所有组织（包括负值）
         org_agg = df_period_main.groupby('org_name')['total_net'].sum().reset_index()
+        org_agg = org_agg.sort_values('total_net', ascending=False)
         
         # 分离正负值用于显示
         org_agg_positive = org_agg[org_agg['total_net'] > 0].copy()
@@ -386,22 +289,35 @@ if not df_period_main.empty:
             neg_text = ", ".join([f"{row['org_name']} (¥{row['total_net']:,.2f})" 
                                  for _, row in org_agg_negative.iterrows()])
             st.warning(f"⚠️ 以下组织净销售额为负：{neg_text}")
+        
+        # 显示组织排行（所有组织）
+        st.markdown("**组织排行（完整）**")
+        org_display = org_agg.copy()
+        org_display['净额'] = org_display['total_net'].apply(lambda x: f"¥{x:,.2f}")
+        st.dataframe(org_display[['org_name', '净额']], hide_index=True, use_container_width=True)
             
     with col_dept:
         dept_agg = df_period_main.groupby('dept')['total_net'].sum().reset_index()
         dept_agg = dept_agg[dept_agg['total_net'] != 0].sort_values('total_net', ascending=False)
         if not dept_agg.empty:
+            # 显示所有部门，但图表只显示TOP10
             top10 = dept_agg.head(10)
             fig_dept = px.bar(top10, x='total_net', y='dept', orientation='h',
                               title=f'部门净销售额排行（TOP10，{period_label}）',
-                              labels={'total_net': '净销售额', 'dept': '渠道'},
+                              labels={'total_net': '净销售额', 'dept': '部门'},
                               color='total_net', color_continuous_scale='Blues')
             fig_dept.update_layout(yaxis={'categoryorder': 'total ascending'})
             st.plotly_chart(fig_dept, use_container_width=True)
+            
+            # 显示所有部门
+            st.markdown("**部门排行（完整）**")
+            dept_display = dept_agg.copy()
+            dept_display['净额'] = dept_display['total_net'].apply(lambda x: f"¥{x:,.2f}")
+            st.dataframe(dept_display[['dept', '净额']], hide_index=True, use_container_width=True)
         else:
-            st.info("无渠道数据")
+            st.info("无部门数据")
 else:
-    st.warning(f"{period_label} 无数据，无法显示阿米巴/渠道分布。")
+    st.warning(f"{period_label} 无数据，无法显示阿米巴/部门分布。")
 
 # ---------- 3.2 退货率警告线 ----------
 st.markdown("#### 退货率警告线")
@@ -432,13 +348,15 @@ if not df_return.empty:
         net=('total_net', 'sum')
     ).reset_index()
     
-    # 修改：不过滤 ship > 0，保留所有部门以便完整显示
+    # 计算退货率（保留所有部门）
     dept_return['退货率'] = (dept_return['return_amt'] / (dept_return['ship'] + 1e-5) * 100).round(2)
-    dept_return = dept_return.sort_values('退货率', ascending=False)
     
-    if not dept_return.empty:
-        # 显示所有部门，不仅仅是TOP10
-        top_return = dept_return.head(10)
+    # 显示所有部门（按退货率排序）
+    dept_return_sorted = dept_return.sort_values('退货率', ascending=False)
+    
+    if not dept_return_sorted.empty:
+        # 图表显示TOP10
+        top_return = dept_return_sorted.head(10)
         fig_return = px.bar(top_return, x='dept', y='退货率',
                             title=f'退货率 TOP10 部门（{period_label_r}）',
                             labels={'dept': '部门', '退货率': '退货率 (%)'},
@@ -447,17 +365,27 @@ if not df_return.empty:
         fig_return.add_hline(y=30, line_dash="dash", line_color="orange", annotation_text="注意线 30%")
         st.plotly_chart(fig_return, use_container_width=True)
         
+        # 显示所有部门退货率
+        with st.expander("📋 所有部门退货率明细"):
+            dept_display = dept_return_sorted.copy()
+            dept_display['退货率'] = dept_display['退货率'].apply(lambda x: f"{x:.2f}%")
+            dept_display['净额'] = dept_display['net'].apply(lambda x: f"¥{x:,.2f}")
+            dept_display['发货额'] = dept_display['ship'].apply(lambda x: f"¥{x:,.2f}")
+            dept_display['退货额'] = dept_display['return_amt'].apply(lambda x: f"¥{x:,.2f}")
+            st.dataframe(dept_display[['dept', '净额', '发货额', '退货额', '退货率']], 
+                         hide_index=True, use_container_width=True)
+        
         # 显示零发货但有退货的异常部门
         zero_ship_returns = dept_return[(dept_return['ship'] == 0) & (dept_return['return_amt'] > 0)]
         if not zero_ship_returns.empty:
             st.warning(f"⚠️ 以下部门有退货但无发货记录：{', '.join(zero_ship_returns['dept'].tolist())}")
     else:
-        st.info("无有效渠道数据")
+        st.info("无有效部门数据")
 else:
     st.warning(f"{period_label_r} 无数据，无法显示退货率。")
 
 # ---------- 3.3 多维透视 ----------
-st.markdown("#### 🔍 多维透视（渠道 → 平台 → 店铺）")
+st.markdown("#### 🔍 多维透视（组织 → 部门 → 店铺）")
 time_mode_pivot = st.radio(
     "查看周期",
     options=["近7天", "月累计"],
@@ -479,38 +407,42 @@ with st.spinner(f"加载透视数据（{period_label_p}）..."):
     df_pivot = fetch_complete_sales_summary(start_date_p, end_date_p, suffix)
 
 if not df_pivot.empty:
-    # 平台分类（增加更多平台识别）
+    # 平台分类
     def classify_platform(shop_name):
-        if not shop_name:
+        if not shop_name or not isinstance(shop_name, str):
             return '其他'
         shop_name = str(shop_name)
-        if shop_name.startswith('天猫'):
+        if '天猫' in shop_name or shop_name.startswith('TM'):
             return '天猫'
-        elif shop_name.startswith('小红书'):
+        elif '小红书' in shop_name:
             return '小红书'
-        elif shop_name.startswith('抖音'):
+        elif '抖音' in shop_name or 'DOU' in shop_name:
             return '抖音'
-        elif shop_name.startswith('视频号'):
+        elif '视频号' in shop_name:
             return '视频号'
-        elif shop_name.startswith('京东'):
+        elif '京东' in shop_name:
             return '京东'
-        elif shop_name.startswith('拼多多'):
+        elif '拼多多' in shop_name:
             return '拼多多'
-        elif shop_name.startswith('淘宝'):
+        elif '淘宝' in shop_name:
             return '淘宝'
         elif '线下' in shop_name or '门店' in shop_name:
             return '线下门店'
+        elif '微信' in shop_name or '小程序' in shop_name:
+            return '微信'
         else:
             return '其他'
     
     df_pivot['platform'] = df_pivot['shop_name'].apply(classify_platform)
     
-    grouped = df_pivot.groupby(['org_name', 'platform', 'shop_name', 'dept']).agg(
+    # 按组织、部门、平台、店铺聚合
+    grouped = df_pivot.groupby(['org_name', 'dept', 'platform', 'shop_name']).agg(
         ship=('total_ship', 'sum'),
         return_amt=('total_return', 'sum'),
         net=('total_net', 'sum')
     ).reset_index()
-    grouped['退货率'] = (grouped['return_amt'] / (grouped['ship'] + 1e-5) * 100).round(2).map(lambda x: f"{x:.2f}%")
+    grouped['退货率'] = (grouped['return_amt'] / (grouped['ship'] + 1e-5) * 100).round(2)
+    grouped['退货率显示'] = grouped['退货率'].apply(lambda x: f"{x:.2f}%")
 
     # 按组织净额排序
     org_order = grouped.groupby('org_name')['net'].sum().sort_values(ascending=False).index
@@ -523,25 +455,43 @@ if not df_pivot.empty:
         org_return = org_data['return_amt'].sum()
         
         # 颜色标识：负值用红色
-        color = "#ef4444" if org_net < 0 else "#22c55e"
-        with st.expander(f"🏢 {org}  | 净额 ¥{org_net:,.2f} | 发货 ¥{org_ship:,.2f} | 退货 ¥{org_return:,.2f}"):
-            platform_order = org_data.groupby('platform')['net'].sum().sort_values(ascending=False).index
-            for plat in platform_order:
-                plat_data = org_data[org_data['platform'] == plat]
-                plat_net = plat_data['net'].sum()
-                plat_ship = plat_data['ship'].sum()
-                plat_return = plat_data['return_amt'].sum()
-                with st.expander(f"📱 {plat}  净额 ¥{plat_net:,.2f}（发货 ¥{plat_ship:,.2f} / 退货 ¥{plat_return:,.2f}）"):
-                    display_df = plat_data[['dept', 'shop_name', 'ship', 'return_amt', 'net', '退货率']]
-                    display_df.columns = ['渠道', '店铺', '发货额', '退货额', '净销售额', '退货率']
-                    display_df = display_df.sort_values('净销售额', ascending=False)
-                    st.dataframe(display_df, hide_index=True, use_container_width=True)
+        color_icon = "🔴" if org_net < 0 else "🟢"
+        with st.expander(f"{color_icon} 🏢 {org}  | 净额 ¥{org_net:,.2f} | 发货 ¥{org_ship:,.2f} | 退货 ¥{org_return:,.2f}"):
+            
+            # 按部门展开
+            dept_order = org_data.groupby('dept')['net'].sum().sort_values(ascending=False).index
+            for dept in dept_order:
+                dept_data = org_data[org_data['dept'] == dept]
+                dept_net = dept_data['net'].sum()
+                dept_ship = dept_data['ship'].sum()
+                dept_return = dept_data['return_amt'].sum()
+                dept_return_rate = (dept_return / (dept_ship + 1e-5) * 100)
+                dept_color = "🔴" if dept_net < 0 else "🟢"
+                
+                with st.expander(f"{dept_color} 📊 {dept}  | 净额 ¥{dept_net:,.2f} | 退货率 {dept_return_rate:.1f}%"):
+                    
+                    # 按平台展开
+                    platform_order = dept_data.groupby('platform')['net'].sum().sort_values(ascending=False).index
+                    for plat in platform_order:
+                        plat_data = dept_data[dept_data['platform'] == plat]
+                        plat_net = plat_data['net'].sum()
+                        plat_ship = plat_data['ship'].sum()
+                        plat_return = plat_data['return_amt'].sum()
+                        plat_return_rate = (plat_return / (plat_ship + 1e-5) * 100)
+                        
+                        with st.expander(f"📱 {plat}  净额 ¥{plat_net:,.2f} | 退货率 {plat_return_rate:.1f}%"):
+                            display_df = plat_data[['shop_name', 'ship', 'return_amt', 'net', '退货率显示']]
+                            display_df.columns = ['店铺', '发货额', '退货额', '净销售额', '退货率']
+                            display_df = display_df.sort_values('净销售额', ascending=False)
+                            st.dataframe(display_df, hide_index=True, use_container_width=True)
 else:
     st.warning(f"{period_label_p} 无数据，无法显示透视表。")
 
 # ---------- 3.4 异常预警 ----------
 st.markdown("---")
 st.markdown("#### ⚠️ 异常决策预警")
+
+# 使用月累计数据或近7天数据
 if not df_period_main.empty:
     alert_df = df_period_main.groupby(['org_name', 'dept', 'shop_name']).agg(
         ship=('total_ship', 'sum'),
@@ -549,23 +499,41 @@ if not df_period_main.empty:
         net=('total_net', 'sum')
     ).reset_index()
     alert_df['退货率'] = (alert_df['return_amt'] / (alert_df['ship'] + 1e-5) * 100)
+    
+    # 净额为负的店铺
     alert_negative = alert_df[alert_df['net'] < 0]
+    # 退货率>65%的店铺
     alert_high_return = alert_df[alert_df['退货率'] > 65]
-
+    # 退货率>80%的严重异常
+    alert_critical_return = alert_df[alert_df['退货率'] > 80]
+    
+    # 显示严重异常
+    if not alert_critical_return.empty:
+        st.error(f"🚨🚨 严重异常：{len(alert_critical_return)} 个店铺退货率超过80%：")
+        for _, row in alert_critical_return.iterrows():
+            st.error(f"  • {row['org_name']} → {row['dept']} → {row['shop_name']}，退货率 {row['退货率']:.1f}%，净额 ¥{row['net']:,.2f}")
+    
+    # 显示净额为负
     if not alert_negative.empty:
-        st.error(f"🚨 发现 {len(alert_negative)} 个净销售额为负的组织/店铺：")
+        st.error(f"🚨 净销售额为负：{len(alert_negative)} 个店铺：")
         for _, row in alert_negative.iterrows():
-            st.error(f"  • {row['org_name']} -> {row['dept']} -> {row['shop_name']}，净额 ¥{row['net']:,.2f}")
+            st.error(f"  • {row['org_name']} → {row['dept']} → {row['shop_name']}，净额 ¥{row['net']:,.2f}")
+    
+    # 显示退货率偏高
     if not alert_high_return.empty:
-        st.warning(f"⚠️ 发现 {len(alert_high_return)} 个退货率异常偏高（>{65}%）的组织/店铺：")
+        st.warning(f"⚠️ 退货率异常偏高（>65%）：{len(alert_high_return)} 个店铺：")
         for _, row in alert_high_return.iterrows():
-            st.warning(f"  • {row['org_name']} -> {row['dept']} -> {row['shop_name']}，退货率 {row['退货率']:.1f}%")
-    if alert_negative.empty and alert_high_return.empty:
+            st.warning(f"  • {row['org_name']} → {row['dept']} → {row['shop_name']}，退货率 {row['退货率']:.1f}%")
+    
+    if alert_negative.empty and alert_high_return.empty and alert_critical_return.empty:
         st.success("🎉 所有部门/店铺运营正常，无重大异常。")
-        
-    # 新增：显示被排除的组织
+    
+    # 统计信息
     total_orgs = alert_df['org_name'].nunique()
-    st.caption(f"📊 共分析 {total_orgs} 个组织，{alert_df['shop_name'].nunique()} 个店铺")
+    total_depts = alert_df['dept'].nunique()
+    total_shops = alert_df['shop_name'].nunique()
+    st.caption(f"📊 共分析 {total_orgs} 个组织，{total_depts} 个部门，{total_shops} 个店铺")
+    
 else:
     st.info("当前周期无数据，无法预警。")
 
@@ -589,8 +557,10 @@ selected_model_name = st.selectbox(
 selected_model = model_options[selected_model_name]
 
 if st.button("🚀 生成智能总结", key="org_generate_ai_summary"):
+    # 准备数据
     total_net = mtd_net if not df_mtd.empty else 0
     return_rate = mtd_return_rate if not df_mtd.empty else 0
+    
     if not df_7d.empty and not df_prev.empty:
         total_7d = df_7d['total_net'].sum()
         total_prev = df_prev['total_net'].sum() if not df_prev.empty else 0
@@ -601,23 +571,34 @@ if st.button("🚀 生成智能总结", key="org_generate_ai_summary"):
         net_7d = 0
         net_prev = 0
         change_7d = 0
-
+    
+    # 组织排行
     if not df_period_main.empty:
         org_net = df_period_main.groupby('org_name')['total_net'].sum().sort_values(ascending=False).head(5)
         org_text = "\n".join([f"{i+1}. {org}: ¥{amt:,.0f}" for i, (org, amt) in enumerate(org_net.items())]) if not org_net.empty else "暂无"
+        # 负值组织
+        org_negative = df_period_main.groupby('org_name')['total_net'].sum()
+        org_negative = org_negative[org_negative < 0]
+        neg_org_text = "\n".join([f"{org}: ¥{amt:,.0f}" for org, amt in org_negative.items()]) if not org_negative.empty else "无"
     else:
         org_text = "暂无"
-
+        neg_org_text = "无"
+    
+    # 部门退货率排行
     if not df_period_main.empty:
-        dept_return_ai = df_period_main.groupby('dept').agg(ship=('total_ship', 'sum'), return_amt=('total_return', 'sum')).reset_index()
+        dept_return_ai = df_period_main.groupby('dept').agg(
+            ship=('total_ship', 'sum'), 
+            return_amt=('total_return', 'sum')
+        ).reset_index()
         dept_return_ai['退货率'] = (dept_return_ai['return_amt'] / (dept_return_ai['ship'] + 1e-5) * 100)
         dept_return_ai = dept_return_ai.sort_values('退货率', ascending=False).head(5)
         dept_text = "\n".join([f"{row['dept']}: {row['退货率']:.1f}%" for _, row in dept_return_ai.iterrows()]) if not dept_return_ai.empty else "暂无"
     else:
         dept_text = "暂无"
     
-    # 增加组织统计
+    # 统计信息
     total_orgs = df_period_main['org_name'].nunique() if not df_period_main.empty else 0
+    total_depts = df_period_main['dept'].nunique() if not df_period_main.empty else 0
     total_shops = df_period_main['shop_name'].nunique() if not df_period_main.empty else 0
 
     context = f"""
@@ -625,20 +606,25 @@ if st.button("🚀 生成智能总结", key="org_generate_ai_summary"):
     总净销售额：¥{total_net:,.2f}
     综合退货率：{return_rate:.2f}%
     近7天净销售额：¥{net_7d:,.2f}（前7天：¥{net_prev:,.2f}，变化 {change_7d:+.1f}%）
-    涉及组织数：{total_orgs} 个，店铺数：{total_shops} 个
-    净销售额 TOP5 阿米巴：
+    涉及组织数：{total_orgs} 个，部门数：{total_depts} 个，店铺数：{total_shops} 个
+    
+    净销售额 TOP5 组织：
     {org_text}
-    退货率 TOP5 渠道：
+    
+    净销售额为负的组织：
+    {neg_org_text}
+    
+    退货率 TOP5 部门：
     {dept_text}
     """
 
     prompt = """
     你是一位资深的电商运营总监。请根据以上数据，用一段专业、简洁的中文总结当前组织与部门的经营状况。
     要求：
-    1. 突出表现最好的阿米巴和最需要关注的渠道。
+    1. 突出表现最好的组织（阿米巴）和最需要关注的部门。
     2. 结合近7天趋势，给出短期策略建议。
-    3. 若发现异常（如退货率极高、净额下滑），明确指出来。
-    4. 如果某些组织或部门出现负值，要特别提醒注意。
+    3. 若发现异常（如退货率极高、净额下滑、净额为负的组织），明确指出来并给出改进建议。
+    4. 分析要具体，不要泛泛而谈。
     """
 
     with st.spinner("🤖 AI 正在分析，请稍候..."):
@@ -655,3 +641,7 @@ if st.session_state.get("org_ai_summary"):
     """, unsafe_allow_html=True)
 else:
     st.info("点击上方按钮生成 AI 智能总结。")
+
+# ---------- 底部信息 ----------
+st.markdown("---")
+st.caption(f"📌 数据最后更新：{pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')} | 数据源：全部数据")
