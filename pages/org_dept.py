@@ -59,66 +59,7 @@ def get_date_range(suffix):
     except Exception as e:
         st.error(f"获取日期范围失败：{e}")
         return None, None
-# ======================== 🛠️ 线下数据诊断排查面板 ========================
-with st.expander("🛠️ 点击展开：线下数据（offline_sales_all）抓包与诊断日志", expanded=True):
-    st.markdown("#### 1. 检查环境变量与 View Mode 状态")
-    st.write(f"- `st.session_state.table_suffix`: `{st.session_state.get('table_suffix')}`")
-    st.write(f"- `st.session_state.view_mode`: `{st.session_state.get('view_mode')}`")
-    
-    st.markdown("#### 2. 测试数据库直连与字段校验 (offline_sales_all)")
-    try:
-        raw_test = supabase.table("offline_sales_all").select("*").limit(3).execute()
-        if raw_test.data:
-            st.success(f"✅ 成功读取 `offline_sales_all` 表！首批返回 {len(raw_test.data)} 条原始数据。")
-            df_raw = pd.DataFrame(raw_test.data)
-            st.write("📌 **数据库实际字段名列举**：", list(df_raw.columns))
-            st.dataframe(df_raw, use_container_width=True)
-            
-            # 检查关键列名是否存在
-            expected_cols = ["sale_date", "shop_name", "ship_amount", "return_amount", "net_amount"]
-            missing_cols = [c for c in expected_cols if c not in df_raw.columns]
-            if missing_cols:
-                st.error(f"❌ **重大列名不匹配**！代码要求的列在数据库中不存在：{missing_cols}")
-            else:
-                st.success("✅ 列名符合预期！")
-        else:
-            st.error("❌ `offline_sales_all` 表返回为空！可能该表无数据，或 Supabase 开启了 RLS (行级安全策略) 阻止了匿名读取。")
-    except Exception as e:
-        st.error(f"❌ 查询 `offline_sales_all` 报错：{e}")
 
-    st.markdown("#### 3. 测试当前选定日期的筛选条件")
-    start_str = base_date.replace(day=1).isoformat()
-    end_str = f"{base_date.isoformat()}T23:59:59"
-    st.write(f"当前尝试查询日期范围：`{start_str}` 到 `{end_str}`")
-    
-    try:
-        date_test = supabase.table("offline_sales_all")\
-                            .select("*")\
-                            .gte("sale_date", start_str)\
-                            .lte("sale_date", end_str)\
-                            .limit(10)\
-                            .execute()
-        if date_test.data:
-            st.success(f"✅ 成功按照日期查到 {len(date_test.data)} 条线下记录！")
-            st.dataframe(pd.DataFrame(date_test.data), use_container_width=True)
-        else:
-            st.warning("⚠️ **按日期查询返回 0 条记录**！请检查数据库里的 `sale_date` 格式（是 `2026-08-01` 还是 `2026/08/01` 或 Unix 时间戳）。")
-    except Exception as e:
-        st.error(f"❌ 日期筛选查询报错：{e}")
-
-    st.markdown("#### 4. 检查维度映射表 (mapping) 是否存在这 5 个部门")
-    mapping_df = load_dimension_mapping()
-    if not mapping_df.empty:
-        target_depts = ["唯品会", "零售线下", "分销加盟部", "商品部"]
-        mapped_target = mapping_df[mapping_df['dept'].isin(target_depts)]
-        if not mapped_target.empty:
-            st.success(f"✅ 在 mapping 表中找到了以下 offline 部门的店铺映射：")
-            st.dataframe(mapped_target[['shop_name', 'dept', 'org_name']].drop_duplicates(), use_container_width=True)
-        else:
-            st.error("❌ **mapping 表中找不到这 5 个部门**！请检查 mapping 表中的 `dept` 名称与这 5 个名称是否完全一致（注意空格与大小写）。")
-    else:
-        st.error("❌ mapping 表加载为空！")
-# =======================================================================
 # ---------- 加载所有部门（从mapping表） ----------
 @st.cache_data(ttl=300)
 def load_all_depts():
