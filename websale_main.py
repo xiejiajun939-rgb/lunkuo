@@ -355,7 +355,7 @@ def clear_targets(suffix=None):
     st.session_state.target_dict = {}
     st.rerun()
 
-# ===================== 修改：线上数据增加 anchor_name =====================
+# ========== save_product_sales 自动探测 anchor_name 列 ==========
 def save_product_sales(df_orders, suffix=None):
     if supabase is None:
         return
@@ -413,7 +413,6 @@ def save_product_sales(df_orders, suffix=None):
                 "image_url": img,
                 "master_category": cat
             }
-            # 仅当列存在时才添加 anchor_name
             if use_anchor:
                 rec["anchor_name"] = anchor_name
             temp_records[remark] = rec
@@ -432,7 +431,7 @@ def save_product_sales(df_orders, suffix=None):
             batch = records[i:i+batch_size]
             supabase.table(table_name).upsert(batch, on_conflict="remark").execute()
 
-# ===================== 线下数据不增加 anchor_name =====================
+# ========== save_offline_sales（线下数据不加 anchor_name） ==========
 def save_offline_sales(df_orders):
     if supabase is None or df_orders.empty:
         return
@@ -444,7 +443,6 @@ def save_offline_sales(df_orders):
     df['return_amount'] = (-df['amount']).clip(lower=0)
     df['net_amount'] = df['amount']
     df['remark'] = df['备注'].astype(str).str.strip()
-    # 线下数据不包含 anchor_name 字段
     records = df[['sale_date', 'shop_name', 'ship_amount', 'return_amount', 'net_amount', 'remark']].to_dict(orient='records')
     if not records:
         return
@@ -462,7 +460,7 @@ def save_offline_sales(df_orders):
                 time.sleep(2 ** attempt)
     refresh_materialized_view("_all")
 
-# ========== 其他函数（validate_order_data, process_uploaded_file 等保持不变） ==========
+# ========== 其他辅助函数 ==========
 def validate_order_data(df):
     try:
         required = ["日期", "金额/时间", "备注"]
@@ -704,6 +702,9 @@ for label, path in all_pages.items():
         continue
     # 组织与部门分析仅 _all
     if label == "🏢 组织与部门分析" and current_suffix != "_all":
+        continue
+    # 主播分析仅在直播或全部数据时显示（非直播模式隐藏）
+    if label == "🎤 主播分析" and current_suffix not in ["_live", "_all"]:
         continue
     if label in allowed_labels:
         pages_to_show.append(Page(path, title=label))
