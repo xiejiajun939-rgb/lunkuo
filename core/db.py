@@ -89,22 +89,21 @@ def fetch_sales_summary(start_date, end_date, suffix="", view_mode=None):
         # 按 (shop_name, anchor_name) 去重，保留第一个
         mapping_unique = mapping_df_clean.drop_duplicates(subset=['shop_name', 'anchor_name'], keep='first')
 
-        # 添加 shop_name -> dept
+        # 1. shop_name -> dept
         shop_to_dept = mapping_unique.set_index('shop_name')['dept'].to_dict()
-        # 添加 org_name -> dept（取第一个）
-        org_to_dept = mapping_unique.drop_duplicates(subset=['org_name'], keep='first').set_index('org_name')['dept'].to_dict()
-        # 添加 dept -> dept（自身）
-        dept_to_dept = mapping_unique.drop_duplicates(subset=['dept'], keep='first').set_index('dept')['dept'].to_dict()
-
-        # 合并：优先级 shop_name > org_name > dept（但实际只要不覆盖已有 key 即可）
-        dept_lookup = {}
         dept_lookup.update(shop_to_dept)
+
+        # 2. org_name -> dept（取第一个出现的）
+        org_unique = mapping_unique.drop_duplicates(subset=['org_name'], keep='first')
+        org_to_dept = org_unique.set_index('org_name')['dept'].to_dict()
         for key, val in org_to_dept.items():
             if key not in dept_lookup:
                 dept_lookup[key] = val
-        for key, val in dept_to_dept.items():
-            if key not in dept_lookup:
-                dept_lookup[key] = val
+
+        # 3. dept -> dept（直接用所有唯一部门）
+        for d in mapping_unique['dept'].unique():
+            if d not in dept_lookup:
+                dept_lookup[d] = d
 
     # ---- 1. 线上数据处理 ----
     product_table = get_table_name("product_sales", suffix)
