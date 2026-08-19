@@ -68,7 +68,6 @@ def load_all_depts():
     if mapping_df.empty:
         return []
     depts = mapping_df['dept'].dropna().unique().tolist()
-    # 过滤掉空字符串或无效值
     depts = [d for d in depts if d and d.strip() and d != '未分配部门']
     return sorted(depts)
 
@@ -79,13 +78,8 @@ def get_dept_summary_with_all(start_date, end_date, suffix="_all"):
     返回DataFrame包含：dept, total_ship, total_return, total_net
     部门数据为该部门下所有组织的业绩汇总
     """
-    # 1. 获取所有部门列表
     all_depts = load_all_depts()
-    
-    # 2. 获取实际销售数据
     df_data = fetch_complete_sales_summary(start_date, end_date, suffix)
-    
-    # 3. 按部门聚合实际数据（所有组织汇总）
     if not df_data.empty:
         dept_actual = df_data.groupby('dept').agg({
             'total_ship': 'sum',
@@ -94,21 +88,12 @@ def get_dept_summary_with_all(start_date, end_date, suffix="_all"):
         }).reset_index()
     else:
         dept_actual = pd.DataFrame(columns=['dept', 'total_ship', 'total_return', 'total_net'])
-    
-    # 4. 创建所有部门的DataFrame
     all_depts_df = pd.DataFrame({'dept': all_depts})
-    
-    # 5. 左连接
     result = all_depts_df.merge(dept_actual, on='dept', how='left')
-    
-    # 6. 填充缺失值
     result['total_ship'] = result['total_ship'].fillna(0)
     result['total_return'] = result['total_return'].fillna(0)
     result['total_net'] = result['total_net'].fillna(0)
-    
-    # 7. 排序（按净额降序）
     result = result.sort_values('total_net', ascending=False)
-    
     return result
 
 # ---------- 日期选择 ----------
@@ -318,6 +303,23 @@ if not df_period_main.empty:
         dept_summary_full = dept_summary_full.sort_values('total_net', ascending=False)
         st.dataframe(dept_summary_full[['dept', '净额', 'total_ship', 'total_return']], 
                      hide_index=True, use_container_width=True)
+        
+        # 新增：未分配组织明细（如果有）
+        unassigned = df_period_main[df_period_main['org_name'] == '未分配组织']
+        if not unassigned.empty:
+            st.markdown("---")
+            st.markdown("##### ⚠️ 未分配组织明细")
+            st.warning("以下记录因 (shop_name, anchor) 组合在 mapping 表中无匹配，被归入'未分配组织'，请检查 mapping 表。")
+            unassigned_detail = unassigned.groupby(['shop_name', 'anchor']).agg({
+                'total_net': 'sum',
+                'total_ship': 'sum',
+                'total_return': 'sum'
+            }).reset_index()
+            unassigned_detail.columns = ['店铺名称', '主播', '净额', '发货额', '退货额']
+            unassigned_detail['净额'] = unassigned_detail['净额'].apply(lambda x: f"¥{x:,.2f}")
+            unassigned_detail['发货额'] = unassigned_detail['发货额'].apply(lambda x: f"¥{x:,.2f}")
+            unassigned_detail['退货额'] = unassigned_detail['退货额'].apply(lambda x: f"¥{x:,.2f}")
+            st.dataframe(unassigned_detail, hide_index=True, use_container_width=True)
     
     col_org, col_dept = st.columns(2)
     with col_org:
@@ -346,6 +348,25 @@ if not df_period_main.empty:
         org_display = org_agg.copy()
         org_display['净额'] = org_display['total_net'].apply(lambda x: f"¥{x:,.2f}")
         st.dataframe(org_display[['org_name', '净额']], hide_index=True, use_container_width=True)
+        
+        # ========== 新增：未分配组织明细（如果存在且不在概览中） ==========
+        # 检查是否有未分配组织且净额不为0
+        unassigned_org = org_agg[org_agg['org_name'] == '未分配组织']
+        if not unassigned_org.empty and unassigned_org.iloc[0]['total_net'] != 0:
+            with st.expander("🔍 查看“未分配组织”明细"):
+                unassigned = df_period_main[df_period_main['org_name'] == '未分配组织']
+                if not unassigned.empty:
+                    detail = unassigned.groupby(['shop_name', 'anchor']).agg({
+                        'total_net': 'sum',
+                        'total_ship': 'sum',
+                        'total_return': 'sum'
+                    }).reset_index()
+                    detail.columns = ['店铺', '主播', '净额', '发货额', '退货额']
+                    detail['净额'] = detail['净额'].apply(lambda x: f"¥{x:,.2f}")
+                    detail['发货额'] = detail['发货额'].apply(lambda x: f"¥{x:,.2f}")
+                    detail['退货额'] = detail['退货额'].apply(lambda x: f"¥{x:,.2f}")
+                    st.dataframe(detail, hide_index=True, use_container_width=True)
+                    st.caption(f"以上 {len(detail)} 条记录因 (shop_name, anchor) 无匹配，被归为'未分配组织'，请检查 mapping 表。")
             
     with col_dept:
         # 部门汇总（所有组织汇总，显示所有部门）
