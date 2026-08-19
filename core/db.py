@@ -62,7 +62,9 @@ def fetch_sales_summary(start_date, end_date, suffix=""):
     获取销售汇总数据
     线上数据：使用 (shop_name, anchor) 匹配 mapping
     线下数据：使用 shop_name + 固定 anchor='NONE' 匹配 mapping
-    自动探测 anchor_name 列是否存在
+    自动探测 anchor_name 列是否存在。
+    返回列包含 anchor 以便于明细追溯。
+    如果 view_mode == 'shop'，则只返回部门为 '小店运营' 的数据。
     """
     required_columns = ["sale_date", "org_name", "dept", "shop_name", "anchor", "total_ship", "total_return", "total_net"]
     
@@ -192,6 +194,14 @@ def fetch_sales_summary(start_date, end_date, suffix=""):
             else:
                 df[col] = "未知"
 
+    # ========== 小店运营模式过滤 ==========
+    if st.session_state.get("view_mode") == "shop":
+        if 'dept' in df.columns:
+            df = df[df['dept'] == '小店运营']
+        else:
+            # 如果没有dept列，返回空
+            df = pd.DataFrame(columns=required_columns)
+
     return df[required_columns]
 
 # ---------- 完整的销售汇总（兼容旧版） ----------
@@ -292,6 +302,13 @@ def load_product_sales(suffix=None, apply_filter=True, include_offline=True):
         else:
             df["org_name"] = "未分配组织"
             df["dept"] = "未分配部门"
+
+        # ========== 小店运营模式过滤 ==========
+        if st.session_state.get("view_mode") == "shop":
+            if 'dept' in df.columns:
+                df = df[df['dept'] == '小店运营']
+            else:
+                df = pd.DataFrame()
 
         if apply_filter:
             from core.utils import apply_data_permission
