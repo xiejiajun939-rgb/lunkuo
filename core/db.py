@@ -35,35 +35,78 @@ def extract_anchor(remark):
     match = re.search(r'主播[：:]([^_]+)', remark)
     return match.group(1).strip() if match else None
 
-# ---------- 辅助：从备注中提取组织名称 ----------
+# ---------- 辅助：从备注中提取组织名称（修复版） ----------
 def extract_org_from_remark(remark):
-    """从备注中提取组织名称"""
+    """
+    从备注中提取组织名称
+    注意：备注格式通常为：商品信息_店铺名_组织名 或 组织名_商品信息_店铺名
+    """
     if not remark or not isinstance(remark, str):
         return None
     
-    # 常见的组织标识模式
+    remark_str = str(remark).strip()
+    
+    # 排除明显的订单号/编号模式（纯数字、订单号格式等）
+    # 如果整个备注是纯数字或短数字，不提取
+    if re.match(r'^\d+$', remark_str):
+        return None
+    if re.match(r'^[A-Z0-9]{8,}$', remark_str):
+        return None
+    
+    # 优先匹配明确标识：组织：xxx、部门：xxx、阿米巴：xxx
     patterns = [
-        r'组织[：:]\s*([^\s_]+)',
-        r'部门[：:]\s*([^\s_]+)',
-        r'阿米巴[：:]\s*([^\s_]+)',
-        r'([^_\s]+)组',
-        r'([^_\s]+)部',
-        r'([^_\s]+)团队',
-        r'([^_\s]+)中心',
+        r'组织[：:]\s*([^\s_，,]+)',
+        r'部门[：:]\s*([^\s_，,]+)',
+        r'阿米巴[：:]\s*([^\s_，,]+)',
     ]
     
     for pattern in patterns:
-        match = re.search(pattern, remark)
+        match = re.search(pattern, remark_str)
         if match:
-            return match.group(1).strip()
+            result = match.group(1).strip()
+            # 排除数字和订单号
+            if not re.match(r'^\d+$', result) and len(result) > 1:
+                return result
     
-    # 如果都没有匹配，尝试从 _ 分割中提取
-    parts = remark.split('_')
+    # 尝试从下划线分割中提取
+    parts = remark_str.split('_')
+    
+    # 如果分割后有多个部分，尝试识别组织名称
     if len(parts) >= 2:
-        # 通常第一个部分可能是组织标识
-        first_part = parts[0].strip()
-        if len(first_part) > 1:
-            return first_part
+        # 常见组织名称关键词
+        org_keywords = ['组', '部', '团队', '中心', '事业', '阿米巴', 'BU', '部门']
+        
+        # 从后往前查找，因为组织名通常在最后
+        for part in reversed(parts):
+            part_clean = part.strip()
+            if not part_clean:
+                continue
+            # 排除纯数字
+            if re.match(r'^\d+$', part_clean):
+                continue
+            # 排除过短的内容
+            if len(part_clean) < 2:
+                continue
+            # 检查是否包含组织关键词
+            for keyword in org_keywords:
+                if keyword in part_clean:
+                    return part_clean
+            # 检查是否包含"商店"、"店铺"等店铺关键词（这些应该被排除）
+            if '商店' in part_clean or '店铺' in part_clean:
+                continue
+        
+        # 如果都没有匹配，取最后一个非数字、非店铺名的部分
+        for part in reversed(parts):
+            part_clean = part.strip()
+            if not part_clean:
+                continue
+            if re.match(r'^\d+$', part_clean):
+                continue
+            if len(part_clean) < 2:
+                continue
+            if '商店' in part_clean or '店铺' in part_clean:
+                continue
+            return part_clean
     
     return None
 
@@ -103,6 +146,7 @@ def load_dimension_mapping():
         resp = supabase.table("mapping").select("*").execute()
         if resp.data:
             df = pd.DataFrame(resp.data)
+            # 清理店铺名（大写，去除空格）
             df['shop_name'] = df['shop_name'].astype(str).str.strip().str.upper()
             df['anchor_name'] = df['anchor_name'].fillna('NONE').astype(str).str.strip().str.upper()
             df['org_name'] = df['org_name'].fillna('未分配组织').astype(str).str.strip()
@@ -114,13 +158,14 @@ def load_dimension_mapping():
         st.error(f"加载维度映射表失败：{e}")
         return pd.DataFrame()
 
-# ---------- 核心聚合函数（缓存60秒）- 增强版 ----------
+# ---------- 核心聚合函数（缓存60秒）- 修复版 ----------
 @st.cache_data(ttl=60)
 def fetch_sales_summary(start_date, end_date, suffix=""):
     """
-    获取销售汇总数据（增强版）
-    支持从 product_sales 和 offline_sales 两个表获取数据
-    并自动映射组织名称和部门
+    获取销售汇总数据（修复版）
+    1. 优先使用 mapping 表映射组织名称和部门
+    2. 只有 mapping 表无法匹配时，才尝试从 remark 提取
+    3. 正确区分组织名称和店铺名称
     """
     if supabase is None:
         return pd.DataFrame()
@@ -208,24 +253,34 @@ def fetch_sales_summary(start_date, end_date, suffix=""):
     # 4. 加载映射表
     mapping_df = load_dimension_mapping()
 
-    # 5. 映射组织名称和部门
+    # 5. 映射组织名称和部门 - 优先使用 mapping 表
     if suffix == "_all" and not mapping_df.empty:
         # 创建 shop_name -> (org_name, dept) 的映射
         mapping_df['shop_name'] = mapping_df['shop_name'].astype(str).str.strip().str.upper()
-        shop_dept_map = mapping_df.drop_duplicates(subset=['shop_name'], keep='first').set_index('shop_name')['dept'].to_dict()
-        shop_org_map = mapping_df.drop_duplicates(subset=['shop_name'], keep='first').set_index('shop_name')['org_name'].to_dict()
         
-        # 使用映射填充
-        df['dept'] = df['shop_name'].map(shop_dept_map)
+        # 使用 drop_duplicates 确保每个 shop_name 只有一条映射
+        mapping_unique = mapping_df.drop_duplicates(subset=['shop_name'], keep='first')
+        shop_org_map = mapping_unique.set_index('shop_name')['org_name'].to_dict()
+        shop_dept_map = mapping_unique.set_index('shop_name')['dept'].to_dict()
+        
+        # 先用 mapping 表映射
         df['org_name'] = df['shop_name'].map(shop_org_map)
+        df['dept'] = df['shop_name'].map(shop_dept_map)
         
-        # 对于未能映射的店铺，尝试从 remark 中提取组织名称
-        unmasked = df['org_name'].isna()
+        # 对于 mapping 表无法匹配的店铺，尝试从 remark 提取组织名称
+        # 注意：只对 "未分配组织" 的记录尝试提取
+        unmasked = df['org_name'].isna() | (df['org_name'] == '未分配组织')
         if unmasked.any():
-            # 尝试从 shop_name 本身提取
-            df.loc[unmasked, 'org_name'] = df.loc[unmasked, 'shop_name'].apply(
-                lambda x: extract_org_from_remark(x) if isinstance(x, str) else None
+            # 获取这些记录的 remark 信息
+            # 注意：此时 df 中可能没有 remark 列，需要重新关联
+            # 由于聚合后丢失了 remark，我们只能从 shop_name 中尝试提取
+            df.loc[unmapped, 'org_name'] = df.loc[unmapped, 'shop_name'].apply(
+                lambda x: extract_org_from_shop_name(x) if isinstance(x, str) else None
             )
+            # 如果还是无法提取，使用 '未分配组织'
+            df['org_name'] = df['org_name'].fillna('未分配组织')
+            # 部门默认使用组织名称
+            df.loc[df['dept'].isna() | (df['dept'] == '未分配部门'), 'dept'] = df.loc[df['dept'].isna() | (df['dept'] == '未分配部门'), 'org_name']
         
         # 填充默认值
         df['org_name'] = df['org_name'].fillna('未分配组织')
@@ -251,7 +306,43 @@ def fetch_sales_summary(start_date, end_date, suffix=""):
 
     return df[["sale_date", "org_name", "dept", "shop_name", "total_ship", "total_return", "total_net"]]
 
-# ---------- 新增：完整的销售汇总（兼容旧版） ----------
+# ---------- 辅助：从店铺名提取组织（用于无法匹配的情况） ----------
+def extract_org_from_shop_name(shop_name):
+    """从店铺名中提取组织名称（备用方案）"""
+    if not shop_name or not isinstance(shop_name, str):
+        return None
+    
+    shop_name = str(shop_name).strip()
+    
+    # 排除纯数字
+    if re.match(r'^\d+$', shop_name):
+        return None
+    
+    # 常见的组织名称关键词
+    org_keywords = ['组', '部', '团队', '中心', '事业', '阿米巴', 'BU']
+    
+    for keyword in org_keywords:
+        if keyword in shop_name:
+            # 提取包含关键词的部分
+            match = re.search(r'([^\s_]+' + keyword + r')', shop_name)
+            if match:
+                return match.group(1)
+    
+    # 如果店铺名包含下划线，尝试取第一部分
+    if '_' in shop_name:
+        parts = shop_name.split('_')
+        for part in parts:
+            part_clean = part.strip()
+            if not part_clean:
+                continue
+            if re.match(r'^\d+$', part_clean):
+                continue
+            if len(part_clean) >= 2:
+                return part_clean
+    
+    return None
+
+# ---------- 完整的销售汇总（兼容旧版） ----------
 @st.cache_data(ttl=60)
 def fetch_complete_sales_summary(start_date, end_date, suffix="_all"):
     """
@@ -339,9 +430,18 @@ def load_product_sales(suffix=None, apply_filter=True, include_offline=True):
                     offline_df["master_category"] = None
                     offline_df["remark"] = offline_df["remark"].fillna("线下收入")
                     offline_df["anchor"] = "NONE"
-                    # 从 remark 或 shop_name 中提取组织信息
-                    offline_df["org_name"] = offline_df["remark"].apply(extract_org_from_remark)
-                    offline_df["dept"] = offline_df["org_name"]  # 默认使用组织名作为部门
+                    # 使用映射表或从备注提取组织
+                    if mapping_df is not None and not mapping_df.empty:
+                        shop_org_map = mapping_df.drop_duplicates(subset=['shop_name'], keep='first').set_index('shop_name')['org_name'].to_dict()
+                        shop_dept_map = mapping_df.drop_duplicates(subset=['shop_name'], keep='first').set_index('shop_name')['dept'].to_dict()
+                        offline_df["org_name"] = offline_df["shop_name"].map(shop_org_map)
+                        offline_df["dept"] = offline_df["shop_name"].map(shop_dept_map)
+                    else:
+                        offline_df["org_name"] = offline_df["remark"].apply(extract_org_from_remark)
+                        offline_df["dept"] = offline_df["org_name"]
+                    
+                    offline_df["org_name"] = offline_df["org_name"].fillna("未分配组织")
+                    offline_df["dept"] = offline_df["dept"].fillna("未分配部门")
                     
                     # 对齐列
                     for col in df.columns:
