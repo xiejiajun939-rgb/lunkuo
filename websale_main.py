@@ -204,7 +204,6 @@ if "processing_upload" not in st.session_state:
     st.session_state.processing_upload = False
 if "table_suffix" not in st.session_state:
     st.session_state.table_suffix = ""   # 默认非直播
-# 新增：存储已上传文件的hash列表，用于去重
 if "uploaded_file_hashes" not in st.session_state:
     st.session_state.uploaded_file_hashes = []
 
@@ -356,6 +355,7 @@ def clear_targets(suffix=None):
     st.session_state.target_dict = {}
     st.rerun()
 
+# ===================== 修改点 1: save_product_sales 增加 anchor_name =====================
 def save_product_sales(df_orders, suffix=None):
     if supabase is None:
         return
@@ -379,6 +379,8 @@ def save_product_sales(df_orders, suffix=None):
         short_code = parsed["style_code"]
         img = master_map.get(short_code, {}).get("image_url")
         cat = master_map.get(short_code, {}).get("master_category")
+        # ✅ 从 remark 中提取主播名称
+        anchor_name = extract_anchor(remark) or "NONE"
         if remark not in temp_records:
             temp_records[remark] = {
                 "remark": remark,
@@ -397,13 +399,17 @@ def save_product_sales(df_orders, suffix=None):
                 "return_amount": max(-amount, 0),
                 "net_amount": amount,
                 "image_url": img,
-                "master_category": cat
+                "master_category": cat,
+                "anchor_name": anchor_name   # ✅ 新增
             }
         else:
             existing = temp_records[remark]
             existing["ship_amount"] += max(amount, 0)
             existing["return_amount"] += max(-amount, 0)
             existing["net_amount"] += amount
+            # 如果已有记录的 anchor_name 为空，尝试更新
+            if existing.get("anchor_name") in [None, "", "NONE"] and anchor_name not in [None, "", "NONE"]:
+                existing["anchor_name"] = anchor_name
     records = list(temp_records.values())
     if records:
         table_name = get_table_name("product_sales", suffix)
@@ -412,6 +418,7 @@ def save_product_sales(df_orders, suffix=None):
             batch = records[i:i+batch_size]
             supabase.table(table_name).upsert(batch, on_conflict="remark").execute()
 
+# ===================== 修改点 2: save_offline_sales 增加 anchor_name =====================
 def save_offline_sales(df_orders):
     if supabase is None or df_orders.empty:
         return
@@ -423,7 +430,9 @@ def save_offline_sales(df_orders):
     df['return_amount'] = (-df['amount']).clip(lower=0)
     df['net_amount'] = df['amount']
     df['remark'] = df['备注'].astype(str).str.strip()
-    records = df[['sale_date', 'shop_name', 'ship_amount', 'return_amount', 'net_amount', 'remark']].to_dict(orient='records')
+    # ✅ 线下数据默认 anchor_name = 'NONE'
+    df['anchor_name'] = 'NONE'
+    records = df[['sale_date', 'shop_name', 'ship_amount', 'return_amount', 'net_amount', 'remark', 'anchor_name']].to_dict(orient='records')
     if not records:
         return
     table_name = "offline_sales_all"
@@ -440,6 +449,7 @@ def save_offline_sales(df_orders):
                 time.sleep(2 ** attempt)
     refresh_materialized_view("_all")
 
+# ========== 其他函数保持不变 ==========
 def validate_order_data(df):
     try:
         required = ["日期", "金额/时间", "备注"]
@@ -952,7 +962,6 @@ with st.sidebar:
             template_df.to_excel(writer, index=False)
         st.download_button("📄 下载目标模板", data=template_bytes.getvalue(), file_name="目标模板.xlsx", key="download_template_final")
         
-        # 重置已上传文件hash列表
         if st.button("🔄 重置上传记录（允许重新上传相同文件）", key="reset_upload_hashes"):
             st.session_state.uploaded_file_hashes = []
             st.success("已重置上传记录，现在可以重新上传相同文件")
