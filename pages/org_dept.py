@@ -10,6 +10,7 @@ import pandas as pd
 from datetime import date, timedelta
 import plotly.express as px
 import plotly.graph_objects as go
+import io
 
 from core.db import init_supabase, get_table_name, fetch_sales_summary, load_org_targets, fetch_complete_sales_summary
 from core.ai import get_ai_summary
@@ -487,7 +488,186 @@ if not df_pivot.empty:
 else:
     st.warning(f"{period_label_p} 无数据，无法显示透视表。")
 
-# ---------- 3.4 异常预警 ----------
+# ---------- 3.4 部门明细汇总表（新增） ----------
+st.markdown("---")
+st.markdown("#### 📋 部门明细汇总表")
+
+# 选择周期
+time_mode_detail = st.radio(
+    "选择查看周期",
+    options=["近7天", "月累计"],
+    index=1,
+    horizontal=True,
+    key="org_dept_detail_mode"
+)
+
+if time_mode_detail == "近7天":
+    start_date_detail = base_date - timedelta(days=6)
+    end_date_detail = base_date
+    period_label_detail = "近7天"
+else:
+    start_date_detail = base_date.replace(day=1)
+    end_date_detail = base_date
+    period_label_detail = f"月累计（{base_date.strftime('%Y-%m')}）"
+
+with st.spinner(f"加载部门明细数据（{period_label_detail}）..."):
+    df_detail = fetch_complete_sales_summary(start_date_detail, end_date_detail, suffix)
+
+if not df_detail.empty:
+    # 按部门汇总
+    dept_detail = df_detail.groupby(['org_name', 'dept', 'shop_name']).agg({
+        'total_ship': 'sum',
+        'total_return': 'sum',
+        'total_net': 'sum'
+    }).reset_index()
+    
+    # 计算退货率
+    dept_detail['退货率'] = (dept_detail['total_return'] / (dept_detail['total_ship'] + 1e-5) * 100).round(2)
+    dept_detail['退货率显示'] = dept_detail['退货率'].apply(lambda x: f"{x:.2f}%")
+    
+    # 格式化金额
+    dept_detail['发货额'] = dept_detail['total_ship'].apply(lambda x: f"¥{x:,.2f}")
+    dept_detail['退货额'] = dept_detail['total_return'].apply(lambda x: f"¥{x:,.2f}")
+    dept_detail['净额'] = dept_detail['total_net'].apply(lambda x: f"¥{x:,.2f}")
+    
+    # 添加排名
+    dept_detail['净额排名'] = dept_detail['total_net'].rank(ascending=False, method='min').astype(int)
+    
+    # 显示汇总表
+    st.markdown(f"**📊 部门明细汇总表（{period_label_detail}）**")
+    st.caption(f"共 {len(dept_detail)} 个店铺/部门记录，涉及 {dept_detail['org_name'].nunique()} 个组织，{dept_detail['dept'].nunique()} 个部门")
+    
+    # 显示表格
+    display_cols = ['净额排名', 'org_name', 'dept', 'shop_name', '净额', '发货额', '退货额', '退货率显示']
+    st.dataframe(
+        dept_detail[display_cols].sort_values('净额排名'),
+        hide_index=True,
+        use_container_width=True,
+        column_config={
+            "净额排名": st.column_config.NumberColumn("排名", width="small"),
+            "org_name": st.column_config.TextColumn("组织", width="medium"),
+            "dept": st.column_config.TextColumn("部门", width="medium"),
+            "shop_name": st.column_config.TextColumn("店铺", width="medium"),
+            "净额": st.column_config.TextColumn("净销售额", width="medium"),
+            "发货额": st.column_config.TextColumn("发货额", width="medium"),
+            "退货额": st.column_config.TextColumn("退货额", width="medium"),
+            "退货率显示": st.column_config.TextColumn("退货率", width="small"),
+        }
+    )
+    
+    # ========== 部门明细导出功能 ==========
+    st.markdown("---")
+    st.markdown("#### 📥 导出部门明细数据")
+    
+    # 导出选项
+    col_export1, col_export2, col_export3 = st.columns(3)
+    
+    with col_export1:
+        export_format = st.selectbox(
+            "选择导出格式",
+            options=["Excel (.xlsx)", "CSV (.csv)"],
+            key="export_format_select"
+        )
+    
+    with col_export2:
+        # 选择要导出的列
+        export_cols = st.multiselect(
+            "选择要导出的列",
+            options=['org_name', 'dept', 'shop_name', 'total_ship', 'total_return', 'total_net', '退货率'],
+            default=['org_name', 'dept', 'shop_name', 'total_ship', 'total_return', 'total_net', '退货率'],
+            key="export_cols_select"
+        )
+    
+    with col_export3:
+        # 选择是否包含汇总行
+        include_summary = st.checkbox("包含汇总行", value=True, key="export_include_summary")
+    
+    # 准备导出数据
+    def prepare_export_data():
+        export_df = dept_detail.copy()
+        
+        # 只选择用户指定的列
+        export_cols_mapping = {
+            'org_name': '组织',
+            'dept': '部门',
+            'shop_name': '店铺',
+            'total_ship': '发货额',
+            'total_return': '退货额',
+            'total_net': '净销售额',
+            '退货率': '退货率(%)'
+        }
+        
+        selected_export_cols = [col for col in export_cols if col in export_cols_mapping]
+        if not selected_export_cols:
+            selected_export_cols = list(export_cols_mapping.keys())
+        
+        export_df = export_df[selected_export_cols].copy()
+        export_df.columns = [export_cols_mapping[col] for col in selected_export_cols]
+        
+        # 按净销售额排序
+        if '净销售额' in export_df.columns:
+            export_df = export_df.sort_values('净销售额', ascending=False)
+        
+        # 添加汇总行
+        if include_summary:
+            summary_row = {}
+            for col in export_df.columns:
+                if col in ['发货额', '退货额', '净销售额']:
+                    summary_row[col] = export_df[col].sum()
+                elif col == '退货率(%)':
+                    total_ship = export_df['发货额'].sum() if '发货额' in export_df.columns else 0
+                    total_return = export_df['退货额'].sum() if '退货额' in export_df.columns else 0
+                    summary_row[col] = (total_return / (total_ship + 1e-5) * 100).round(2)
+                else:
+                    summary_row[col] = '合计'
+            export_df = pd.concat([export_df, pd.DataFrame([summary_row])], ignore_index=True)
+        
+        return export_df
+    
+    # 导出按钮
+    if st.button("📥 下载部门明细数据", key="export_dept_detail"):
+        try:
+            export_df = prepare_export_data()
+            
+            if export_format == "Excel (.xlsx)":
+                output = io.BytesIO()
+                with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                    export_df.to_excel(writer, sheet_name='部门明细', index=False)
+                output.seek(0)
+                
+                st.download_button(
+                    label="✅ 点击下载 Excel 文件",
+                    data=output,
+                    file_name=f"部门明细_{period_label_detail}_{base_date.strftime('%Y%m%d')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="download_excel_btn"
+                )
+            else:
+                # CSV 导出
+                csv_data = export_df.to_csv(index=False, encoding='utf-8-sig')
+                st.download_button(
+                    label="✅ 点击下载 CSV 文件",
+                    data=csv_data,
+                    file_name=f"部门明细_{period_label_detail}_{base_date.strftime('%Y%m%d')}.csv",
+                    mime="text/csv",
+                    key="download_csv_btn"
+                )
+            st.success("✅ 数据准备完成，请点击下载按钮获取文件")
+        except Exception as e:
+            st.error(f"导出失败：{e}")
+    
+    # 预览导出数据
+    with st.expander("👁️ 预览导出数据"):
+        preview_df = prepare_export_data()
+        st.dataframe(preview_df, hide_index=True, use_container_width=True)
+        
+        # 显示统计信息
+        st.caption(f"📊 共 {len(preview_df)} 行数据（包含汇总行）")
+    
+else:
+    st.warning(f"{period_label_detail} 无数据，无法显示部门明细。")
+
+# ---------- 3.5 异常预警 ----------
 st.markdown("---")
 st.markdown("#### ⚠️ 异常决策预警")
 
