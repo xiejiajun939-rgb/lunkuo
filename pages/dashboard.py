@@ -6,7 +6,7 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 
-from core.db import load_product_sales, load_org_targets, fetch_sales_summary
+from core.db import load_product_sales, load_org_targets, fetch_sales_summary, fetch_complete_sales_summary
 from core.utils import date_quick_buttons
 from core.ai import get_ai_summary
 
@@ -18,7 +18,7 @@ if "table_suffix" not in st.session_state:
 if "target_dict" not in st.session_state:
     st.session_state.target_dict = {}
 
-# ---------- 自定义样式（简化，可复用主文件样式） ----------
+# ---------- 自定义样式 ----------
 st.markdown("""
 <style>
     .glass-card { background: rgba(255,255,255,0.9); border-radius: 16px; padding: 22px 24px; border: 1px solid rgba(0,0,0,0.06); backdrop-filter: blur(10px); box-shadow: 0 8px 32px rgba(0,0,0,0.08); margin-bottom: 8px; }
@@ -41,23 +41,56 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ---------- 加载数据 ----------
-with st.spinner("加载数据..."):
-    prod_df = load_product_sales(st.session_state.table_suffix)
+# ---------- 获取日期范围 ----------
+# 使用 fetch_complete_sales_summary 获取全部数据（线上+线下）
+suffix = st.session_state.table_suffix
+target_dict = st.session_state.target_dict
 
-if prod_df.empty:
-    st.info("📌 暂无商品销售数据，请先上传订单文件。")
+# 确定日期范围
+if suffix == "_all":
+    # 全部数据模式：从线上和线下获取日期范围
+    from core.db import get_sales_date_range
+    min_date, max_date = get_sales_date_range(suffix)
+    if min_date is None or max_date is None:
+        st.warning("无法获取数据日期范围，请检查数据是否存在。")
+        st.stop()
+else:
+    min_date, max_date = None, None
+    # 非全部模式，直接从 product_sales 获取
+    from core.db import get_sales_date_range
+    min_date, max_date = get_sales_date_range(suffix)
+    if min_date is None or max_date is None:
+        st.warning("无法获取数据日期范围，请检查数据是否存在。")
+        st.stop()
+
+st.markdown("#### 📅 日期选择")
+base_date = st.date_input(
+    "选择分析基准日期",
+    value=max_date,
+    min_value=min_date,
+    max_value=max_date,
+    key="dashboard_base_date"
+)
+st.caption(f"当前数据日期范围：{min_date} ~ {max_date}")
+
+# ---------- 加载汇总数据 ----------
+with st.spinner("加载数据..."):
+    # 使用 fetch_complete_sales_summary 获取汇总数据（线上+线下完整合并）
+    df_summary = fetch_complete_sales_summary(base_date - timedelta(days=30), base_date, suffix, view_mode="all")
+
+if df_summary.empty:
+    st.info("📌 暂无销售数据，请先上传订单文件。")
     st.stop()
 
 # ---------- 部门筛选 ----------
-has_dept = 'dept' in prod_df.columns and prod_df['dept'].notna().any()
+has_dept = 'dept' in df_summary.columns and df_summary['dept'].notna().any()
 if has_dept:
-    depts = sorted(prod_df['dept'].dropna().unique())
+    depts = sorted(df_summary['dept'].dropna().unique())
     depts = ['全部'] + depts
     selected_dept = st.selectbox("🏢 选择部门", depts, key="dashboard_dept_select")
     if selected_dept != '全部':
-        prod_df = prod_df[prod_df['dept'] == selected_dept]
-        if prod_df.empty:
+        df_summary = df_summary[df_summary['dept'] == selected_dept]
+        if df_summary.empty:
             st.warning(f"当前部门「{selected_dept}」无销售数据，请切换其他部门。")
             st.stop()
 else:
@@ -65,7 +98,7 @@ else:
     st.caption("当前数据源无部门维度，显示全部数据。")
 
 # ---------- 按日期汇总净销售额 ----------
-daily_sales = prod_df.groupby(prod_df["sale_date"].dt.date)["net_amount"].sum().reset_index()
+daily_sales = df_summary.groupby(df_summary["sale_date"].dt.date)["total_net"].sum().reset_index()
 daily_sales.columns = ["日期", "amount"]
 daily_sales = daily_sales.sort_values("日期")
 
@@ -88,19 +121,22 @@ month_start = latest_date.replace(day=1)
 month_mask = daily_sales["日期"] >= month_start
 month_sales = daily_sales.loc[month_mask, "amount"].sum()
 
-target_dict = st.session_state.target_dict
+# 目标计算
 if target_dict and has_dept and selected_dept != '全部':
-    dept_shops = prod_df['shop_name'].unique()
+    # 获取该部门下所有店铺
+    dept_shops = df_summary['shop_name'].unique()
     dept_target = sum([target_dict.get(shop, 0) for shop in dept_shops])
 else:
     dept_target = sum(target_dict.values())
 target_rate = (month_sales / dept_target * 100) if dept_target > 0 else 0
 
-latest_prod = prod_df[prod_df["sale_date"].dt.date == latest_date]
-ship_latest = latest_prod["ship_amount"].sum()
-return_latest = latest_prod["return_amount"].sum()
+# 昨日发货/退货
+latest_df = df_summary[df_summary["sale_date"].dt.date == latest_date]
+ship_latest = latest_df["total_ship"].sum()
+return_latest = latest_df["total_return"].sum()
 return_rate = (return_latest / ship_latest * 100) if ship_latest > 0 else 0
 
+# 健康度
 health_score = 70
 if target_rate > 80:
     health_score += 15
@@ -190,7 +226,7 @@ end_date = latest_date - timedelta(days=1)
 start_date_recent = end_date - timedelta(days=6)
 start_date_previous = start_date_recent - timedelta(days=7)
 
-shop_daily = prod_df.groupby([prod_df["sale_date"].dt.date, "shop_name"])["net_amount"].sum().reset_index()
+shop_daily = df_summary.groupby([df_summary["sale_date"].dt.date, "shop_name"])["total_net"].sum().reset_index()
 shop_daily.columns = ["日期", "shop_name", "amount"]
 
 mask_recent = (shop_daily["日期"] >= start_date_recent) & (shop_daily["日期"] <= end_date)
@@ -209,13 +245,16 @@ if not recent_data.empty and not previous_data.empty:
     for _, row in merged.head(3).iterrows():
         alerts.append(("#f87171" if row["下滑"] > 40 else "#fbbf24", f"📉 {row['shop_name']} 近7天销售下降 {row['下滑']:.0f}%"))
 
-prod_recent = prod_df[(prod_df["sale_date"] >= pd.to_datetime(start_date_recent)) & (prod_df["sale_date"] <= pd.to_datetime(end_date))]
-prod_previous = prod_df[(prod_df["sale_date"] >= pd.to_datetime(start_date_previous)) & (prod_df["sale_date"] <= pd.to_datetime(start_date_recent - timedelta(days=1)))]
+# 商品退货率异常（需要 style_code 列，df_summary 可能没有，跳过或从详细数据获取）
+# 这里保留但使用 df_summary 中的 shop_name 级别数据
+prod_recent = df_summary[(df_summary["sale_date"] >= pd.to_datetime(start_date_recent)) & (df_summary["sale_date"] <= pd.to_datetime(end_date))]
+prod_previous = df_summary[(df_summary["sale_date"] >= pd.to_datetime(start_date_previous)) & (df_summary["sale_date"] <= pd.to_datetime(start_date_recent - timedelta(days=1)))]
 
 if not prod_recent.empty and not prod_previous.empty:
-    recent_prod = prod_recent.groupby("style_code").agg(ship=("ship_amount", "sum"), ret=("return_amount", "sum")).reset_index()
-    prev_prod = prod_previous.groupby("style_code").agg(ship=("ship_amount", "sum"), ret=("return_amount", "sum")).reset_index()
-    merged_prod = pd.merge(recent_prod, prev_prod, on="style_code", suffixes=("_近", "_前"))
+    # 按 shop_name 汇总（因为 df_summary 没有 style_code）
+    recent_prod = prod_recent.groupby("shop_name").agg(ship=("total_ship", "sum"), ret=("total_return", "sum")).reset_index()
+    prev_prod = prod_previous.groupby("shop_name").agg(ship=("total_ship", "sum"), ret=("total_return", "sum")).reset_index()
+    merged_prod = pd.merge(recent_prod, prev_prod, on="shop_name", suffixes=("_近", "_前"))
     merged_prod["退货率近"] = (merged_prod["ret_近"] / merged_prod["ship_近"] * 100).fillna(0)
     merged_prod["退货率前"] = (merged_prod["ret_前"] / merged_prod["ship_前"] * 100).fillna(0)
     mask_valid = (merged_prod["ship_前"] > 0) & (merged_prod["ship_近"] > 0)
@@ -223,10 +262,11 @@ if not prod_recent.empty and not prod_previous.empty:
     merged_prod.loc[mask_valid, "变化"] = merged_prod.loc[mask_valid, "退货率近"] - merged_prod.loc[mask_valid, "退货率前"]
     merged_prod = merged_prod[(merged_prod["变化"] >= 10) & np.isfinite(merged_prod["变化"])].sort_values("变化", ascending=False)
     for _, row in merged_prod.head(3).iterrows():
-        alerts.append(("#f87171" if row["变化"] > 20 else "#fbbf24", f"📦 {row['style_code']} 退货率上升 {row['变化']:.1f} 个百分点"))
+        alerts.append(("#f87171" if row["变化"] > 20 else "#fbbf24", f"📦 {row['shop_name']} 退货率上升 {row['变化']:.1f} 个百分点"))
 
+# 目标完成率预警
 if target_dict and has_dept and selected_dept != '全部':
-    dept_shop_names = prod_df['shop_name'].unique()
+    dept_shop_names = df_summary['shop_name'].unique()
     for shop in dept_shop_names:
         target = target_dict.get(shop, 0)
         if target > 0:
@@ -258,7 +298,7 @@ col_left, col_right = st.columns([1, 1])
 
 with col_left:
     st.markdown('<div class="section-title">🏆 店铺排行</div>', unsafe_allow_html=True)
-    shop_latest = prod_df[prod_df["sale_date"].dt.date == latest_date].groupby("shop_name")["net_amount"].sum().sort_values(ascending=False).head(5)
+    shop_latest = df_summary[df_summary["sale_date"].dt.date == latest_date].groupby("shop_name")["total_net"].sum().sort_values(ascending=False).head(5)
     if not shop_latest.empty:
         max_val = shop_latest.iloc[0]
         rank_html = ""
@@ -280,9 +320,9 @@ with col_left:
         st.info("暂无数据")
 
     st.markdown('<div class="section-title" style="margin-top:16px;">📊 退货排行</div>', unsafe_allow_html=True)
-    prod_latest = prod_df[prod_df["sale_date"].dt.date == latest_date]
-    if not prod_latest.empty:
-        return_rank = prod_latest.groupby("shop_name").agg(发货=("ship_amount", "sum"), 退货=("return_amount", "sum")).reset_index()
+    latest_df_for_return = df_summary[df_summary["sale_date"].dt.date == latest_date]
+    if not latest_df_for_return.empty:
+        return_rank = latest_df_for_return.groupby("shop_name").agg(发货=("total_ship", "sum"), 退货=("total_return", "sum")).reset_index()
         return_rank = return_rank[return_rank["发货"] > 0]
         return_rank["退货率"] = (return_rank["退货"] / return_rank["发货"] * 100).round(1)
         return_rank = return_rank.sort_values("退货率", ascending=False).head(3)
