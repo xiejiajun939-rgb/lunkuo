@@ -61,7 +61,7 @@ def fetch_sales_summary(start_date, end_date, suffix="", view_mode=None):
     """
     获取销售汇总数据
     ★ 线上数据：使用 (shop_name, anchor) 匹配 mapping 表
-    ★ 线下数据：直接使用 shop_name 匹配 mapping 表（anchor_name='NONE'）
+    ★ 线下数据：直接使用 shop_name 匹配 mapping 表（不需要 anchor，线下根本没有这个字段）
     """
     required_columns = ["sale_date", "org_name", "dept", "shop_name", "anchor", "total_ship", "total_return", "total_net"]
     
@@ -73,7 +73,7 @@ def fetch_sales_summary(start_date, end_date, suffix="", view_mode=None):
             df['shop_name'] = df['shop_name'].astype(str).str.strip().str.upper()
         return df
 
-    # ---- 探测 anchor_name 列是否存在 ----
+    # ---- 探测 anchor_name 列是否存在（仅线上数据需要） ----
     product_table = get_table_name("product_sales", suffix)
     use_anchor = True
     try:
@@ -142,14 +142,15 @@ def fetch_sales_summary(start_date, end_date, suffix="", view_mode=None):
                 end_ts = pd.Timestamp(end_date) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
                 df_offline = df_offline[(df_offline["sale_date"] >= start_ts) & (df_offline["sale_date"] <= end_ts)]
                 if not df_offline.empty:
-                    # 线下数据：没有 anchor，但为了后续列统一，设为 'NONE'
-                    df_offline["anchor"] = "NONE"
-                    df_offline = df_offline.groupby(["sale_date", "shop_name", "anchor"], as_index=False).agg({
+                    # 线下数据：直接用 shop_name 聚合（没有 anchor）
+                    df_offline = df_offline.groupby(["sale_date", "shop_name"], as_index=False).agg({
                         "ship_amount": "sum",
                         "return_amount": "sum",
                         "net_amount": "sum"
                     })
                     df_offline = clean_shop_names(df_offline)
+                    # 线下数据没有 anchor 字段，统一设置为 "NONE"（仅用于列对齐）
+                    df_offline["anchor"] = "NONE"
         except Exception as e:
             st.warning(f"查询线下数据出错：{e}")
 
@@ -166,7 +167,7 @@ def fetch_sales_summary(start_date, end_date, suffix="", view_mode=None):
     mapping_exists = suffix == "_all" and not mapping_df.empty
 
     # ============================================================
-    # 5. 分别映射线上和线下数据
+    # 5. 分别映射线上和线下数据（逻辑完全分离）
     # ============================================================
     if mapping_exists:
         mapping_df['shop_name'] = mapping_df['shop_name'].astype(str).str.strip().str.upper()
@@ -177,10 +178,11 @@ def fetch_sales_summary(start_date, end_date, suffix="", view_mode=None):
         key_to_org = mapping_unique.set_index(['shop_name', 'anchor_name'])['org_name'].to_dict()
         key_to_dept = mapping_unique.set_index(['shop_name', 'anchor_name'])['dept'].to_dict()
 
-        # ----- 5b. 线下映射字典：shop_name -> (org_name, dept) 只取 anchor_name='NONE' -----
-        mapping_none = mapping_unique[mapping_unique['anchor_name'] == 'NONE']
-        shop_to_org = mapping_none.set_index('shop_name')['org_name'].to_dict()
-        shop_to_dept = mapping_none.set_index('shop_name')['dept'].to_dict()
+        # ----- 5b. 线下映射字典：shop_name -> (org_name, dept) -----
+        # 线下数据直接用 shop_name 匹配，取第一条记录（按 shop_name 去重）
+        mapping_by_shop = mapping_unique.drop_duplicates(subset=['shop_name'], keep='first')
+        shop_to_org = mapping_by_shop.set_index('shop_name')['org_name'].to_dict()
+        shop_to_dept = mapping_by_shop.set_index('shop_name')['dept'].to_dict()
 
         # ----- 5c. 映射线上数据 -----
         if not df_online.empty:
@@ -193,12 +195,10 @@ def fetch_sales_summary(start_date, end_date, suffix="", view_mode=None):
             df_online['org_name'] = df_online['org_name'].fillna('未分配组织')
             df_online['dept'] = df_online['dept'].fillna('未分配部门')
 
-        # ----- 5d. 映射线下数据 -----
+        # ----- 5d. 映射线下数据（直接用 shop_name，不涉及任何 anchor） -----
         if not df_offline.empty:
             df_offline['org_name'] = df_offline['shop_name'].map(shop_to_org).fillna('未分配组织')
             df_offline['dept'] = df_offline['shop_name'].map(shop_to_dept).fillna('未分配部门')
-            # 线下 anchor 统一为 'NONE'
-            df_offline['anchor'] = 'NONE'
     else:
         # 没有 mapping 表时，全部设为默认
         if not df_online.empty:
