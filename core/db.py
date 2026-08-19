@@ -305,7 +305,7 @@ def load_product_sales(suffix=None, apply_filter=True, include_offline=True):
             df["org_name"] = "未分配组织"
             df["dept"] = "未分配部门"
 
-        # ========== 小店运营模式过滤（同样支持 view_mode 覆盖） ==========
+        # ========== 小店运营模式过滤 ==========
         view_mode_to_use = st.session_state.get("view_mode")
         if view_mode_to_use == "shop":
             if 'dept' in df.columns:
