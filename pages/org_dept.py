@@ -79,7 +79,10 @@ def get_dept_summary_with_all(start_date, end_date, suffix="_all"):
     部门数据为该部门下所有组织的业绩汇总
     """
     all_depts = load_all_depts()
-    df_data = fetch_complete_sales_summary(start_date, end_date, suffix)
+    # 确保包含“未分配部门”，以便显示未映射的数据
+    if '未分配部门' not in all_depts:
+        all_depts.append('未分配部门')
+    df_data = fetch_complete_sales_summary(start_date, end_date, suffix, view_mode="all")
     if not df_data.empty:
         dept_actual = df_data.groupby('dept').agg({
             'total_ship': 'sum',
@@ -123,8 +126,8 @@ org_targets = load_org_targets("_all")
 total_target = sum(org_targets.values()) if org_targets else 0
 
 with st.spinner("加载 KPI 数据..."):
-    df_today = fetch_complete_sales_summary(latest_date, latest_date, suffix)
-    df_mtd = fetch_complete_sales_summary(month_start, latest_date, suffix)
+    df_today = fetch_complete_sales_summary(latest_date, latest_date, suffix, view_mode="all")
+    df_mtd = fetch_complete_sales_summary(month_start, latest_date, suffix, view_mode="all")
 
 if df_today.empty:
     st.info(f"📌 提示：{latest_date} 无销售数据，显示月累计数据。")
@@ -187,8 +190,8 @@ prev_period_start = base_date - timedelta(days=13)
 prev_period_end = base_date - timedelta(days=7)
 
 with st.spinner("加载趋势数据..."):
-    df_7d = fetch_complete_sales_summary(period_start, base_date, suffix)
-    df_prev = fetch_complete_sales_summary(prev_period_start, prev_period_end, suffix)
+    df_7d = fetch_complete_sales_summary(period_start, base_date, suffix, view_mode="all")
+    df_prev = fetch_complete_sales_summary(prev_period_start, prev_period_end, suffix, view_mode="all")
 
 st.markdown("##### 汇总统计")
 if not df_7d.empty and 'total_net' in df_7d.columns:
@@ -267,7 +270,7 @@ else:
     period_label = f"月累计（{base_date.strftime('%Y-%m')}）"
 
 with st.spinner(f"加载 {period_label} 数据..."):
-    df_period_main = fetch_complete_sales_summary(start_date, end_date, suffix)
+    df_period_main = fetch_complete_sales_summary(start_date, end_date, suffix, view_mode="all")
 
 if not df_period_main.empty:
     # 数据概览（包含组织与部门映射）
@@ -412,7 +415,7 @@ else:
     period_label_r = f"月累计（{base_date.strftime('%Y-%m')}）"
 
 with st.spinner(f"加载退货率数据（{period_label_r}）..."):
-    df_return = fetch_complete_sales_summary(start_date_r, end_date_r, suffix)
+    df_return = fetch_complete_sales_summary(start_date_r, end_date_r, suffix, view_mode="all")
 
 if not df_return.empty:
     dept_summary_full = get_dept_summary_with_all(start_date_r, end_date_r, suffix)
@@ -469,7 +472,7 @@ else:
     period_label_p = f"月累计（{base_date.strftime('%Y-%m')}）"
 
 with st.spinner(f"加载透视数据（{period_label_p}）..."):
-    df_pivot = fetch_complete_sales_summary(start_date_p, end_date_p, suffix)
+    df_pivot = fetch_complete_sales_summary(start_date_p, end_date_p, suffix, view_mode="all")
 
 if not df_pivot.empty:
     def classify_platform(shop_name):
