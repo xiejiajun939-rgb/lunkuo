@@ -204,6 +204,9 @@ if "processing_upload" not in st.session_state:
     st.session_state.processing_upload = False
 if "table_suffix" not in st.session_state:
     st.session_state.table_suffix = ""   # 默认非直播
+# 新增：存储已上传文件的hash列表，用于去重
+if "uploaded_file_hashes" not in st.session_state:
+    st.session_state.uploaded_file_hashes = []
 
 # ========== 辅助函数 ==========
 def refresh_materialized_view(suffix=""):
@@ -741,89 +744,193 @@ with st.sidebar:
     # 文件上传与工具（仅管理员）
     if st.session_state.role == "admin":
         current_display_suffix = st.session_state.table_suffix
-        def handle_upload(uploaded_file, suffix, file_type="order"):
+        
+        # ========== 多文件上传处理函数 ==========
+        def handle_multiple_upload(uploaded_files, suffix, file_type="order"):
+            """处理多个文件上传"""
             if st.session_state.processing_upload:
                 st.warning("上一个文件正在处理中，请稍后...")
                 return
-            if uploaded_file is None:
+            
+            if not uploaded_files:
                 st.warning("请先选择文件")
                 return
-            file_content = uploaded_file.getvalue()
-            file_hash = hashlib.md5(file_content).hexdigest()
-            if file_type == "order" and st.session_state.get("uploaded_file_hash") == file_hash:
-                st.info("该文件内容已上传过，无需重复处理")
-                return
-            st.session_state.processing_upload = True
-            with st.spinner("正在处理文件，请稍候..."):
-                file_bytes = io.BytesIO(file_content)
-                if file_type == "order":
-                    ok, msg = process_uploaded_file(file_bytes, suffix)
-                else:
-                    ok, msg = load_target_file(file_bytes, suffix)
-            if ok:
-                st.success(msg)
-                if file_type == "order":
-                    st.session_state.uploaded_file_hash = file_hash
+            
+            total_success = 0
+            total_fail = 0
+            results = []
+            
+            # 显示进度
+            progress_bar = st.progress(0, text="正在处理文件...")
+            status_text = st.empty()
+            
+            for i, uploaded_file in enumerate(uploaded_files):
+                status_text.text(f"正在处理: {uploaded_file.name} ({i+1}/{len(uploaded_files)})")
+                
+                # 计算文件hash用于去重
+                file_content = uploaded_file.getvalue()
+                file_hash = hashlib.md5(file_content).hexdigest()
+                
+                # 检查是否已上传过
+                if file_type == "order" and file_hash in st.session_state.uploaded_file_hashes:
+                    results.append(f"⏭️ {uploaded_file.name}: 已上传过，跳过")
+                    progress_bar.progress((i + 1) / len(uploaded_files))
+                    continue
+                
+                try:
+                    # 重置文件指针
+                    uploaded_file.seek(0)
+                    file_bytes = io.BytesIO(file_content)
+                    
+                    if file_type == "order":
+                        ok, msg = process_uploaded_file(file_bytes, suffix)
+                        if ok:
+                            st.session_state.uploaded_file_hashes.append(file_hash)
+                            total_success += 1
+                            results.append(f"✅ {uploaded_file.name}: {msg}")
+                        else:
+                            total_fail += 1
+                            results.append(f"❌ {uploaded_file.name}: {msg}")
+                    else:
+                        ok, msg = load_target_file(file_bytes, suffix)
+                        if ok:
+                            total_success += 1
+                            results.append(f"✅ {uploaded_file.name}: {msg}")
+                        else:
+                            total_fail += 1
+                            results.append(f"❌ {uploaded_file.name}: {msg}")
+                except Exception as e:
+                    total_fail += 1
+                    results.append(f"❌ {uploaded_file.name}: 处理异常 - {str(e)}")
+                
+                progress_bar.progress((i + 1) / len(uploaded_files))
+            
+            # 清除进度显示
+            progress_bar.empty()
+            status_text.empty()
+            
+            # 显示结果
+            st.markdown("---")
+            st.subheader(f"📊 处理完成：成功 {total_success}，失败 {total_fail}")
+            for result in results:
+                st.text(result)
+            
+            # 如果有成功的，刷新数据
+            if total_success > 0:
                 st.cache_data.clear()
-                st.session_state.processing_upload = False
+                rebuild_daily_data(suffix)
+                st.session_state.target_dict = load_targets(suffix)
                 time.sleep(0.3)
                 st.rerun()
             else:
-                st.error(msg)
-                st.session_state.processing_upload = False
-
+                st.warning("没有文件被成功处理，请检查文件格式和内容")
+        
+        # ========== 非直播数据上传（多文件） ==========
         if current_display_suffix == "":
             st.subheader("📁 非直播数据上传")
-            uploaded_order = st.file_uploader("选择订单文件 (Excel)", type=["xlsx", "xls"], key="order_uploader_normal_final")
-            if st.button("📤 确认上传", key="confirm_upload_normal_final"):
-                handle_upload(uploaded_order, "", "order")
-            target_file = st.file_uploader("选择目标文件 (Excel)", type=["xlsx", "xls"], key="target_upload_normal_final")
-            if st.button("📤 确认上传目标", key="confirm_target_normal_final"):
-                handle_upload(target_file, "", "target")
+            uploaded_orders = st.file_uploader(
+                "选择订单文件 (Excel)，支持多选", 
+                type=["xlsx", "xls"], 
+                key="order_uploader_normal_multi",
+                accept_multiple_files=True
+            )
+            if uploaded_orders and st.button("📤 确认上传", key="confirm_upload_normal_multi"):
+                handle_multiple_upload(uploaded_orders, "", "order")
+            
+            target_files = st.file_uploader(
+                "选择目标文件 (Excel)，支持多选", 
+                type=["xlsx", "xls"], 
+                key="target_upload_normal_multi",
+                accept_multiple_files=True
+            )
+            if target_files and st.button("📤 确认上传目标", key="confirm_target_normal_multi"):
+                handle_multiple_upload(target_files, "", "target")
+        
+        # ========== 直播数据上传（多文件） ==========
         elif current_display_suffix == "_live":
             st.subheader("🎥 直播数据上传")
-            uploaded_order = st.file_uploader("选择订单文件 (Excel)", type=["xlsx", "xls"], key="order_uploader_live_final")
-            if st.button("📤 确认上传", key="confirm_upload_live_final"):
-                handle_upload(uploaded_order, "_live", "order")
-            target_file = st.file_uploader("选择目标文件 (Excel)", type=["xlsx", "xls"], key="target_upload_live_final")
-            if st.button("📤 确认上传目标", key="confirm_target_live_final"):
-                handle_upload(target_file, "_live", "target")
+            uploaded_orders = st.file_uploader(
+                "选择订单文件 (Excel)，支持多选", 
+                type=["xlsx", "xls"], 
+                key="order_uploader_live_multi",
+                accept_multiple_files=True
+            )
+            if uploaded_orders and st.button("📤 确认上传", key="confirm_upload_live_multi"):
+                handle_multiple_upload(uploaded_orders, "_live", "order")
+            
+            target_files = st.file_uploader(
+                "选择目标文件 (Excel)，支持多选", 
+                type=["xlsx", "xls"], 
+                key="target_upload_live_multi",
+                accept_multiple_files=True
+            )
+            if target_files and st.button("📤 确认上传目标", key="confirm_target_live_multi"):
+                handle_multiple_upload(target_files, "_live", "target")
+        
+        # ========== 全部数据上传（多文件） ==========
         else:
             st.subheader("📊 全部数据上传")
-            uploaded_order = st.file_uploader("选择订单文件 (Excel)", type=["xlsx", "xls"], key="order_uploader_all_final")
-            if st.button("📤 确认上传", key="confirm_upload_all_final"):
-                handle_upload(uploaded_order, "_all", "order")
-            target_file = st.file_uploader("选择目标文件 (Excel)", type=["xlsx", "xls"], key="target_upload_all_final")
-            if st.button("📤 确认上传目标", key="confirm_target_all_final"):
-                handle_upload(target_file, "_all", "target")
+            uploaded_orders = st.file_uploader(
+                "选择订单文件 (Excel)，支持多选", 
+                type=["xlsx", "xls"], 
+                key="order_uploader_all_multi",
+                accept_multiple_files=True
+            )
+            if uploaded_orders and st.button("📤 确认上传", key="confirm_upload_all_multi"):
+                handle_multiple_upload(uploaded_orders, "_all", "order")
+            
+            target_files = st.file_uploader(
+                "选择目标文件 (Excel)，支持多选", 
+                type=["xlsx", "xls"], 
+                key="target_upload_all_multi",
+                accept_multiple_files=True
+            )
+            if target_files and st.button("📤 确认上传目标", key="confirm_target_all_multi"):
+                handle_multiple_upload(target_files, "_all", "target")
+            
             st.markdown("---")
             st.subheader("🏷️ 线下收入上传")
-            uploaded_offline = st.file_uploader("选择线下收入文件 (Excel)", type=["xlsx", "xls"], key="offline_uploader")
-            if uploaded_offline is not None:
-                if st.button("📤 上传线下收入", key="upload_offline"):
-                    try:
-                        df = pd.read_excel(uploaded_offline, header=1)
+            uploaded_offline = st.file_uploader(
+                "选择线下收入文件 (Excel)，支持多选", 
+                type=["xlsx", "xls"], 
+                key="offline_uploader_multi",
+                accept_multiple_files=True
+            )
+            if uploaded_offline and st.button("📤 上传线下收入", key="upload_offline_multi"):
+                try:
+                    total_offline = 0
+                    for off_file in uploaded_offline:
+                        df = pd.read_excel(off_file, header=1)
                         required_cols = ["日期", "金额/时间", "备注", "组织名称"]
                         if not all(col in df.columns for col in required_cols):
-                            st.error(f"文件必须包含列：{', '.join(required_cols)}")
-                        else:
-                            save_offline_sales(df)
-                            st.success(f"✅ 成功上传 {len(df)} 条线下收入记录")
-                            st.cache_data.clear()
-                            time.sleep(0.5)
-                            st.rerun()
-                    except Exception as e:
-                        st.error(f"上传失败：{e}")           
+                            st.error(f"文件 {off_file.name} 缺少必要列：{', '.join(required_cols)}")
+                            continue
+                        save_offline_sales(df)
+                        total_offline += len(df)
+                        st.info(f"✅ {off_file.name}: 上传 {len(df)} 条记录")
+                    st.success(f"✅ 总共成功上传 {total_offline} 条线下收入记录")
+                    st.cache_data.clear()
+                    time.sleep(0.5)
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"上传失败：{e}")
+        
         st.markdown("---")
         st.header("⚙️ 工具")
         if st.session_state.table_suffix == "_all":
             st.markdown("---")
             st.subheader("📊 组织目标管理")
-            uploaded_org_target = st.file_uploader("上传组织目标文件 (Excel)", type=["xlsx", "xls"], key="org_target_upload")
-            if uploaded_org_target is not None:
-                if st.button("📤 上传组织目标", key="upload_org_target_btn"):
-                    try:
-                        df_target = pd.read_excel(uploaded_org_target, header=None)
+            uploaded_org_target = st.file_uploader(
+                "上传组织目标文件 (Excel)，支持多选", 
+                type=["xlsx", "xls"], 
+                key="org_target_upload_multi",
+                accept_multiple_files=True
+            )
+            if uploaded_org_target and st.button("📤 上传组织目标", key="upload_org_target_btn_multi"):
+                try:
+                    total_org = 0
+                    for org_file in uploaded_org_target:
+                        df_target = pd.read_excel(org_file, header=None)
                         org_names = df_target.iloc[:, 0].astype(str).str.strip()
                         target_vals = pd.to_numeric(df_target.iloc[:, 1], errors='coerce')
                         target_dict = {}
@@ -831,17 +938,26 @@ with st.sidebar:
                             if pd.notna(val) and name not in ["", "nan", "None"]:
                                 target_dict[name] = val
                         save_org_targets(target_dict, "_all")
-                        st.success(f"成功加载 {len(target_dict)} 个组织目标")
-                        st.cache_data.clear()
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"上传失败：{e}")
+                        total_org += len(target_dict)
+                        st.info(f"✅ {org_file.name}: 加载 {len(target_dict)} 个组织目标")
+                    st.success(f"✅ 总共加载 {total_org} 个组织目标")
+                    st.cache_data.clear()
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"上传失败：{e}")
         
         template_df = pd.DataFrame({"店铺名称": ["示例店铺A", "示例店铺B"], "目标金额": [100000, 200000]})
         template_bytes = io.BytesIO()
         with pd.ExcelWriter(template_bytes, engine='openpyxl') as writer:
             template_df.to_excel(writer, index=False)
         st.download_button("📄 下载目标模板", data=template_bytes.getvalue(), file_name="目标模板.xlsx", key="download_template_final")
+        
+        # 重置已上传文件hash列表
+        if st.button("🔄 重置上传记录（允许重新上传相同文件）", key="reset_upload_hashes"):
+            st.session_state.uploaded_file_hashes = []
+            st.success("已重置上传记录，现在可以重新上传相同文件")
+            st.rerun()
+        
         if st.button("🗑️ 清除当前用户的目标记忆", key="clear_targets_final"):
             clear_targets(st.session_state.table_suffix)
         if st.button("🔄 强制刷新所有数据", key="force_refresh_final"):
