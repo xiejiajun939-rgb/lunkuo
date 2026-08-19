@@ -63,12 +63,15 @@ def get_date_range(suffix):
 # ---------- 加载所有部门（从mapping表） ----------
 @st.cache_data(ttl=300)
 def load_all_depts():
-    """从mapping表中提取所有唯一的部门名称"""
+    """从mapping表中提取所有唯一的部门名称，并确保包含'未分配部门'"""
     mapping_df = load_dimension_mapping()
     if mapping_df.empty:
-        return []
+        return ['未分配部门']  # 至少包含未分配部门
     depts = mapping_df['dept'].dropna().unique().tolist()
     depts = [d for d in depts if d and d.strip() and d != '未分配部门']
+    # 确保包含"未分配部门"
+    if '未分配部门' not in depts:
+        depts.append('未分配部门')
     return sorted(depts)
 
 # ---------- 获取部门汇总数据（包含所有部门，无数据部门显示0） ----------
@@ -79,9 +82,7 @@ def get_dept_summary_with_all(start_date, end_date, suffix="_all"):
     部门数据为该部门下所有组织的业绩汇总
     """
     all_depts = load_all_depts()
-    # 确保包含“未分配部门”，以便显示未映射的数据
-    if '未分配部门' not in all_depts:
-        all_depts.append('未分配部门')
+    # 强制 view_mode="all" 以确保不被小店运营模式过滤
     df_data = fetch_complete_sales_summary(start_date, end_date, suffix, view_mode="all")
     if not df_data.empty:
         dept_actual = df_data.groupby('dept').agg({
@@ -126,6 +127,7 @@ org_targets = load_org_targets("_all")
 total_target = sum(org_targets.values()) if org_targets else 0
 
 with st.spinner("加载 KPI 数据..."):
+    # 强制 view_mode="all" 确保不过滤
     df_today = fetch_complete_sales_summary(latest_date, latest_date, suffix, view_mode="all")
     df_mtd = fetch_complete_sales_summary(month_start, latest_date, suffix, view_mode="all")
 
