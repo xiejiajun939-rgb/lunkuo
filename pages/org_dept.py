@@ -128,7 +128,6 @@ with st.spinner("加载 KPI 数据..."):
     df_today = fetch_complete_sales_summary(latest_date, latest_date, suffix, view_mode="all")
     df_mtd = fetch_complete_sales_summary(month_start, latest_date, suffix, view_mode="all")
 
-# 由于返回的是明细，此处需要按日期聚合，但大盘KPI只需汇总所有部门
 if df_today.empty:
     st.info(f"📌 提示：{latest_date} 无销售数据，显示月累计数据。")
     today_ship = 0
@@ -207,7 +206,6 @@ else:
     st.info("近7天无数据，无法统计。")
 
 st.markdown("##### 每日趋势对比（近7天 vs 前7天同期）")
-# 由于数据是明细，按日期汇总
 if (not df_7d.empty and 'sale_date' in df_7d.columns and 
     not df_prev.empty and 'sale_date' in df_prev.columns):
     df_7d_daily = df_7d.groupby('sale_date')['total_net'].sum().reset_index()
@@ -276,13 +274,11 @@ with st.spinner(f"加载 {period_label} 数据..."):
 if not df_period_main.empty:
     # 数据概览（包含组织与部门映射）
     with st.expander("📋 数据概览（查看所有组织/部门映射情况）"):
-        # 注意：现在 df_period_main 包含 org_name 和 dept，可直接展示
         org_list = df_period_main['org_name'].unique().tolist()
         dept_list = df_period_main['dept'].unique().tolist()
         st.write(f"共识别到 **{len(org_list)}** 个组织：{', '.join(org_list)}")
         st.write(f"共识别到 **{len(dept_list)}** 个部门：{', '.join(dept_list[:20])}{'...' if len(dept_list) > 20 else ''}")
         
-        # 组织汇总
         org_summary = df_period_main.groupby('org_name').agg({
             'total_net': 'sum',
             'total_ship': 'sum',
@@ -293,14 +289,13 @@ if not df_period_main.empty:
         st.dataframe(org_summary[['org_name', '净额', 'total_ship', 'total_return']], 
                      hide_index=True, use_container_width=True)
         
-        # 部门汇总（从明细中聚合）
+        # 显示所有部门（包含无数据）
+        all_depts = load_all_depts()
         dept_summary = df_period_main.groupby('dept').agg({
             'total_net': 'sum',
             'total_ship': 'sum',
             'total_return': 'sum'
         }).reset_index()
-        # 确保所有部门都出现（包括无数据的）
-        all_depts = load_all_depts()
         dept_full = pd.DataFrame({'dept': all_depts})
         dept_summary_full = dept_full.merge(dept_summary, on='dept', how='left')
         dept_summary_full['total_net'] = dept_summary_full['total_net'].fillna(0)
@@ -330,8 +325,7 @@ if not df_period_main.empty:
     
     col_org, col_dept = st.columns(2)
     with col_org:
-        # 组织排行（正确）—— 只取有效的组织，排除“未分配组织”？
-        # 但保留未分配组织作为一项
+        # 组织排行（正确）
         org_agg = df_period_main.groupby('org_name')['total_net'].sum().reset_index()
         org_agg = org_agg.sort_values('total_net', ascending=False)
         
@@ -696,59 +690,44 @@ if not dept_summary_full.empty:
 else:
     st.warning(f"{period_label_detail} 无数据，无法显示部门明细。")
 
-# ======================== 新增：线下部门业绩明细 ========================
+# ---------- 3.5 线下部门业绩明细（按组织） ----------
 st.markdown("---")
 st.markdown("#### 🏬 线下部门业绩明细（按组织）")
 
-# 使用已有的 period 数据（可以是月累计或近7天，用户可通过周期选择）
-time_mode_offline = st.radio(
-    "选择线下明细周期",
-    options=["近7天", "月累计"],
-    index=1,
-    horizontal=True,
-    key="org_dept_offline_mode"
-)
-if time_mode_offline == "近7天":
-    start_date_offline = base_date - timedelta(days=6)
-    end_date_offline = base_date
-    period_label_offline = "近7天"
-else:
-    start_date_offline = base_date.replace(day=1)
-    end_date_offline = base_date
-    period_label_offline = f"月累计（{base_date.strftime('%Y-%m')}）"
-
-with st.spinner(f"加载线下部门明细（{period_label_offline}）..."):
-    df_offline_detail = fetch_complete_sales_summary(start_date_offline, end_date_offline, suffix, view_mode="all")
+# 直接使用已加载的 df_period_main（周期与主视图一致）
+if 'df_period_main' in locals() and not df_period_main.empty:
     # 筛选线下数据
-    df_offline_only = df_offline_detail[df_offline_detail['source'] == 'offline']
-
-if not df_offline_only.empty:
-    # 按部门分组，展示每个部门的组织明细
-    depts = df_offline_only['dept'].unique()
-    for dept in sorted(depts):
-        dept_data = df_offline_only[df_offline_only['dept'] == dept]
-        # 按组织汇总
-        org_agg = dept_data.groupby('org_name').agg({
-            'total_ship': 'sum',
-            'total_return': 'sum',
-            'total_net': 'sum'
-        }).reset_index()
-        org_agg = org_agg.sort_values('total_net', ascending=False)
-        org_agg['发货额'] = org_agg['total_ship'].apply(lambda x: f"¥{x:,.2f}")
-        org_agg['退货额'] = org_agg['total_return'].apply(lambda x: f"¥{x:,.2f}")
-        org_agg['净额'] = org_agg['total_net'].apply(lambda x: f"¥{x:,.2f}")
-        # 汇总行
-        total_ship = org_agg['total_ship'].sum()
-        total_return = org_agg['total_return'].sum()
-        total_net = org_agg['total_net'].sum()
-        
-        with st.expander(f"📂 {dept} 部门（总净额 ¥{total_net:,.2f}）"):
-            st.dataframe(org_agg[['org_name', '发货额', '退货额', '净额']], hide_index=True, use_container_width=True)
-            st.caption(f"合计：发货 ¥{total_ship:,.2f}  退货 ¥{total_return:,.2f}  净额 ¥{total_net:,.2f}")
+    df_offline_only = df_period_main[df_period_main['source'] == 'offline']
+    
+    if not df_offline_only.empty:
+        # 按部门分组，展示每个部门的组织明细
+        depts = df_offline_only['dept'].unique()
+        for dept in sorted(depts):
+            dept_data = df_offline_only[df_offline_only['dept'] == dept]
+            # 按组织汇总
+            org_agg = dept_data.groupby('org_name').agg({
+                'total_ship': 'sum',
+                'total_return': 'sum',
+                'total_net': 'sum'
+            }).reset_index()
+            org_agg = org_agg.sort_values('total_net', ascending=False)
+            org_agg['发货额'] = org_agg['total_ship'].apply(lambda x: f"¥{x:,.2f}")
+            org_agg['退货额'] = org_agg['total_return'].apply(lambda x: f"¥{x:,.2f}")
+            org_agg['净额'] = org_agg['total_net'].apply(lambda x: f"¥{x:,.2f}")
+            # 汇总行
+            total_ship = org_agg['total_ship'].sum()
+            total_return = org_agg['total_return'].sum()
+            total_net = org_agg['total_net'].sum()
+            
+            with st.expander(f"📂 {dept} 部门（总净额 ¥{total_net:,.2f}）"):
+                st.dataframe(org_agg[['org_name', '发货额', '退货额', '净额']], hide_index=True, use_container_width=True)
+                st.caption(f"合计：发货 ¥{total_ship:,.2f}  退货 ¥{total_return:,.2f}  净额 ¥{total_net:,.2f}")
+    else:
+        st.info("当前周期无线下数据。")
 else:
-    st.info("当前周期无线下数据。")
+    st.info("当前周期无数据，请先加载数据。")
 
-# ---------- 3.5 异常预警 ----------
+# ---------- 3.6 异常预警 ----------
 st.markdown("---")
 st.markdown("#### ⚠️ 异常决策预警")
 
