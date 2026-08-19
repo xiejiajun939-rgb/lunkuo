@@ -61,6 +61,11 @@ def fetch_sales_summary(start_date, end_date, suffix="", view_mode=None):
     """
     获取销售汇总数据，返回明细（含组织、部门、店铺、主播），用于组织排行、部门排行及线下明细。
     返回字段：sale_date, org_name, dept, shop_name, anchor, source, total_ship, total_return, total_net
+
+    关键逻辑：
+    - 线上数据：使用 (shop_name, anchor) 匹配 mapping 表的 (shop_name, anchor_name)
+    - 线下数据：直接使用 shop_name 匹配 mapping 表的 shop_name，得到 org_name 和 dept
+    - 线下数据不涉及任何 anchor 字段
     """
     required_columns = ["sale_date", "org_name", "dept", "shop_name", "anchor", "source", "total_ship", "total_return", "total_net"]
     
@@ -119,6 +124,7 @@ def fetch_sales_summary(start_date, end_date, suffix="", view_mode=None):
             "return_amount": "sum",
             "net_amount": "sum"
         })
+        # 线上映射：使用 (shop_name, anchor) 匹配
         if mapping_exists:
             mapping_clean = mapping_df.copy()
             mapping_clean['shop_name'] = mapping_clean['shop_name'].astype(str).str.strip().str.upper()
@@ -146,20 +152,18 @@ def fetch_sales_summary(start_date, end_date, suffix="", view_mode=None):
                 df_offline = df_offline[(df_offline["sale_date"] >= start_ts) & (df_offline["sale_date"] <= end_ts)]
                 if not df_offline.empty:
                     df_offline['shop_name'] = df_offline['shop_name'].astype(str).str.strip().str.upper()
+                    # 按日期、shop_name 聚合
                     df_offline = df_offline.groupby(["sale_date", "shop_name"], as_index=False).agg({
                         "ship_amount": "sum",
                         "return_amount": "sum",
                         "net_amount": "sum"
                     })
+                    # 线下映射：直接用 shop_name 匹配 mapping 表（不使用 anchor）
                     if mapping_exists:
-                        # 构建线下映射：shop_name -> org_name, dept
-                        # 只取 anchor_name='NONE' 的记录（线下数据无主播）
-                        mapping_none = mapping_df[mapping_df['anchor_name'] == 'NONE'].copy()
-                        # 按 shop_name 去重，保留第一条
-                        mapping_none_unique = mapping_none.drop_duplicates(subset=['shop_name'], keep='first')
-                        shop_to_org = mapping_none_unique.set_index('shop_name')['org_name'].to_dict()
-                        shop_to_dept = mapping_none_unique.set_index('shop_name')['dept'].to_dict()
-                        # 应用映射
+                        # 按 shop_name 去重，取第一条
+                        mapping_unique_offline = mapping_df.drop_duplicates(subset=['shop_name'], keep='first')
+                        shop_to_org = mapping_unique_offline.set_index('shop_name')['org_name'].to_dict()
+                        shop_to_dept = mapping_unique_offline.set_index('shop_name')['dept'].to_dict()
                         df_offline['org_name'] = df_offline['shop_name'].map(shop_to_org).fillna('未分配组织')
                         df_offline['dept'] = df_offline['shop_name'].map(shop_to_dept).fillna('未分配部门')
                     else:
