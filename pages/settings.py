@@ -5,7 +5,7 @@ import pandas as pd
 from datetime import date
 import io
 
-from core.db import init_supabase, load_product_sales
+from core.db import init_supabase, load_dimension_mapping
 
 st.set_page_config(page_title="系统设置", layout="wide")
 
@@ -76,8 +76,19 @@ def delete_sub_account_from_db(username):
     except Exception as e:
         return False, str(e)
 
+# ---------- 获取所有店铺/主播名称（从 mapping 表，轻量快速） ----------
+@st.cache_data(ttl=600)
+def get_all_shop_names():
+    """从 mapping 表获取所有 shop_name 和 anchor_name，用于过滤选项"""
+    mapping_df = load_dimension_mapping()
+    if mapping_df.empty:
+        return []
+    names = set()
+    names.update(mapping_df['shop_name'].dropna().unique())
+    names.update(mapping_df['anchor_name'].dropna().unique())
+    return sorted(names)
+
 # ---------- 默认页面权限（新子账号只拥有这些页面） ----------
-# 只包含最核心的四个页面，其他页面需要管理员手动授权
 DEFAULT_TABS = [
     "📊 经营驾驶舱",
     "📋 每日明细",
@@ -109,7 +120,6 @@ if st.session_state.get("sub_users"):
             with st.form(key=f"form_{username}"):
                 new_perms = {}
                 for suf, display_name in suffix_display.items():
-                    # 根据数据源构建选项列表
                     if suf == "_all":
                         all_options = [label for label in all_pages.keys() if label != "⚙️ 系统设置"]
                     else:
@@ -148,21 +158,6 @@ if st.session_state.get("sub_users"):
                     key=f"platform_{username}"
                 )
                 
-                @st.cache_data(ttl=600)
-                def get_all_shop_names():
-                    df = load_product_sales(apply_filter=False)
-                    if df.empty:
-                        return []
-                    if st.session_state.table_suffix == "_all":
-                        if "anchor" in df.columns:
-                            return sorted(df["anchor"].dropna().unique().tolist())
-                        else:
-                            return []
-                    else:
-                        if "shop_name" in df.columns:
-                            return sorted(df["shop_name"].dropna().unique().tolist())
-                        else:
-                            return []
                 all_shop_names = get_all_shop_names()
                 current_shop_names = info.get("filter_shop_names", [])
                 current_shop_names = [name for name in current_shop_names if name in all_shop_names]
@@ -208,7 +203,6 @@ with st.expander("➕ 创建新子账号"):
         # 默认权限：所有数据源都使用 DEFAULT_TABS（核心四个页面）
         default_perms = {}
         for suf in ["", "_live", "_all"]:
-            # 对于全部数据，默认也不包含组织与部门分析
             default_perms[suf] = DEFAULT_TABS.copy()
         
         default_platform = "all"
