@@ -179,6 +179,8 @@ def login():
                     st.session_state.view_mode = "all"
                 else:
                     st.session_state.view_mode = "live"
+                # 重置缓存标记
+                st.session_state.last_suffix = None
                 st.cache_data.clear()
                 st.rerun()
             else:
@@ -219,6 +221,8 @@ if "view_mode" not in st.session_state:
         st.session_state.view_mode = "all"
     else:
         st.session_state.view_mode = "normal"
+if "last_suffix" not in st.session_state:
+    st.session_state.last_suffix = None
 
 # ========== 辅助函数 ==========
 def refresh_materialized_view(suffix=""):
@@ -669,6 +673,11 @@ def update_product_master_flag(style_code, flag_value):
         return False, str(e)
 
 # ========== 页面初始化（重建每日数据） ==========
+# 检测数据源是否变化，若变化则清除所有缓存并重新加载
+if st.session_state.last_suffix != st.session_state.table_suffix:
+    st.cache_data.clear()
+    st.session_state.last_suffix = st.session_state.table_suffix
+
 rebuild_daily_data(st.session_state.table_suffix)
 if st.session_state.target_dict == {}:
     st.session_state.target_dict = load_targets(st.session_state.table_suffix)
@@ -757,12 +766,13 @@ with st.sidebar:
                     st.session_state.view_mode = "all"
                 else:
                     st.session_state.view_mode = "live"
+                st.session_state.last_suffix = None  # 触发缓存清除
                 st.cache_data.clear()
                 st.rerun()
         st.markdown("---")
         if st.button("🚪 退出登录", key="logout_final"):
             st.session_state.authenticated = False
-            for key in ["username", "role", "table_suffix", "view_mode"]:
+            for key in ["username", "role", "table_suffix", "view_mode", "last_suffix"]:
                 if key in st.session_state:
                     del st.session_state[key]
             st.rerun()
@@ -801,13 +811,13 @@ with st.sidebar:
             new_suffix = available_suffixes[selected_source]
             if new_suffix != st.session_state.table_suffix:
                 st.session_state.table_suffix = new_suffix
-                # ====== 关键修复：同步更新 view_mode ======
                 if new_suffix == "":
                     st.session_state.view_mode = "normal"
                 elif new_suffix == "_all":
                     st.session_state.view_mode = "all"
                 else:
                     st.session_state.view_mode = "live"
+                st.session_state.last_suffix = None  # 触发缓存清除
                 st.cache_data.clear()
                 st.rerun()
         st.markdown("---")
@@ -988,6 +998,7 @@ with st.sidebar:
         if st.button("🔁 重置为非直播数据", key="reset_to_normal_final"):
             st.session_state.table_suffix = ""
             st.session_state.view_mode = "normal"
+            st.session_state.last_suffix = None
             st.cache_data.clear()
             st.rerun()
         if st.button("🔄 从商品明细重建每日业绩", key="rebuild_daily_final"):
@@ -1008,7 +1019,7 @@ with st.sidebar:
         st.markdown("---")
         if st.button("🚪 退出登录", key="logout_admin"):
             st.session_state.authenticated = False
-            for key in ["username", "role", "table_suffix", "view_mode"]:
+            for key in ["username", "role", "table_suffix", "view_mode", "last_suffix"]:
                 if key in st.session_state:
                     del st.session_state[key]
             st.rerun()
