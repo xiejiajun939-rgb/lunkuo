@@ -56,11 +56,10 @@ st.markdown("""
 @st.cache_data(ttl=300)
 def load_assistant_data(suffix, start_date, end_date):
     """加载商品分析所需数据（聚合后的商品级别数据）"""
-    # 使用 fetch_complete_sales_summary 获取详细数据（但可能太大，我们只取聚合）
-    # 为了保持性能，直接使用 load_product_sales 并聚合
-    df = load_product_sales(suffix, include_offline=False)  # 商品分析只关注线上商品
+    df = load_product_sales(suffix, include_offline=False)
     if df.empty:
         return pd.DataFrame()
+    # 日期过滤
     df = df[(df["sale_date"] >= pd.to_datetime(start_date)) & (df["sale_date"] <= pd.to_datetime(end_date))]
     if df.empty:
         return pd.DataFrame()
@@ -71,28 +70,85 @@ def load_assistant_data(suffix, start_date, end_date):
     else:
         df["style_code"] = df["style_code"].astype(str).str.strip().str.upper()
     
-    # 聚合到商品级别
-    grouped = df.groupby("style_code").agg(
-        ship_sum=("ship_amount", "sum"),
-        return_sum=("return_amount", "sum"),
-        net_sum=("net_amount", "sum"),
-        order_count=("net_amount", "count"),
-        latest_sale=("sale_date", "max"),
-        first_sale=("sale_date", "min"),
-        brands=("brand", lambda x: x.mode()[0] if not x.empty else None),
-        categories=("master_category", lambda x: x.mode()[0] if not x.empty else None),
-        shops=("shop_name", lambda x: list(set(x))),
-        anchors=("remark", lambda x: list(set([extract_anchor(r) for r in x if extract_anchor(r)])) if suffix in ["_live", "_all"] else [])
-    ).reset_index()
+    # 检查必须的列
+    required_agg_cols = ["ship_amount", "return_amount", "net_amount"]
+    available_cols = df.columns.tolist()
+    agg_dict = {}
+    for col in required_agg_cols:
+        if col in available_cols:
+            agg_dict[col] = "sum"
+        else:
+            # 如果缺失，创建一列默认0
+            df[col] = 0
+            agg_dict[col] = "sum"
+    
+    # 添加其他聚合列（如果有）
+    if "brand" in available_cols:
+        agg_dict["brands"] = lambda x: x.mode()[0] if not x.empty else None
+    if "master_category" in available_cols:
+        agg_dict["categories"] = lambda x: x.mode()[0] if not x.empty else None
+    if "shop_name" in available_cols:
+        agg_dict["shops"] = lambda x: list(set(x))
+    if "remark" in available_cols and suffix in ["_live", "_all"]:
+        agg_dict["anchors"] = lambda x: list(set([extract_anchor(r) for r in x if extract_anchor(r)]))
+    elif "remark" in available_cols:
+        agg_dict["anchors"] = lambda x: []
+    else:
+        agg_dict["anchors"] = lambda x: []
+    
+    # 聚合
+    grouped = df.groupby("style_code").agg(agg_dict).reset_index()
+    
+    # 重命名
+    rename_map = {}
+    if "ship_amount" in grouped.columns:
+        rename_map["ship_amount"] = "ship_sum"
+    else:
+        grouped["ship_sum"] = 0
+    if "return_amount" in grouped.columns:
+        rename_map["return_amount"] = "return_sum"
+    else:
+        grouped["return_sum"] = 0
+    if "net_amount" in grouped.columns:
+        rename_map["net_amount"] = "net_sum"
+    else:
+        grouped["net_sum"] = 0
+    # 确保列名
+    grouped = grouped.rename(columns=rename_map)
+    
+    # 补充缺失列
+    for col in ["ship_sum", "return_sum", "net_sum", "brands", "categories", "shops", "anchors"]:
+        if col not in grouped.columns:
+            if col in ["ship_sum", "return_sum", "net_sum"]:
+                grouped[col] = 0
+            else:
+                grouped[col] = None
+    
+    # 计算衍生指标
     grouped["退货率"] = np.where(grouped["ship_sum"] > 0, grouped["return_sum"] / grouped["ship_sum"] * 100, 0)
     grouped["净销售额"] = grouped["net_sum"]
     grouped["发货额"] = grouped["ship_sum"]
     grouped["退货额"] = grouped["return_sum"]
+    
+    # 日期范围
+    df["sale_date_dt"] = pd.to_datetime(df["sale_date"])
+    latest = df.groupby("style_code")["sale_date_dt"].max().reset_index().rename(columns={"sale_date_dt": "latest_sale"})
+    first = df.groupby("style_code")["sale_date_dt"].min().reset_index().rename(columns={"sale_date_dt": "first_sale"})
+    grouped = grouped.merge(latest, on="style_code", how="left")
+    grouped = grouped.merge(first, on="style_code", how="left")
     grouped["动销天数"] = (grouped["latest_sale"] - grouped["first_sale"]).dt.days + 1
     grouped["最近销售日期"] = grouped["latest_sale"].dt.date
     grouped["首次销售日期"] = grouped["first_sale"].dt.date
     
-    # 添加礼金标记
+    # 订单数（需要 order_count，使用 net_amount 计数）
+    if "net_amount" in df.columns:
+        order_count = df.groupby("style_code")["net_amount"].count().reset_index().rename(columns={"net_amount": "order_count"})
+        grouped = grouped.merge(order_count, on="style_code", how="left")
+        grouped["order_count"] = grouped["order_count"].fillna(0)
+    else:
+        grouped["order_count"] = 0
+    
+    # 礼金标记
     master_df = load_product_master()
     if not master_df.empty and "style_code" in master_df.columns:
         master_df["style_code"] = master_df["style_code"].astype(str).str.strip().str.upper()
@@ -128,7 +184,7 @@ if selected_suffix_display != suffix:
     st.rerun()
 
 # 日期范围
-min_date = date(2024, 1, 1)  # 默认，实际会从数据获取
+min_date = date(2024, 1, 1)
 max_date = date.today()
 df_temp = load_product_sales(suffix, include_offline=False)
 if not df_temp.empty:
@@ -225,7 +281,6 @@ with col4:
     </div>
     """, unsafe_allow_html=True)
 with col5:
-    # 滞销商品数（近30天无销售）
     stagnant = filtered[filtered["最近销售日期"] < (date.today() - timedelta(days=30))]
     st.markdown(f"""
     <div class="kpi-card">
@@ -241,54 +296,53 @@ st.markdown("---")
 st.markdown("#### 📐 商品四象限矩阵")
 st.caption("横轴：退货率（越低越好），纵轴：净销售额（越高越好）")
 
-# 计算阈值（中位数）
-x_threshold = filtered["退货率"].quantile(0.6)  # 60%分位作为阈值，让更多商品进入明星区
-y_threshold = filtered["净销售额"].quantile(0.4)
+if len(filtered) > 1:
+    x_threshold = filtered["退货率"].quantile(0.6)
+    y_threshold = filtered["净销售额"].quantile(0.4)
 
-# 分类
-filtered["象限"] = "其他"
-filtered.loc[(filtered["净销售额"] >= y_threshold) & (filtered["退货率"] <= x_threshold), "象限"] = "🌟 明星品"
-filtered.loc[(filtered["净销售额"] >= y_threshold) & (filtered["退货率"] > x_threshold), "象限"] = "⚠️ 问题品"
-filtered.loc[(filtered["净销售额"] < y_threshold) & (filtered["退货率"] <= x_threshold), "象限"] = "💰 现金牛"
-filtered.loc[(filtered["净销售额"] < y_threshold) & (filtered["退货率"] > x_threshold), "象限"] = "🐶 瘦狗品"
+    filtered["象限"] = "其他"
+    filtered.loc[(filtered["净销售额"] >= y_threshold) & (filtered["退货率"] <= x_threshold), "象限"] = "🌟 明星品"
+    filtered.loc[(filtered["净销售额"] >= y_threshold) & (filtered["退货率"] > x_threshold), "象限"] = "⚠️ 问题品"
+    filtered.loc[(filtered["净销售额"] < y_threshold) & (filtered["退货率"] <= x_threshold), "象限"] = "💰 现金牛"
+    filtered.loc[(filtered["净销售额"] < y_threshold) & (filtered["退货率"] > x_threshold), "象限"] = "🐶 瘦狗品"
 
-# 绘制散点图
-fig = px.scatter(filtered, x="退货率", y="净销售额", color="象限", hover_data=["style_code", "brands", "categories", "has_newbie_coupon"],
-                 title="商品四象限矩阵", labels={"退货率": "退货率 (%)", "净销售额": "净销售额 (¥)"},
-                 color_discrete_map={
-                     "🌟 明星品": "#22c55e",
-                     "⚠️ 问题品": "#f59e0b",
-                     "💰 现金牛": "#3b82f6",
-                     "🐶 瘦狗品": "#94a3b8",
-                     "其他": "#e2e8f0"
-                 })
-fig.add_hline(y=y_threshold, line_dash="dash", line_color="gray", annotation_text=f"净额阈值 {y_threshold:,.0f}")
-fig.add_vline(x=x_threshold, line_dash="dash", line_color="gray", annotation_text=f"退货率阈值 {x_threshold:.1f}%")
-fig.update_layout(height=500, margin=dict(l=0, r=0, t=40, b=0), hovermode="closest")
-st.plotly_chart(fig, use_container_width=True)
+    fig = px.scatter(filtered, x="退货率", y="净销售额", color="象限", hover_data=["style_code", "brands", "categories", "has_newbie_coupon"],
+                     title="商品四象限矩阵", labels={"退货率": "退货率 (%)", "净销售额": "净销售额 (¥)"},
+                     color_discrete_map={
+                         "🌟 明星品": "#22c55e",
+                         "⚠️ 问题品": "#f59e0b",
+                         "💰 现金牛": "#3b82f6",
+                         "🐶 瘦狗品": "#94a3b8",
+                         "其他": "#e2e8f0"
+                     })
+    fig.add_hline(y=y_threshold, line_dash="dash", line_color="gray", annotation_text=f"净额阈值 {y_threshold:,.0f}")
+    fig.add_vline(x=x_threshold, line_dash="dash", line_color="gray", annotation_text=f"退货率阈值 {x_threshold:.1f}%")
+    fig.update_layout(height=500, margin=dict(l=0, r=0, t=40, b=0), hovermode="closest")
+    st.plotly_chart(fig, use_container_width=True)
 
-# 四象限说明 + 下钻
-col_q1, col_q2, col_q3, col_q4 = st.columns(4)
-with col_q1:
-    st.markdown("**🌟 明星品** (高销低退) 建议：维持并加大推广")
-    if st.button("查看明星品", key="q_star"):
-        st.session_state.pa_selected_products = filtered[filtered["象限"] == "🌟 明星品"]["style_code"].tolist()
-        st.rerun()
-with col_q2:
-    st.markdown("**⚠️ 问题品** (高销高退) 建议：检查质量/售后")
-    if st.button("查看问题品", key="q_problem"):
-        st.session_state.pa_selected_products = filtered[filtered["象限"] == "⚠️ 问题品"]["style_code"].tolist()
-        st.rerun()
-with col_q3:
-    st.markdown("**💰 现金牛** (低销低退) 建议：稳定维护")
-    if st.button("查看现金牛", key="q_cow"):
-        st.session_state.pa_selected_products = filtered[filtered["象限"] == "💰 现金牛"]["style_code"].tolist()
-        st.rerun()
-with col_q4:
-    st.markdown("**🐶 瘦狗品** (低销高退) 建议：考虑淘汰")
-    if st.button("查看瘦狗品", key="q_dog"):
-        st.session_state.pa_selected_products = filtered[filtered["象限"] == "🐶 瘦狗品"]["style_code"].tolist()
-        st.rerun()
+    col_q1, col_q2, col_q3, col_q4 = st.columns(4)
+    with col_q1:
+        st.markdown("**🌟 明星品** (高销低退) 建议：维持并加大推广")
+        if st.button("查看明星品", key="q_star"):
+            st.session_state.pa_selected_products = filtered[filtered["象限"] == "🌟 明星品"]["style_code"].tolist()
+            st.rerun()
+    with col_q2:
+        st.markdown("**⚠️ 问题品** (高销高退) 建议：检查质量/售后")
+        if st.button("查看问题品", key="q_problem"):
+            st.session_state.pa_selected_products = filtered[filtered["象限"] == "⚠️ 问题品"]["style_code"].tolist()
+            st.rerun()
+    with col_q3:
+        st.markdown("**💰 现金牛** (低销低退) 建议：稳定维护")
+        if st.button("查看现金牛", key="q_cow"):
+            st.session_state.pa_selected_products = filtered[filtered["象限"] == "💰 现金牛"]["style_code"].tolist()
+            st.rerun()
+    with col_q4:
+        st.markdown("**🐶 瘦狗品** (低销高退) 建议：考虑淘汰")
+        if st.button("查看瘦狗品", key="q_dog"):
+            st.session_state.pa_selected_products = filtered[filtered["象限"] == "🐶 瘦狗品"]["style_code"].tolist()
+            st.rerun()
+else:
+    st.info("商品数量不足，无法生成四象限图。")
 
 st.markdown("---")
 
@@ -296,16 +350,14 @@ st.markdown("---")
 st.markdown("#### 🚨 智能预警")
 alerts = []
 
-# 1. 滞销商品（近30天无销售）
+# 1. 滞销
 stagnant_products = filtered[filtered["最近销售日期"] < (date.today() - timedelta(days=30))]
 if not stagnant_products.empty:
     for _, row in stagnant_products.head(5).iterrows():
         alerts.append(("critical", f"📉 商品 {row['style_code']} 已滞销超过30天，最近销售日期 {row['最近销售日期']}"))
 
-# 2. 退货率飙升（近7天 vs 前7天）—— 需要详细数据，这里简化
-# 先取所有商品，计算近7天和前7天退货率
+# 2. 退货飙升（需要详细数据）
 if len(filtered) > 0:
-    # 获取详细数据用于计算近期退货率
     df_detail = load_product_sales(suffix, include_offline=False)
     if not df_detail.empty:
         df_detail["sale_date"] = pd.to_datetime(df_detail["sale_date"])
@@ -317,31 +369,29 @@ if len(filtered) > 0:
                 df_recent["style_code"] = df_recent["product_code"].str[:8].str.strip().str.upper()
             else:
                 df_recent["style_code"] = df_recent["style_code"].astype(str).str.strip().str.upper()
-            # 分组计算近7天和前7天
             df_recent["week"] = np.where(df_recent["sale_date"] >= (today - pd.Timedelta(days=7)), "近7天", "前7天")
-            weekly = df_recent.groupby(["style_code", "week"]).agg(ship=("ship_amount", "sum"), ret=("return_amount", "sum")).reset_index()
-            # 透视
-            pivot = weekly.pivot(index="style_code", columns="week", values=["ship", "ret"]).fillna(0)
-            pivot.columns = ['_'.join(col).strip() for col in pivot.columns.values]
-            if "ship_近7天" in pivot.columns and "ship_前7天" in pivot.columns:
-                pivot["退货率_近7天"] = pivot["ret_近7天"] / pivot["ship_近7天"] * 100
-                pivot["退货率_前7天"] = pivot["ret_前7天"] / pivot["ship_前7天"] * 100
-                pivot["退货率_变化"] = pivot["退货率_近7天"] - pivot["退货率_前7天"]
-                high_risk = pivot[(pivot["退货率_变化"] > 10) & (pivot["ship_前7天"] > 0)].sort_values("退货率_变化", ascending=False)
-                for style, row in high_risk.head(3).iterrows():
-                    alerts.append(("critical", f"📦 商品 {style} 退货率飙升 {row['退货率_变化']:.1f} 个百分点（前7天 {row['退货率_前7天']:.1f}% → 近7天 {row['退货率_近7天']:.1f}%）"))
+            if "ship_amount" in df_recent.columns and "return_amount" in df_recent.columns:
+                weekly = df_recent.groupby(["style_code", "week"]).agg(ship=("ship_amount", "sum"), ret=("return_amount", "sum")).reset_index()
+                pivot = weekly.pivot(index="style_code", columns="week", values=["ship", "ret"]).fillna(0)
+                pivot.columns = ['_'.join(col).strip() for col in pivot.columns.values]
+                if "ship_近7天" in pivot.columns and "ship_前7天" in pivot.columns:
+                    pivot["退货率_近7天"] = pivot["ret_近7天"] / (pivot["ship_近7天"] + 1e-6) * 100
+                    pivot["退货率_前7天"] = pivot["ret_前7天"] / (pivot["ship_前7天"] + 1e-6) * 100
+                    pivot["退货率_变化"] = pivot["退货率_近7天"] - pivot["退货率_前7天"]
+                    high_risk = pivot[(pivot["退货率_变化"] > 10) & (pivot["ship_前7天"] > 0)].sort_values("退货率_变化", ascending=False)
+                    for style, row in high_risk.head(3).iterrows():
+                        alerts.append(("critical", f"📦 商品 {style} 退货率飙升 {row['退货率_变化']:.1f} 个百分点（前7天 {row['退货率_前7天']:.1f}% → 近7天 {row['退货率_近7天']:.1f}%）"))
 
-# 3. 新品表现不佳（首次销售后30天净销售额低于同类中位数）
+# 3. 新品表现不佳
 if len(filtered) > 0:
     new_products = filtered[filtered["首次销售日期"] >= (date.today() - timedelta(days=30))]
     if not new_products.empty:
-        # 同类中位数
         median_net = filtered["净销售额"].median()
         underperform = new_products[new_products["净销售额"] < median_net * 0.5]
         for _, row in underperform.head(3).iterrows():
             alerts.append(("warning", f"🆕 新品 {row['style_code']} 表现低于同类中位数，净销售额仅 {row['净销售额']:,.0f}（同类中位数 {median_net:,.0f}）"))
 
-# 4. 首单礼金商品退货率高（高于整体中位数）
+# 4. 首单礼金商品退货高
 coupon_products_df = filtered[filtered["has_newbie_coupon"]]
 if not coupon_products_df.empty:
     median_return = filtered["退货率"].median()
@@ -360,20 +410,15 @@ st.markdown("---")
 
 # ---------- 商品列表与操作 ----------
 st.markdown("#### 📋 商品列表")
-
-# 显示当前筛选的商品数
 st.caption(f"当前筛选条件下共 {len(filtered)} 个商品")
 
-# 选择要查看的商品
 selected_style = st.selectbox("选择商品（输入货号搜索）", options=[""] + sorted(filtered["style_code"].unique()), format_func=lambda x: x if x else "请选择商品...", key="pa_select_product")
 if selected_style:
     st.session_state.pa_current_product = selected_style
-    # 触发诊断
     if st.button("🔍 诊断该商品", key="pa_diagnose"):
-        st.session_state.pa_diagnosis_result = None  # 清空旧结果
+        st.session_state.pa_diagnosis_result = None
         st.rerun()
 
-# 多选对比
 st.markdown("**对比分析**")
 compare_options = st.multiselect("选择多个商品进行对比（最多5个）", options=sorted(filtered["style_code"].unique()), default=st.session_state.pa_compare_products, key="pa_compare_select")
 if len(compare_options) > 5:
@@ -391,33 +436,27 @@ if st.session_state.pa_current_product:
     style = st.session_state.pa_current_product
     st.markdown(f"#### 🔎 商品诊断：{style}")
 
-    # 获取该商品详细数据
     detail_df = load_product_detail(style, suffix, start_date, end_date)
     if detail_df.empty:
         st.info("该商品在所选日期范围内无销售数据")
     else:
-        # 计算指标
-        total_ship = detail_df["ship_amount"].sum()
-        total_return = detail_df["return_amount"].sum()
-        total_net = detail_df["net_amount"].sum()
+        total_ship = detail_df["ship_amount"].sum() if "ship_amount" in detail_df.columns else 0
+        total_return = detail_df["return_amount"].sum() if "return_amount" in detail_df.columns else 0
+        total_net = detail_df["net_amount"].sum() if "net_amount" in detail_df.columns else 0
         return_rate = (total_return / total_ship * 100) if total_ship > 0 else 0
         order_count = len(detail_df)
-        unique_shops = detail_df["shop_name"].nunique()
-        # 主播数（如果是直播/全部数据）
-        if suffix in ["_live", "_all"]:
+        unique_shops = detail_df["shop_name"].nunique() if "shop_name" in detail_df.columns else 0
+        if suffix in ["_live", "_all"] and "remark" in detail_df.columns:
             anchors = detail_df["remark"].apply(extract_anchor).dropna().unique()
             anchor_count = len(anchors)
         else:
-            anchors = []
             anchor_count = 0
         
-        # 获取商品基本信息
         product_info = filtered[filtered["style_code"] == style].iloc[0] if style in filtered["style_code"].values else None
         brand = product_info["brands"] if product_info is not None else "未知"
         category = product_info["categories"] if product_info is not None else "未知"
         coupon = product_info["has_newbie_coupon"] if product_info is not None else False
-        
-        # 显示指标卡片
+
         col1, col2, col3, col4, col5 = st.columns(5)
         with col1:
             st.metric("净销售额", f"¥{total_net:,.0f}")
@@ -430,25 +469,29 @@ if st.session_state.pa_current_product:
         with col5:
             st.metric("主播数", anchor_count if suffix in ["_live", "_all"] else "-")
         
-        # 趋势图
-        daily = detail_df.groupby("sale_date").agg(
-            ship=("ship_amount", "sum"),
-            ret=("return_amount", "sum"),
-            net=("net_amount", "sum")
-        ).reset_index().sort_values("sale_date")
-        fig_trend = go.Figure()
-        fig_trend.add_trace(go.Scatter(x=daily["sale_date"], y=daily["net"], mode="lines+markers", name="净销售额", line=dict(color="#22c55e")))
-        fig_trend.add_trace(go.Bar(x=daily["sale_date"], y=daily["ship"], name="发货额", opacity=0.5))
-        fig_trend.add_trace(go.Bar(x=daily["sale_date"], y=-daily["ret"], name="退货额", opacity=0.5, marker_color="#ef4444"))
-        fig_trend.update_layout(height=300, margin=dict(l=0, r=0, t=20, b=0), hovermode="x unified", barmode="relative")
-        st.plotly_chart(fig_trend, use_container_width=True)
+        # 趋势图（需要日期数据）
+        if "sale_date" in detail_df.columns:
+            daily = detail_df.groupby("sale_date").agg(
+                ship=("ship_amount", "sum") if "ship_amount" in detail_df.columns else ("net_amount", "sum"),
+                ret=("return_amount", "sum") if "return_amount" in detail_df.columns else 0,
+                net=("net_amount", "sum") if "net_amount" in detail_df.columns else ("net_amount", "sum")
+            ).reset_index().sort_values("sale_date")
+            if not daily.empty:
+                fig_trend = go.Figure()
+                fig_trend.add_trace(go.Scatter(x=daily["sale_date"], y=daily["net"], mode="lines+markers", name="净销售额", line=dict(color="#22c55e")))
+                if "ship" in daily.columns:
+                    fig_trend.add_trace(go.Bar(x=daily["sale_date"], y=daily["ship"], name="发货额", opacity=0.5))
+                if "ret" in daily.columns:
+                    fig_trend.add_trace(go.Bar(x=daily["sale_date"], y=-daily["ret"], name="退货额", opacity=0.5, marker_color="#ef4444"))
+                fig_trend.update_layout(height=300, margin=dict(l=0, r=0, t=20, b=0), hovermode="x unified", barmode="relative")
+                st.plotly_chart(fig_trend, use_container_width=True)
         
         # 渠道/主播贡献
-        if suffix in ["_live", "_all"] and anchor_count > 0:
+        if suffix in ["_live", "_all"] and "remark" in detail_df.columns and anchor_count > 0:
             anchor_agg = detail_df.groupby(detail_df["remark"].apply(extract_anchor)).agg(
-                net=("net_amount", "sum"),
-                ship=("ship_amount", "sum"),
-                ret=("return_amount", "sum")
+                net=("net_amount", "sum") if "net_amount" in detail_df.columns else ("net_amount", "sum"),
+                ship=("ship_amount", "sum") if "ship_amount" in detail_df.columns else 0,
+                ret=("return_amount", "sum") if "return_amount" in detail_df.columns else 0
             ).reset_index()
             anchor_agg.columns = ["主播", "净销售额", "发货额", "退货额"]
             anchor_agg["退货率"] = anchor_agg.apply(lambda r: f"{r['退货额']/r['发货额']*100:.1f}%" if r['发货额']>0 else "-", axis=1)
@@ -456,8 +499,7 @@ if st.session_state.pa_current_product:
         
         # AI 诊断
         if st.button("🤖 生成AI诊断报告", key="pa_ai_diagnosis"):
-            # 准备上下文
-            trend_desc = "销售趋势" + ("上升" if daily["net"].iloc[-1] > daily["net"].iloc[0] else "下降") if len(daily) > 1 else "无趋势"
+            trend_desc = "销售趋势" + ("上升" if len(daily) > 1 and daily["net"].iloc[-1] > daily["net"].iloc[0] else "下降") if len(daily) > 1 else "无趋势"
             context = f"""
             商品货号: {style}
             品牌: {brand}
@@ -494,7 +536,6 @@ if st.session_state.pa_current_product:
             </div>
             """, unsafe_allow_html=True)
         
-        # 关闭按钮
         if st.button("关闭诊断", key="pa_close_diagnosis"):
             st.session_state.pa_current_product = None
             st.session_state.pa_diagnosis_result = None
@@ -506,13 +547,10 @@ st.markdown("---")
 if len(st.session_state.pa_compare_products) >= 2:
     st.markdown(f"#### 📊 对比分析：{len(st.session_state.pa_compare_products)} 个商品")
     compare_df = filtered[filtered["style_code"].isin(st.session_state.pa_compare_products)].copy()
-    # 选择对比指标
     metric_options = ["净销售额", "发货额", "退货额", "退货率", "订单数", "动销天数"]
     compare_metrics = st.multiselect("选择对比指标", metric_options, default=["净销售额", "退货率", "订单数"])
     if compare_metrics:
-        # 绘制雷达图（归一化）
         radar_data = compare_df[["style_code"] + compare_metrics].copy()
-        # 归一化（除退货率外，退货率本身是0-100）
         for m in compare_metrics:
             if m != "退货率":
                 max_val = radar_data[m].max()
@@ -521,7 +559,7 @@ if len(st.session_state.pa_compare_products) >= 2:
                 else:
                     radar_data[f"{m}_norm"] = 0
             else:
-                radar_data[f"{m}_norm"] = radar_data[m]  # 退货率保持原样，范围0-100
+                radar_data[f"{m}_norm"] = radar_data[m]
         fig_radar = go.Figure()
         for _, row in radar_data.iterrows():
             fig_radar.add_trace(go.Scatterpolar(
@@ -537,7 +575,6 @@ if len(st.session_state.pa_compare_products) >= 2:
         )
         st.plotly_chart(fig_radar, use_container_width=True)
         
-        # 表格展示原始数据
         st.dataframe(compare_df[["style_code"] + compare_metrics], hide_index=True, use_container_width=True)
 
         if st.button("清除对比", key="pa_clear_compare"):
@@ -549,7 +586,6 @@ st.markdown("---")
 # ---------- AI 智能报告 ----------
 st.markdown("#### 📄 AI 智能报告")
 if st.button("🚀 生成当前筛选条件下的智能报告", key="pa_generate_report"):
-    # 准备汇总数据
     total_products = len(filtered)
     total_net = filtered["净销售额"].sum()
     avg_return = filtered["退货率"].mean()
