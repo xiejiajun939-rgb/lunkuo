@@ -6,8 +6,7 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 
-from core.db import load_product_sales, load_org_targets, fetch_sales_summary, fetch_complete_sales_summary
-from core.utils import date_quick_buttons
+from core.db import fetch_complete_sales_summary, get_sales_date_range
 from core.ai import get_ai_summary
 
 st.set_page_config(page_title="经营驾驶舱", layout="wide")
@@ -42,22 +41,16 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ---------- 获取日期范围 ----------
-# 使用 fetch_complete_sales_summary 获取全部数据（线上+线下）
 suffix = st.session_state.table_suffix
 target_dict = st.session_state.target_dict
 
 # 确定日期范围
 if suffix == "_all":
-    # 全部数据模式：从线上和线下获取日期范围
-    from core.db import get_sales_date_range
     min_date, max_date = get_sales_date_range(suffix)
     if min_date is None or max_date is None:
         st.warning("无法获取数据日期范围，请检查数据是否存在。")
         st.stop()
 else:
-    min_date, max_date = None, None
-    # 非全部模式，直接从 product_sales 获取
-    from core.db import get_sales_date_range
     min_date, max_date = get_sales_date_range(suffix)
     if min_date is None or max_date is None:
         st.warning("无法获取数据日期范围，请检查数据是否存在。")
@@ -245,13 +238,11 @@ if not recent_data.empty and not previous_data.empty:
     for _, row in merged.head(3).iterrows():
         alerts.append(("#f87171" if row["下滑"] > 40 else "#fbbf24", f"📉 {row['shop_name']} 近7天销售下降 {row['下滑']:.0f}%"))
 
-# 商品退货率异常（需要 style_code 列，df_summary 可能没有，跳过或从详细数据获取）
-# 这里保留但使用 df_summary 中的 shop_name 级别数据
+# 商品退货率异常（按 shop_name 汇总）
 prod_recent = df_summary[(df_summary["sale_date"] >= pd.to_datetime(start_date_recent)) & (df_summary["sale_date"] <= pd.to_datetime(end_date))]
 prod_previous = df_summary[(df_summary["sale_date"] >= pd.to_datetime(start_date_previous)) & (df_summary["sale_date"] <= pd.to_datetime(start_date_recent - timedelta(days=1)))]
 
 if not prod_recent.empty and not prod_previous.empty:
-    # 按 shop_name 汇总（因为 df_summary 没有 style_code）
     recent_prod = prod_recent.groupby("shop_name").agg(ship=("total_ship", "sum"), ret=("total_return", "sum")).reset_index()
     prev_prod = prod_previous.groupby("shop_name").agg(ship=("total_ship", "sum"), ret=("total_return", "sum")).reset_index()
     merged_prod = pd.merge(recent_prod, prev_prod, on="shop_name", suffixes=("_近", "_前"))
