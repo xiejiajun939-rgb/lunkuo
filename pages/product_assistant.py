@@ -59,7 +59,6 @@ def load_assistant_data(suffix, start_date, end_date):
     df = load_product_sales(suffix, include_offline=False)
     if df.empty:
         return pd.DataFrame()
-    # 日期过滤
     df = df[(df["sale_date"] >= pd.to_datetime(start_date)) & (df["sale_date"] <= pd.to_datetime(end_date))]
     if df.empty:
         return pd.DataFrame()
@@ -70,59 +69,41 @@ def load_assistant_data(suffix, start_date, end_date):
     else:
         df["style_code"] = df["style_code"].astype(str).str.strip().str.upper()
     
-    # 检查必须的列
-    required_agg_cols = ["ship_amount", "return_amount", "net_amount"]
-    available_cols = df.columns.tolist()
-    agg_dict = {}
-    for col in required_agg_cols:
-        if col in available_cols:
-            agg_dict[col] = "sum"
-        else:
-            # 如果缺失，创建一列默认0
+    # 必须存在的列
+    required_cols = ["ship_amount", "return_amount", "net_amount"]
+    for col in required_cols:
+        if col not in df.columns:
             df[col] = 0
-            agg_dict[col] = "sum"
     
-    # 添加其他聚合列（如果有）
-    if "brand" in available_cols:
-        agg_dict["brands"] = lambda x: x.mode()[0] if not x.empty else None
-    if "master_category" in available_cols:
-        agg_dict["categories"] = lambda x: x.mode()[0] if not x.empty else None
-    if "shop_name" in available_cols:
-        agg_dict["shops"] = lambda x: list(set(x))
-    if "remark" in available_cols and suffix in ["_live", "_all"]:
-        agg_dict["anchors"] = lambda x: list(set([extract_anchor(r) for r in x if extract_anchor(r)]))
-    elif "remark" in available_cols:
-        agg_dict["anchors"] = lambda x: []
-    else:
-        agg_dict["anchors"] = lambda x: []
+    # 使用 named aggregation
+    agg_dict = {}
+    agg_dict["ship_sum"] = ("ship_amount", "sum")
+    agg_dict["return_sum"] = ("return_amount", "sum")
+    agg_dict["net_sum"] = ("net_amount", "sum")
+    agg_dict["order_count"] = ("net_amount", "count")
     
-    # 聚合
-    grouped = df.groupby("style_code").agg(agg_dict).reset_index()
+    if "brand" in df.columns:
+        agg_dict["brands"] = ("brand", lambda x: x.mode()[0] if not x.empty else None)
+    else:
+        agg_dict["brands"] = ("brand", lambda x: None)
     
-    # 重命名
-    rename_map = {}
-    if "ship_amount" in grouped.columns:
-        rename_map["ship_amount"] = "ship_sum"
+    if "master_category" in df.columns:
+        agg_dict["categories"] = ("master_category", lambda x: x.mode()[0] if not x.empty else None)
     else:
-        grouped["ship_sum"] = 0
-    if "return_amount" in grouped.columns:
-        rename_map["return_amount"] = "return_sum"
-    else:
-        grouped["return_sum"] = 0
-    if "net_amount" in grouped.columns:
-        rename_map["net_amount"] = "net_sum"
-    else:
-        grouped["net_sum"] = 0
-    # 确保列名
-    grouped = grouped.rename(columns=rename_map)
+        agg_dict["categories"] = ("master_category", lambda x: None)
     
-    # 补充缺失列
-    for col in ["ship_sum", "return_sum", "net_sum", "brands", "categories", "shops", "anchors"]:
-        if col not in grouped.columns:
-            if col in ["ship_sum", "return_sum", "net_sum"]:
-                grouped[col] = 0
-            else:
-                grouped[col] = None
+    if "shop_name" in df.columns:
+        agg_dict["shops"] = ("shop_name", lambda x: list(set(x)) if not x.empty else [])
+    else:
+        agg_dict["shops"] = ("shop_name", lambda x: [])
+    
+    if "remark" in df.columns and suffix in ["_live", "_all"]:
+        agg_dict["anchors"] = ("remark", lambda x: list(set([extract_anchor(r) for r in x if extract_anchor(r)])) if not x.empty else [])
+    else:
+        agg_dict["anchors"] = ("remark", lambda x: [])
+    
+    # 执行聚合
+    grouped = df.groupby("style_code").agg(**agg_dict).reset_index()
     
     # 计算衍生指标
     grouped["退货率"] = np.where(grouped["ship_sum"] > 0, grouped["return_sum"] / grouped["ship_sum"] * 100, 0)
@@ -139,14 +120,6 @@ def load_assistant_data(suffix, start_date, end_date):
     grouped["动销天数"] = (grouped["latest_sale"] - grouped["first_sale"]).dt.days + 1
     grouped["最近销售日期"] = grouped["latest_sale"].dt.date
     grouped["首次销售日期"] = grouped["first_sale"].dt.date
-    
-    # 订单数（需要 order_count，使用 net_amount 计数）
-    if "net_amount" in df.columns:
-        order_count = df.groupby("style_code")["net_amount"].count().reset_index().rename(columns={"net_amount": "order_count"})
-        grouped = grouped.merge(order_count, on="style_code", how="left")
-        grouped["order_count"] = grouped["order_count"].fillna(0)
-    else:
-        grouped["order_count"] = 0
     
     # 礼金标记
     master_df = load_product_master()
