@@ -801,6 +801,13 @@ with st.sidebar:
             new_suffix = available_suffixes[selected_source]
             if new_suffix != st.session_state.table_suffix:
                 st.session_state.table_suffix = new_suffix
+                # ====== 关键修复：同步更新 view_mode ======
+                if new_suffix == "":
+                    st.session_state.view_mode = "normal"
+                elif new_suffix == "_all":
+                    st.session_state.view_mode = "all"
+                else:
+                    st.session_state.view_mode = "live"
                 st.cache_data.clear()
                 st.rerun()
         st.markdown("---")
