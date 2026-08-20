@@ -689,6 +689,7 @@ all_pages = {
     "📊 经营驾驶舱": "pages/dashboard.py",
     "📋 每日明细": "pages/daily_detail.py",
     "📦 商品分析": "pages/product_page.py",
+    "📊 商品分析助手": "pages/product_assistant.py",   # 新增
     "🎤 主播分析": "pages/anchor.py",
     "📈 销售分布与品牌": "pages/distribution.py",
     "🏢 组织与部门分析": "pages/org_dept.py",
@@ -718,8 +719,12 @@ for label, path in all_pages.items():
         continue
     if label == "🎤 主播分析" and current_suffix not in ["_live", "_all"]:
         continue
+    # 新页面添加任何特殊限制（例如只在全部数据源显示）可在此添加
+    # 但商品分析助手不限数据源，所以不需要额外条件
     if label in allowed_labels:
         pages_to_show.append(Page(path, title=label))
+
+# ... 其余部分不变
 
 if not pages_to_show:
     pages_to_show = [
