@@ -433,7 +433,7 @@ if len(filtered) > 1:
     fig.update_traces(
         marker=dict(
             size=12,
-            line=dict(width=1, color='white'),
+            line=dict(width=1, color='black'),
             opacity=0.9
         )
     )
