@@ -4,7 +4,7 @@
 商品分析助手
 整合商品概览、四象限矩阵、智能预警、商品诊断、对比分析、AI报告
 仅支持“全部数据”源，并增加平台筛选
-四象限图点击商品可弹出诊断窗口（修复 TypeError）
+四象限图点击商品可弹出诊断窗口（修复 ValueError 和性能优化）
 """
 
 import streamlit as st
@@ -167,11 +167,17 @@ def load_product_detail(style_code, suffix, start_date, end_date, platform=None)
         elif platform == "唯品会":
             df = df[df["shop_name"].str.contains("唯品会", case=False, na=False)]
     
+    if df.empty:
+        return pd.DataFrame()
+    
     if "style_code" not in df.columns:
         df["style_code"] = df["product_code"].str[:8].str.strip().str.upper()
     else:
         df["style_code"] = df["style_code"].astype(str).str.strip().str.upper()
-    detail = df[df["style_code"] == style_code].copy()
+    
+    # 确保 style_code 是字符串
+    style_code_str = str(style_code)
+    detail = df[df["style_code"] == style_code_str].copy()
     return detail
 
 # ---------- 商品诊断显示函数（供主页面和对话框复用） ----------
@@ -427,13 +433,14 @@ if len(filtered) > 1:
     fig.add_vline(x=x_threshold, line_dash="dash", line_color="gray", annotation_text=f"退货率阈值 {x_threshold:.1f}%")
     fig.update_layout(height=500, margin=dict(l=0, r=0, t=40, b=0), hovermode="closest")
     
+    # 使用 on_select 捕获点击事件，修正 customdata 提取
     event = st.plotly_chart(fig, use_container_width=True, on_select="rerun", selection_mode="points", key="quadrant_chart")
     if event and event.get("selection"):
         points = event["selection"].get("points", [])
         if points:
-            style_code = points[0].get("customdata")
-            if style_code:
-                # 设置状态并调用对话框
+            customdata = points[0].get("customdata")
+            if customdata and len(customdata) > 0:
+                style_code = customdata[0]  # 取第一个元素，因为 customdata 是列表
                 st.session_state.pa_quadrant_click_style = style_code
                 st.session_state.pa_show_quadrant_dialog = True
                 st.rerun()
