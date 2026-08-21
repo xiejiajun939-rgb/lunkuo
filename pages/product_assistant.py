@@ -4,7 +4,7 @@
 商品分析助手
 整合商品概览、四象限矩阵、智能预警、商品诊断、对比分析、AI报告
 仅支持“全部数据”源，并增加平台筛选
-四象限图点击商品可弹出诊断窗口（修复 ValueError 和性能优化）
+四象限图点击商品可弹出诊断窗口（修复弹窗不显示）
 """
 
 import streamlit as st
@@ -175,7 +175,6 @@ def load_product_detail(style_code, suffix, start_date, end_date, platform=None)
     else:
         df["style_code"] = df["style_code"].astype(str).str.strip().str.upper()
     
-    # 确保 style_code 是字符串
     style_code_str = str(style_code)
     detail = df[df["style_code"] == style_code_str].copy()
     return detail
@@ -286,6 +285,7 @@ def show_product_diagnosis(style_code, filtered_df, suffix, start_date, end_date
 @st.dialog("📦 商品诊断", width="large")
 def show_quadrant_diagnosis(style_code, filtered_df, start_date, end_date, platform):
     """四象限点击弹出的诊断对话框"""
+    st.write(f"正在诊断商品: {style_code}")  # 调试信息，确认对话框显示
     show_product_diagnosis(style_code, filtered_df, "_all", start_date, end_date, platform, st.session_state.pa_diagnosis_result)
     if st.button("关闭", key="pa_quadrant_dialog_close"):
         # 点击关闭后重置状态，避免再次弹出
@@ -433,14 +433,18 @@ if len(filtered) > 1:
     fig.add_vline(x=x_threshold, line_dash="dash", line_color="gray", annotation_text=f"退货率阈值 {x_threshold:.1f}%")
     fig.update_layout(height=500, margin=dict(l=0, r=0, t=40, b=0), hovermode="closest")
     
-    # 使用 on_select 捕获点击事件，修正 customdata 提取
+    # 使用 on_select 捕获点击事件
     event = st.plotly_chart(fig, use_container_width=True, on_select="rerun", selection_mode="points", key="quadrant_chart")
+    
+    # 调试信息（可注释掉）
+    # st.write("事件对象:", event)
+    
     if event and event.get("selection"):
         points = event["selection"].get("points", [])
         if points:
             customdata = points[0].get("customdata")
             if customdata and len(customdata) > 0:
-                style_code = customdata[0]  # 取第一个元素，因为 customdata 是列表
+                style_code = customdata[0]
                 st.session_state.pa_quadrant_click_style = style_code
                 st.session_state.pa_show_quadrant_dialog = True
                 st.rerun()
@@ -471,6 +475,17 @@ else:
     st.info("商品数量不足，无法生成四象限图。")
 
 st.markdown("---")
+
+# ---------- 处理四象限点击对话框 ----------
+if st.session_state.pa_show_quadrant_dialog and st.session_state.pa_quadrant_click_style:
+    # 调用装饰器对话框
+    show_quadrant_diagnosis(
+        st.session_state.pa_quadrant_click_style,
+        filtered,
+        start_date,
+        end_date,
+        selected_platform
+    )
 
 # ---------- 智能预警 ----------
 st.markdown("#### 🚨 智能预警")
@@ -540,18 +555,6 @@ else:
         st.markdown(f"<div class='alert-card {cls}'>{msg}</div>", unsafe_allow_html=True)
 
 st.markdown("---")
-
-# ---------- 处理四象限点击对话框 ----------
-if st.session_state.pa_show_quadrant_dialog and st.session_state.pa_quadrant_click_style:
-    # 调用装饰器对话框
-    show_quadrant_diagnosis(
-        st.session_state.pa_quadrant_click_style,
-        filtered,
-        start_date,
-        end_date,
-        selected_platform
-    )
-    # 注意：对话框显示后，需等待用户关闭，关闭时会重置状态，避免循环
 
 # ---------- 商品列表与操作 ----------
 st.markdown("#### 📋 商品列表")
