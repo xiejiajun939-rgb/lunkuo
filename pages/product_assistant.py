@@ -4,7 +4,7 @@
 商品分析助手
 整合商品概览、四象限矩阵、智能预警、商品诊断、对比分析、AI报告
 仅支持“全部数据”源，并增加平台筛选
-四象限图点击商品可弹出诊断窗口（优化响应）
+四象限图点击商品可弹出诊断窗口（优化点大小和可见性）
 """
 
 import streamlit as st
@@ -287,7 +287,6 @@ def show_quadrant_diagnosis(style_code, filtered_df, start_date, end_date, platf
     """四象限点击弹出的诊断对话框"""
     show_product_diagnosis(style_code, filtered_df, "_all", start_date, end_date, platform, st.session_state.pa_diagnosis_result)
     if st.button("关闭", key="pa_quadrant_dialog_close"):
-        # 点击关闭后重置状态，避免再次弹出
         st.session_state.pa_show_quadrant_dialog = False
         st.session_state.pa_quadrant_click_style = None
         st.rerun()
@@ -428,21 +427,21 @@ if len(filtered) > 1:
                          "🐶 瘦狗品": "#94a3b8",
                          "其他": "#e2e8f0"
                      })
+    # ========== 修改点：增大点的大小并添加白色边框，确保可见 ==========
+    fig.update_traces(marker=dict(size=12, line=dict(width=1, color='white'), opacity=0.9))
+    # ==============================================================
     fig.add_hline(y=y_threshold, line_dash="dash", line_color="gray", annotation_text=f"净额阈值 {y_threshold:,.0f}")
     fig.add_vline(x=x_threshold, line_dash="dash", line_color="gray", annotation_text=f"退货率阈值 {x_threshold:.1f}%")
     fig.update_layout(height=500, margin=dict(l=0, r=0, t=40, b=0), hovermode="closest")
     
-    # 使用 on_select 捕获点击事件，设置标记并 rerun
     event = st.plotly_chart(fig, use_container_width=True, on_select="rerun", selection_mode="points", key="quadrant_chart")
     
-    # 处理点击事件
     if event and event.get("selection"):
         points = event["selection"].get("points", [])
         if points:
             customdata = points[0].get("customdata")
             if customdata and len(customdata) > 0:
                 style_code = customdata[0]
-                # 只有当点击的商品与当前不同，或者当前没有对话框时才触发
                 if style_code != st.session_state.pa_quadrant_click_style:
                     st.session_state.pa_quadrant_click_style = style_code
                     st.session_state.pa_show_quadrant_dialog = True
@@ -477,7 +476,6 @@ st.markdown("---")
 
 # ---------- 处理四象限点击对话框 ----------
 if st.session_state.pa_show_quadrant_dialog and st.session_state.pa_quadrant_click_style:
-    # 调用装饰器对话框
     show_quadrant_diagnosis(
         st.session_state.pa_quadrant_click_style,
         filtered,
@@ -485,7 +483,6 @@ if st.session_state.pa_show_quadrant_dialog and st.session_state.pa_quadrant_cli
         end_date,
         selected_platform
     )
-    # 注意：对话框显示后，需等待用户关闭，关闭时会重置状态，避免循环
 
 # ---------- 智能预警 ----------
 st.markdown("#### 🚨 智能预警")
