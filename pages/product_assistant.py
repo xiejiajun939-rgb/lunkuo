@@ -3,6 +3,7 @@
 """
 商品分析助手
 整合商品概览、四象限矩阵、智能预警、商品诊断、对比分析、AI报告
+仅支持“全部数据”源，并增加平台筛选
 """
 
 import streamlit as st
@@ -14,11 +15,15 @@ from datetime import date, timedelta
 import io
 import re
 
-from core.db import load_product_sales, load_product_master, fetch_complete_sales_summary
-from core.utils import extract_anchor, date_quick_buttons
+from core.db import load_product_sales, load_product_master
+from core.utils import extract_anchor
 from core.ai import get_ai_summary
 
 st.set_page_config(page_title="商品分析助手", layout="wide", initial_sidebar_state="expanded")
+
+# ---------- 固定使用全部数据 ----------
+# 强制使用 _all 数据源，忽略当前 session 设置
+SUFFIX = "_all"
 
 # ---------- 初始化 session_state ----------
 if "product_assistant_filter" not in st.session_state:
@@ -54,12 +59,30 @@ st.markdown("""
 
 # ---------- 加载数据 ----------
 @st.cache_data(ttl=300)
-def load_assistant_data(suffix, start_date, end_date):
-    """加载商品分析所需数据（聚合后的商品级别数据）"""
+def load_assistant_data(suffix, start_date, end_date, platform=None):
+    """加载商品分析所需数据（聚合后的商品级别数据），支持平台筛选"""
     df = load_product_sales(suffix, include_offline=False)
     if df.empty:
         return pd.DataFrame()
+    # 日期过滤
     df = df[(df["sale_date"] >= pd.to_datetime(start_date)) & (df["sale_date"] <= pd.to_datetime(end_date))]
+    if df.empty:
+        return pd.DataFrame()
+    
+    # 平台筛选
+    if platform and platform != "全部":
+        if platform == "抖音":
+            df = df[df["shop_name"].str.contains("抖音", case=False, na=False)]
+        elif platform == "视频号":
+            df = df[df["shop_name"].str.contains("视频号", case=False, na=False)]
+        elif platform == "小红书":
+            df = df[df["shop_name"].str.contains("小红书", case=False, na=False)]
+        elif platform == "天猫":
+            df = df[df["shop_name"].str.contains("天猫", case=False, na=False)]
+        elif platform == "唯品会":
+            df = df[df["shop_name"].str.contains("唯品会", case=False, na=False)]
+        # 可继续添加其他平台
+    
     if df.empty:
         return pd.DataFrame()
     
@@ -130,13 +153,27 @@ def load_assistant_data(suffix, start_date, end_date):
     
     return grouped
 
-def load_product_detail(style_code, suffix, start_date, end_date):
+def load_product_detail(style_code, suffix, start_date, end_date, platform=None):
     """加载单个商品的详细销售数据（用于诊断）"""
     df = load_product_sales(suffix, include_offline=False)
     if df.empty:
         return pd.DataFrame()
     df = df[df["sale_date"] >= pd.to_datetime(start_date)]
     df = df[df["sale_date"] <= pd.to_datetime(end_date)]
+    
+    # 平台筛选
+    if platform and platform != "全部":
+        if platform == "抖音":
+            df = df[df["shop_name"].str.contains("抖音", case=False, na=False)]
+        elif platform == "视频号":
+            df = df[df["shop_name"].str.contains("视频号", case=False, na=False)]
+        elif platform == "小红书":
+            df = df[df["shop_name"].str.contains("小红书", case=False, na=False)]
+        elif platform == "天猫":
+            df = df[df["shop_name"].str.contains("天猫", case=False, na=False)]
+        elif platform == "唯品会":
+            df = df[df["shop_name"].str.contains("唯品会", case=False, na=False)]
+    
     if "style_code" not in df.columns:
         df["style_code"] = df["product_code"].str[:8].str.strip().str.upper()
     else:
@@ -146,18 +183,16 @@ def load_product_detail(style_code, suffix, start_date, end_date):
 
 # ---------- 侧边栏筛选 ----------
 st.sidebar.header("🔍 筛选条件")
-suffix = st.session_state.table_suffix
-suffix_display = {"": "非直播", "_live": "直播", "_all": "全部"}
-selected_suffix_display = st.sidebar.selectbox("数据源", options=list(suffix_display.keys()), format_func=lambda x: suffix_display[x], index=list(suffix_display.keys()).index(suffix))
-if selected_suffix_display != suffix:
-    st.session_state.table_suffix = selected_suffix_display
-    st.cache_data.clear()
-    st.rerun()
+
+# 平台筛选
+platform_options = ["全部", "抖音", "视频号", "小红书", "天猫", "唯品会"]
+selected_platform = st.sidebar.selectbox("平台", platform_options, index=0, key="pa_platform")
 
 # 日期范围
+# 从全部数据中获取日期范围
+df_temp = load_product_sales("_all", include_offline=False)
 min_date = date(2024, 1, 1)
 max_date = date.today()
-df_temp = load_product_sales(suffix, include_offline=False)
 if not df_temp.empty:
     min_date = df_temp["sale_date"].min().date()
     max_date = df_temp["sale_date"].max().date()
@@ -187,9 +222,9 @@ max_return_rate = st.sidebar.slider("最大退货率 (%)", 0, 100, 100)
 
 # 加载数据
 with st.spinner("加载商品数据..."):
-    df_products = load_assistant_data(suffix, start_date, end_date)
+    df_products = load_assistant_data("_all", start_date, end_date, selected_platform)
     if df_products.empty:
-        st.warning("没有找到任何商品数据，请检查日期范围或数据源。")
+        st.warning("没有找到任何商品数据，请检查日期范围或筛选条件。")
         st.stop()
 
 # 应用筛选
@@ -329,9 +364,21 @@ if not stagnant_products.empty:
 
 # 2. 退货飙升（需要详细数据）
 if len(filtered) > 0:
-    df_detail = load_product_sales(suffix, include_offline=False)
+    df_detail = load_product_sales("_all", include_offline=False)
     if not df_detail.empty:
         df_detail["sale_date"] = pd.to_datetime(df_detail["sale_date"])
+        # 平台筛选
+        if selected_platform and selected_platform != "全部":
+            if selected_platform == "抖音":
+                df_detail = df_detail[df_detail["shop_name"].str.contains("抖音", case=False, na=False)]
+            elif selected_platform == "视频号":
+                df_detail = df_detail[df_detail["shop_name"].str.contains("视频号", case=False, na=False)]
+            elif selected_platform == "小红书":
+                df_detail = df_detail[df_detail["shop_name"].str.contains("小红书", case=False, na=False)]
+            elif selected_platform == "天猫":
+                df_detail = df_detail[df_detail["shop_name"].str.contains("天猫", case=False, na=False)]
+            elif selected_platform == "唯品会":
+                df_detail = df_detail[df_detail["shop_name"].str.contains("唯品会", case=False, na=False)]
         today = pd.Timestamp(date.today())
         recent_start = today - pd.Timedelta(days=14)
         df_recent = df_detail[df_detail["sale_date"] >= recent_start]
@@ -407,7 +454,7 @@ if st.session_state.pa_current_product:
     style = st.session_state.pa_current_product
     st.markdown(f"#### 🔎 商品诊断：{style}")
 
-    detail_df = load_product_detail(style, suffix, start_date, end_date)
+    detail_df = load_product_detail(style, "_all", start_date, end_date, selected_platform)
     if detail_df.empty:
         st.info("该商品在所选日期范围内无销售数据")
     else:
@@ -417,7 +464,7 @@ if st.session_state.pa_current_product:
         return_rate = (total_return / total_ship * 100) if total_ship > 0 else 0
         order_count = len(detail_df)
         unique_shops = detail_df["shop_name"].nunique() if "shop_name" in detail_df.columns else 0
-        if suffix in ["_live", "_all"] and "remark" in detail_df.columns:
+        if "remark" in detail_df.columns:
             anchors = detail_df["remark"].apply(extract_anchor).dropna().unique()
             anchor_count = len(anchors)
         else:
@@ -438,7 +485,7 @@ if st.session_state.pa_current_product:
         with col4:
             st.metric("店铺数", unique_shops)
         with col5:
-            st.metric("主播数", anchor_count if suffix in ["_live", "_all"] else "-")
+            st.metric("主播数", anchor_count)
         
         # 趋势图（需要日期数据）
         if "sale_date" in detail_df.columns:
@@ -458,7 +505,7 @@ if st.session_state.pa_current_product:
                 st.plotly_chart(fig_trend, use_container_width=True)
         
         # 渠道/主播贡献
-        if suffix in ["_live", "_all"] and "remark" in detail_df.columns and anchor_count > 0:
+        if "remark" in detail_df.columns and anchor_count > 0:
             anchor_agg = detail_df.groupby(detail_df["remark"].apply(extract_anchor)).agg(
                 net=("net_amount", "sum") if "net_amount" in detail_df.columns else ("net_amount", "sum"),
                 ship=("ship_amount", "sum") if "ship_amount" in detail_df.columns else 0,
