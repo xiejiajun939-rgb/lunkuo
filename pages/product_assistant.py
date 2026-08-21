@@ -4,7 +4,7 @@
 商品分析助手
 整合商品概览、四象限矩阵、智能预警、商品诊断、对比分析、AI报告
 仅支持“全部数据”源，并增加平台筛选
-四象限图点击商品可弹出诊断窗口（修复无限循环）
+四象限图点击商品可弹出诊断窗口（修复 TypeError）
 """
 
 import streamlit as st
@@ -276,6 +276,17 @@ def show_product_diagnosis(style_code, filtered_df, suffix, start_date, end_date
             st.session_state.pa_diagnosis_result = {"style": style_code, "text": diagnosis_text}
             st.rerun()
 
+# ---------- 定义四象限点击诊断对话框（使用装饰器） ----------
+@st.dialog("📦 商品诊断", width="large")
+def show_quadrant_diagnosis(style_code, filtered_df, start_date, end_date, platform):
+    """四象限点击弹出的诊断对话框"""
+    show_product_diagnosis(style_code, filtered_df, "_all", start_date, end_date, platform, st.session_state.pa_diagnosis_result)
+    if st.button("关闭", key="pa_quadrant_dialog_close"):
+        # 点击关闭后重置状态，避免再次弹出
+        st.session_state.pa_show_quadrant_dialog = False
+        st.session_state.pa_quadrant_click_style = None
+        st.rerun()
+
 # ---------- 侧边栏筛选 ----------
 st.sidebar.header("🔍 筛选条件")
 
@@ -416,18 +427,18 @@ if len(filtered) > 1:
     fig.add_vline(x=x_threshold, line_dash="dash", line_color="gray", annotation_text=f"退货率阈值 {x_threshold:.1f}%")
     fig.update_layout(height=500, margin=dict(l=0, r=0, t=40, b=0), hovermode="closest")
     
-    # 使用 on_select 捕获点击事件，设置标记并 rerun
     event = st.plotly_chart(fig, use_container_width=True, on_select="rerun", selection_mode="points", key="quadrant_chart")
     if event and event.get("selection"):
         points = event["selection"].get("points", [])
         if points:
             style_code = points[0].get("customdata")
             if style_code:
+                # 设置状态并调用对话框
                 st.session_state.pa_quadrant_click_style = style_code
                 st.session_state.pa_show_quadrant_dialog = True
                 st.rerun()
 
-    # 四象限说明按钮（保留原功能）
+    # 四象限说明按钮
     col_q1, col_q2, col_q3, col_q4 = st.columns(4)
     with col_q1:
         st.markdown("**🌟 明星品** (高销低退) 建议：维持并加大推广")
@@ -523,17 +534,17 @@ else:
 
 st.markdown("---")
 
-# ---------- 四象限点击诊断对话框（在页面中检查状态并显示） ----------
+# ---------- 处理四象限点击对话框 ----------
 if st.session_state.pa_show_quadrant_dialog and st.session_state.pa_quadrant_click_style:
-    style_code = st.session_state.pa_quadrant_click_style
-    # 立即重置标记，防止无限循环
-    st.session_state.pa_show_quadrant_dialog = False
-    st.session_state.pa_quadrant_click_style = None
-    with st.dialog(f"📦 商品诊断 - {style_code}", width="large"):
-        show_product_diagnosis(style_code, filtered, "_all", start_date, end_date, selected_platform, st.session_state.pa_diagnosis_result)
-        # 关闭按钮会触发 rerun，此时标记已为 False，不会再次弹窗
-        if st.button("关闭", key="pa_quadrant_dialog_close"):
-            st.rerun()
+    # 调用装饰器对话框
+    show_quadrant_diagnosis(
+        st.session_state.pa_quadrant_click_style,
+        filtered,
+        start_date,
+        end_date,
+        selected_platform
+    )
+    # 注意：对话框显示后，需等待用户关闭，关闭时会重置状态，避免循环
 
 # ---------- 商品列表与操作 ----------
 st.markdown("#### 📋 商品列表")
