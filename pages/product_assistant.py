@@ -4,7 +4,7 @@
 商品分析助手
 整合商品概览、四象限矩阵、智能预警、商品诊断、对比分析、AI报告
 仅支持“全部数据”源，并增加平台筛选
-四象限图点击商品可弹出诊断窗口
+四象限图点击商品可弹出诊断窗口（修复无限循环）
 """
 
 import streamlit as st
@@ -36,7 +36,7 @@ if "pa_diagnosis_result" not in st.session_state:
     st.session_state.pa_diagnosis_result = None
 if "pa_compare_products" not in st.session_state:
     st.session_state.pa_compare_products = []
-# 新增：四象限点击诊断对话框状态
+# 四象限点击诊断对话框状态
 if "pa_quadrant_click_style" not in st.session_state:
     st.session_state.pa_quadrant_click_style = None
 if "pa_show_quadrant_dialog" not in st.session_state:
@@ -401,7 +401,6 @@ if len(filtered) > 1:
     filtered.loc[(filtered["净销售额"] < y_threshold) & (filtered["退货率"] <= x_threshold), "象限"] = "💰 现金牛"
     filtered.loc[(filtered["净销售额"] < y_threshold) & (filtered["退货率"] > x_threshold), "象限"] = "🐶 瘦狗品"
 
-    # 使用 customdata 存储货号，便于点击时获取
     fig = px.scatter(filtered, x="退货率", y="净销售额", color="象限", 
                      hover_data={"style_code": True, "brands": True, "categories": True, "has_newbie_coupon": True},
                      custom_data=["style_code"],
@@ -417,7 +416,7 @@ if len(filtered) > 1:
     fig.add_vline(x=x_threshold, line_dash="dash", line_color="gray", annotation_text=f"退货率阈值 {x_threshold:.1f}%")
     fig.update_layout(height=500, margin=dict(l=0, r=0, t=40, b=0), hovermode="closest")
     
-    # 使用 on_select 捕获点击事件
+    # 使用 on_select 捕获点击事件，设置标记并 rerun
     event = st.plotly_chart(fig, use_container_width=True, on_select="rerun", selection_mode="points", key="quadrant_chart")
     if event and event.get("selection"):
         points = event["selection"].get("points", [])
@@ -524,6 +523,18 @@ else:
 
 st.markdown("---")
 
+# ---------- 四象限点击诊断对话框（在页面中检查状态并显示） ----------
+if st.session_state.pa_show_quadrant_dialog and st.session_state.pa_quadrant_click_style:
+    style_code = st.session_state.pa_quadrant_click_style
+    # 立即重置标记，防止无限循环
+    st.session_state.pa_show_quadrant_dialog = False
+    st.session_state.pa_quadrant_click_style = None
+    with st.dialog(f"📦 商品诊断 - {style_code}", width="large"):
+        show_product_diagnosis(style_code, filtered, "_all", start_date, end_date, selected_platform, st.session_state.pa_diagnosis_result)
+        # 关闭按钮会触发 rerun，此时标记已为 False，不会再次弹窗
+        if st.button("关闭", key="pa_quadrant_dialog_close"):
+            st.rerun()
+
 # ---------- 商品列表与操作 ----------
 st.markdown("#### 📋 商品列表")
 st.caption(f"当前筛选条件下共 {len(filtered)} 个商品")
@@ -558,17 +569,6 @@ if st.session_state.pa_current_product:
         st.rerun()
 
 st.markdown("---")
-
-# ---------- 四象限点击诊断对话框 ----------
-if st.session_state.pa_show_quadrant_dialog and st.session_state.pa_quadrant_click_style:
-    style_code = st.session_state.pa_quadrant_click_style
-    with st.dialog(f"📦 商品诊断 - {style_code}"):
-        # 在对话框内显示诊断内容
-        show_product_diagnosis(style_code, filtered, "_all", start_date, end_date, selected_platform, st.session_state.pa_diagnosis_result)
-        if st.button("关闭", key="pa_quadrant_dialog_close"):
-            st.session_state.pa_show_quadrant_dialog = False
-            st.session_state.pa_quadrant_click_style = None
-            st.rerun()
 
 # ---------- 对比分析 ----------
 if len(st.session_state.pa_compare_products) >= 2:
