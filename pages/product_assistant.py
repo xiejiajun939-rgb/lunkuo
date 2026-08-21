@@ -2,9 +2,9 @@
 # -*- coding: utf-8 -*-
 """
 商品分析助手
-整合商品概览、四象限矩阵、智能预警、商品诊断、对比分析、AI报告
+整合商品概览、四象限矩阵、智能预警、对比分析、AI报告、导出
 仅支持“全部数据”源，并增加平台筛选
-四象限图点击商品可弹出诊断窗口（增大点，禁用高亮效果）
+四象限图点击商品可弹出诊断窗口（商品诊断融入四象限）
 """
 
 import streamlit as st
@@ -179,7 +179,7 @@ def load_product_detail(style_code, suffix, start_date, end_date, platform=None)
     detail = df[df["style_code"] == style_code_str].copy()
     return detail
 
-# ---------- 商品诊断显示函数（供主页面和对话框复用） ----------
+# ---------- 商品诊断显示函数（供四象限对话框使用） ----------
 def show_product_diagnosis(style_code, filtered_df, suffix, start_date, end_date, platform, diagnosis_result):
     """显示单个商品的诊断内容（指标、趋势、渠道、AI诊断）"""
     detail_df = load_product_detail(style_code, suffix, start_date, end_date, platform)
@@ -428,8 +428,6 @@ if len(filtered) > 1:
                          "其他": "#e2e8f0"
                      })
     
-    # ========== 修改点：增大点的大小，添加白色边框，禁用高亮效果 ==========
-    # 增大点并添加边框，不设置 selected/unselected 以避免错误
     fig.update_traces(
         marker=dict(
             size=12,
@@ -437,9 +435,7 @@ if len(filtered) > 1:
             opacity=0.9
         )
     )
-    # 禁用点击选中高亮（将 selectedpoints 设置为空列表）
     fig.update_traces(selectedpoints=[])
-    # ==============================================================
     
     fig.add_hline(y=y_threshold, line_dash="dash", line_color="gray", annotation_text=f"净额阈值 {y_threshold:,.0f}")
     fig.add_vline(x=x_threshold, line_dash="dash", line_color="gray", annotation_text=f"退货率阈值 {x_threshold:.1f}%")
@@ -564,44 +560,17 @@ else:
 
 st.markdown("---")
 
-# ---------- 商品列表与操作 ----------
-st.markdown("#### 📋 商品列表")
-st.caption(f"当前筛选条件下共 {len(filtered)} 个商品")
+# ---------- 对比分析 ----------
+st.markdown("#### 📊 对比分析")
+st.caption("选择多个商品进行对比（最多5个）")
 
-selected_style = st.selectbox("选择商品（输入货号搜索）", options=[""] + sorted(filtered["style_code"].unique()), format_func=lambda x: x if x else "请选择商品...", key="pa_select_product")
-if selected_style:
-    st.session_state.pa_current_product = selected_style
-    if st.button("🔍 诊断该商品", key="pa_diagnose"):
-        st.session_state.pa_diagnosis_result = None
-        st.rerun()
-
-st.markdown("**对比分析**")
-compare_options = st.multiselect("选择多个商品进行对比（最多5个）", options=sorted(filtered["style_code"].unique()), default=st.session_state.pa_compare_products, key="pa_compare_select")
+compare_options = st.multiselect("选择商品进行对比", options=sorted(filtered["style_code"].unique()), default=st.session_state.pa_compare_products, key="pa_compare_select_new")
 if len(compare_options) > 5:
     st.warning("最多选择5个商品")
     compare_options = compare_options[:5]
 st.session_state.pa_compare_products = compare_options
 
-if len(compare_options) >= 2:
-    if st.button("📊 对比分析", key="pa_compare_btn"):
-        st.session_state.pa_compare_products = compare_options
-        st.rerun()
-
-# ---------- 商品诊断详情（原位置） ----------
-if st.session_state.pa_current_product:
-    style = st.session_state.pa_current_product
-    st.markdown(f"#### 🔎 商品诊断：{style}")
-    show_product_diagnosis(style, filtered, "_all", start_date, end_date, selected_platform, st.session_state.pa_diagnosis_result)
-    if st.button("关闭诊断", key="pa_close_diagnosis"):
-        st.session_state.pa_current_product = None
-        st.session_state.pa_diagnosis_result = None
-        st.rerun()
-
-st.markdown("---")
-
-# ---------- 对比分析 ----------
 if len(st.session_state.pa_compare_products) >= 2:
-    st.markdown(f"#### 📊 对比分析：{len(st.session_state.pa_compare_products)} 个商品")
     compare_df = filtered[filtered["style_code"].isin(st.session_state.pa_compare_products)].copy()
     metric_options = ["净销售额", "发货额", "退货额", "退货率", "订单数", "动销天数"]
     compare_metrics = st.multiselect("选择对比指标", metric_options, default=["净销售额", "退货率", "订单数"])
@@ -633,7 +602,7 @@ if len(st.session_state.pa_compare_products) >= 2:
         
         st.dataframe(compare_df[["style_code"] + compare_metrics], hide_index=True, use_container_width=True)
 
-        if st.button("清除对比", key="pa_clear_compare"):
+        if st.button("清除对比", key="pa_clear_compare_new"):
             st.session_state.pa_compare_products = []
             st.rerun()
 
@@ -641,7 +610,7 @@ st.markdown("---")
 
 # ---------- AI 智能报告 ----------
 st.markdown("#### 📄 AI 智能报告")
-if st.button("🚀 生成当前筛选条件下的智能报告", key="pa_generate_report"):
+if st.button("🚀 生成当前筛选条件下的智能报告", key="pa_generate_report_new"):
     total_products = len(filtered)
     total_net = filtered["净销售额"].sum()
     avg_return = filtered["退货率"].mean()
@@ -680,10 +649,11 @@ if "pa_report" in st.session_state and st.session_state.pa_report:
     </div>
     """, unsafe_allow_html=True)
 
-# ---------- 导出 ----------
 st.markdown("---")
+
+# ---------- 导出 ----------
 st.markdown("#### 💾 导出数据")
-if st.button("📥 导出当前筛选的商品列表（Excel）", key="pa_export"):
+if st.button("📥 导出当前筛选的商品列表（Excel）", key="pa_export_new"):
     export_df = filtered[["style_code", "brands", "categories", "净销售额", "发货额", "退货额", "退货率", "订单数", "最近销售日期", "has_newbie_coupon"]].copy()
     export_df.rename(columns={
         "style_code": "货号",
@@ -706,5 +676,5 @@ if st.button("📥 导出当前筛选的商品列表（Excel）", key="pa_export
         data=output.getvalue(),
         file_name=f"商品分析_{start_date}_{end_date}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        key="pa_download"
+        key="pa_download_new"
     )
