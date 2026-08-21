@@ -101,7 +101,7 @@ def load_assistant_data(suffix, start_date, end_date, platform=None):
     agg_dict["ship_sum"] = ("ship_amount", "sum")
     agg_dict["return_sum"] = ("return_amount", "sum")
     agg_dict["net_sum"] = ("net_amount", "sum")
-    agg_dict["order_count"] = ("net_amount", "count")
+    agg_dict["order_count"] = ("net_amount", "count")  # 新增订单数
     
     if "brand" in df.columns:
         agg_dict["brands"] = ("brand", lambda x: x.mode()[0] if not x.empty else None)
@@ -127,6 +127,7 @@ def load_assistant_data(suffix, start_date, end_date, platform=None):
     grouped["净销售额"] = grouped["net_sum"]
     grouped["发货额"] = grouped["ship_sum"]
     grouped["退货额"] = grouped["return_sum"]
+    # 订单数已经是 order_count，不需要重命名
     
     df["sale_date_dt"] = pd.to_datetime(df["sale_date"])
     latest = df.groupby("style_code")["sale_date_dt"].max().reset_index().rename(columns={"sale_date_dt": "latest_sale"})
@@ -277,7 +278,7 @@ def show_product_diagnosis(style_code, filtered_df, suffix, start_date, end_date
             4. 语气专业但易懂
             """
             with st.spinner("AI 正在分析..."):
-                diagnosis_text = get_ai_summary(prompt, context, "Qwen2.5-7B")
+                diagnosis_text = get_ai_summary(prompt, context, "deepseek-ai/DeepSeek-V3")
             st.session_state.pa_diagnosis_result = {"style": style_code, "text": diagnosis_text}
             st.rerun()
 
@@ -579,35 +580,89 @@ st.session_state.pa_compare_products = compare_options
 
 if len(st.session_state.pa_compare_products) >= 2:
     compare_df = filtered[filtered["style_code"].isin(st.session_state.pa_compare_products)].copy()
+    # 确保对比指标列存在，并重命名为中文（如果需要）
+    # 定义可用的指标列映射
+    metric_mapping = {
+        "净销售额": "净销售额",
+        "发货额": "发货额",
+        "退货额": "退货额",
+        "退货率": "退货率",
+        "订单数": "order_count",   # 实际列名是 order_count
+        "动销天数": "动销天数"
+    }
+    # 可用的指标选项（中文显示）
     metric_options = ["净销售额", "发货额", "退货额", "退货率", "订单数", "动销天数"]
     compare_metrics = st.multiselect("选择对比指标", metric_options, default=["净销售额", "退货率", "订单数"])
+    
     if compare_metrics:
-        radar_data = compare_df[["style_code"] + compare_metrics].copy()
+        # 构建实际列名列表
+        actual_cols = []
         for m in compare_metrics:
-            if m != "退货率":
-                max_val = radar_data[m].max()
-                if max_val > 0:
-                    radar_data[f"{m}_norm"] = radar_data[m] / max_val * 100
-                else:
-                    radar_data[f"{m}_norm"] = 0
+            if m in metric_mapping:
+                actual_cols.append(metric_mapping[m])
             else:
-                radar_data[f"{m}_norm"] = radar_data[m]
-        fig_radar = go.Figure()
-        for _, row in radar_data.iterrows():
-            fig_radar.add_trace(go.Scatterpolar(
-                r=[row[f"{m}_norm"] for m in compare_metrics],
-                theta=compare_metrics,
-                fill='toself',
-                name=row["style_code"]
-            ))
-        fig_radar.update_layout(
-            polar=dict(radialaxis=dict(visible=True, range=[0, 100])),
-            height=400,
-            margin=dict(l=80, r=80, t=20, b=20)
-        )
-        st.plotly_chart(fig_radar, use_container_width=True)
+                # 如果找不到映射，直接使用原名称（但应不会发生）
+                actual_cols.append(m)
         
-        st.dataframe(compare_df[["style_code"] + compare_metrics], hide_index=True, use_container_width=True)
+        # 确保这些列在 compare_df 中存在
+        existing_cols = [col for col in actual_cols if col in compare_df.columns]
+        if not existing_cols:
+            st.warning("没有可用的对比指标，请检查数据")
+        else:
+            # 准备雷达图数据，使用显示名称
+            radar_df = compare_df[["style_code"] + existing_cols].copy()
+            # 将列名映射回显示名称（用于雷达图标签）
+            display_cols = []
+            for col in existing_cols:
+                for display, actual in metric_mapping.items():
+                    if actual == col:
+                        display_cols.append(display)
+                        break
+                else:
+                    display_cols.append(col)
+            # 归一化（除退货率外）
+            for col in existing_cols:
+                if col == "退货率":
+                    # 退货率已经是百分比，无需归一化
+                    continue
+                max_val = radar_df[col].max()
+                if max_val > 0:
+                    radar_df[f"{col}_norm"] = radar_df[col] / max_val * 100
+                else:
+                    radar_df[f"{col}_norm"] = 0
+            # 绘制雷达图
+            fig_radar = go.Figure()
+            for _, row in radar_df.iterrows():
+                values = []
+                for col in existing_cols:
+                    if col == "退货率":
+                        values.append(row[col])  # 直接使用退货率值（0-100）
+                    else:
+                        values.append(row[f"{col}_norm"])
+                fig_radar.add_trace(go.Scatterpolar(
+                    r=values,
+                    theta=display_cols,
+                    fill='toself',
+                    name=row["style_code"]
+                ))
+            fig_radar.update_layout(
+                polar=dict(radialaxis=dict(visible=True, range=[0, 100])),
+                height=400,
+                margin=dict(l=80, r=80, t=20, b=20)
+            )
+            st.plotly_chart(fig_radar, use_container_width=True)
+            
+            # 显示数据表格
+            display_df = compare_df[["style_code"] + existing_cols].copy()
+            # 将列名改为显示名称
+            rename_map = {}
+            for col in existing_cols:
+                for display, actual in metric_mapping.items():
+                    if actual == col:
+                        rename_map[col] = display
+                        break
+            display_df.rename(columns=rename_map, inplace=True)
+            st.dataframe(display_df, hide_index=True, use_container_width=True)
 
         if st.button("清除对比", key="pa_clear_compare_new"):
             st.session_state.pa_compare_products = []
@@ -644,7 +699,7 @@ if st.button("🚀 生成当前筛选条件下的智能报告", key="pa_generate
     4. 优化建议（具体可执行）
     """
     with st.spinner("AI 正在生成报告..."):
-        report = get_ai_summary(prompt, context, "Qwen2.5-7B")
+        report = get_ai_summary(prompt, context, "deepseek-ai/DeepSeek-V3")
     st.session_state.pa_report = report
     st.rerun()
 
@@ -661,7 +716,7 @@ st.markdown("---")
 # ---------- 导出 ----------
 st.markdown("#### 💾 导出数据")
 if st.button("📥 导出当前筛选的商品列表（Excel）", key="pa_export_new"):
-    export_df = filtered[["style_code", "brands", "categories", "净销售额", "发货额", "退货额", "退货率", "订单数", "最近销售日期", "has_newbie_coupon"]].copy()
+    export_df = filtered[["style_code", "brands", "categories", "净销售额", "发货额", "退货额", "退货率", "order_count", "最近销售日期", "has_newbie_coupon"]].copy()
     export_df.rename(columns={
         "style_code": "货号",
         "brands": "品牌",
@@ -670,7 +725,7 @@ if st.button("📥 导出当前筛选的商品列表（Excel）", key="pa_export
         "发货额": "发货额(¥)",
         "退货额": "退货额(¥)",
         "退货率": "退货率(%)",
-        "订单数": "订单数",
+        "order_count": "订单数",
         "最近销售日期": "最近销售日期",
         "has_newbie_coupon": "首单礼金"
     }, inplace=True)
