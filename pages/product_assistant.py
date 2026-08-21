@@ -427,29 +427,26 @@ if len(filtered) > 1:
                          "🐶 瘦狗品": "#94a3b8",
                          "其他": "#e2e8f0"
                      })
-    # ========== 修改点：增大点大小、添加边框、禁用点击高亮效果 ==========
+    # 设置点样式：大小12，白色边框，透明度0.9
     fig.update_traces(
         marker=dict(
             size=12,
             line=dict(width=1, color='white'),
             opacity=0.9
-        ),
-        selected=dict(
-            marker=dict(
-                opacity=0.9,
-                size=12,
-                line=dict(width=1, color='white')
-            )
-        ),
-        unselected=dict(
-            marker=dict(
-                opacity=0.9,
-                size=12,
-                line=dict(width=1, color='white')
-            )
         )
     )
-    # ==============================================================
+    # 禁用点击高亮效果：设置 selected 和 unselected 样式与默认一致
+    for trace in fig.data:
+        trace.marker.selected = dict(
+            opacity=0.9,
+            size=12,
+            line=dict(width=1, color='white')
+        )
+        trace.marker.unselected = dict(
+            opacity=0.9,
+            size=12,
+            line=dict(width=1, color='white')
+        )
     fig.add_hline(y=y_threshold, line_dash="dash", line_color="gray", annotation_text=f"净额阈值 {y_threshold:,.0f}")
     fig.add_vline(x=x_threshold, line_dash="dash", line_color="gray", annotation_text=f"退货率阈值 {x_threshold:.1f}%")
     fig.update_layout(height=500, margin=dict(l=0, r=0, t=40, b=0), hovermode="closest")
