@@ -344,6 +344,9 @@ if filtered.empty:
     st.warning("没有商品满足当前筛选条件，请调整筛选条件。")
     st.stop()
 
+# ---------- 清理无效的对比商品 ----------
+st.session_state.pa_compare_products = [x for x in st.session_state.pa_compare_products if x in filtered["style_code"].values]
+
 # ---------- 主页面 ----------
 st.title("📦 商品分析助手")
 st.caption("基于商品销售数据的智能分析与决策支持")
@@ -564,10 +567,14 @@ st.markdown("---")
 st.markdown("#### 📊 对比分析")
 st.caption("选择多个商品进行对比（最多5个）")
 
-compare_options = st.multiselect("选择商品进行对比", options=sorted(filtered["style_code"].unique()), default=st.session_state.pa_compare_products, key="pa_compare_select_new")
+# 过滤掉不在当前选项中的默认值
+valid_default_compare = [x for x in st.session_state.pa_compare_products if x in filtered["style_code"].values]
+compare_options = st.multiselect("选择商品进行对比", options=sorted(filtered["style_code"].unique()), default=valid_default_compare, key="pa_compare_select_new")
 if len(compare_options) > 5:
     st.warning("最多选择5个商品")
     compare_options = compare_options[:5]
+
+# 更新 session_state
 st.session_state.pa_compare_products = compare_options
 
 if len(st.session_state.pa_compare_products) >= 2:
