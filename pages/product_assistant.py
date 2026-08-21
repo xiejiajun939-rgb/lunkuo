@@ -69,13 +69,12 @@ def load_assistant_data(suffix, start_date, end_date):
     else:
         df["style_code"] = df["style_code"].astype(str).str.strip().str.upper()
     
-    # 必须存在的列
-    required_cols = ["ship_amount", "return_amount", "net_amount"]
-    for col in required_cols:
+    # 补全必须的金额列
+    for col in ["ship_amount", "return_amount", "net_amount"]:
         if col not in df.columns:
             df[col] = 0
     
-    # 使用 named aggregation
+    # 构建聚合字典，只包含确实存在的列
     agg_dict = {}
     agg_dict["ship_sum"] = ("ship_amount", "sum")
     agg_dict["return_sum"] = ("return_amount", "sum")
@@ -84,26 +83,25 @@ def load_assistant_data(suffix, start_date, end_date):
     
     if "brand" in df.columns:
         agg_dict["brands"] = ("brand", lambda x: x.mode()[0] if not x.empty else None)
-    else:
-        agg_dict["brands"] = ("brand", lambda x: None)
-    
     if "master_category" in df.columns:
         agg_dict["categories"] = ("master_category", lambda x: x.mode()[0] if not x.empty else None)
-    else:
-        agg_dict["categories"] = ("master_category", lambda x: None)
-    
     if "shop_name" in df.columns:
         agg_dict["shops"] = ("shop_name", lambda x: list(set(x)) if not x.empty else [])
-    else:
-        agg_dict["shops"] = ("shop_name", lambda x: [])
-    
     if "remark" in df.columns and suffix in ["_live", "_all"]:
         agg_dict["anchors"] = ("remark", lambda x: list(set([extract_anchor(r) for r in x if extract_anchor(r)])) if not x.empty else [])
-    else:
-        agg_dict["anchors"] = ("remark", lambda x: [])
     
     # 执行聚合
     grouped = df.groupby("style_code").agg(**agg_dict).reset_index()
+    
+    # 补充缺失的列（如果未聚合）
+    if "brands" not in grouped.columns:
+        grouped["brands"] = None
+    if "categories" not in grouped.columns:
+        grouped["categories"] = None
+    if "shops" not in grouped.columns:
+        grouped["shops"] = []
+    if "anchors" not in grouped.columns:
+        grouped["anchors"] = []
     
     # 计算衍生指标
     grouped["退货率"] = np.where(grouped["ship_sum"] > 0, grouped["return_sum"] / grouped["ship_sum"] * 100, 0)
