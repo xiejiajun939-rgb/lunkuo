@@ -4,7 +4,7 @@
 商品分析助手
 整合商品概览、四象限矩阵、智能预警、商品诊断、对比分析、AI报告
 仅支持“全部数据”源，并增加平台筛选
-四象限图点击商品可弹出诊断窗口（优化点大小和可见性）
+四象限图点击商品可弹出诊断窗口（禁用点击高亮效果）
 """
 
 import streamlit as st
@@ -427,8 +427,28 @@ if len(filtered) > 1:
                          "🐶 瘦狗品": "#94a3b8",
                          "其他": "#e2e8f0"
                      })
-    # ========== 修改点：增大点的大小并添加白色边框，确保可见 ==========
-    fig.update_traces(marker=dict(size=12, line=dict(width=1, color='white'), opacity=0.9))
+    # ========== 修改点：增大点大小、添加边框、禁用点击高亮效果 ==========
+    fig.update_traces(
+        marker=dict(
+            size=12,
+            line=dict(width=1, color='white'),
+            opacity=0.9
+        ),
+        selected=dict(
+            marker=dict(
+                opacity=0.9,
+                size=12,
+                line=dict(width=1, color='white')
+            )
+        ),
+        unselected=dict(
+            marker=dict(
+                opacity=0.9,
+                size=12,
+                line=dict(width=1, color='white')
+            )
+        )
+    )
     # ==============================================================
     fig.add_hline(y=y_threshold, line_dash="dash", line_color="gray", annotation_text=f"净额阈值 {y_threshold:,.0f}")
     fig.add_vline(x=x_threshold, line_dash="dash", line_color="gray", annotation_text=f"退货率阈值 {x_threshold:.1f}%")
