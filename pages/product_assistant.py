@@ -4,7 +4,7 @@
 商品分析助手
 整合商品概览、四象限矩阵、智能预警、商品诊断、对比分析、AI报告
 仅支持“全部数据”源，并增加平台筛选
-四象限图点击商品可弹出诊断窗口（禁用点击高亮效果）
+四象限图点击商品可弹出诊断窗口（增大点，禁用高亮效果）
 """
 
 import streamlit as st
@@ -427,7 +427,9 @@ if len(filtered) > 1:
                          "🐶 瘦狗品": "#94a3b8",
                          "其他": "#e2e8f0"
                      })
-    # 设置点样式：大小12，白色边框，透明度0.9
+    
+    # ========== 修改点：增大点的大小，添加白色边框，禁用高亮效果 ==========
+    # 增大点并添加边框，不设置 selected/unselected 以避免错误
     fig.update_traces(
         marker=dict(
             size=12,
@@ -435,18 +437,10 @@ if len(filtered) > 1:
             opacity=0.9
         )
     )
-    # 禁用点击高亮效果：设置 selected 和 unselected 样式与默认一致
-    for trace in fig.data:
-        trace.marker.selected = dict(
-            opacity=0.9,
-            size=12,
-            line=dict(width=1, color='white')
-        )
-        trace.marker.unselected = dict(
-            opacity=0.9,
-            size=12,
-            line=dict(width=1, color='white')
-        )
+    # 禁用点击选中高亮（将 selectedpoints 设置为空列表）
+    fig.update_traces(selectedpoints=[])
+    # ==============================================================
+    
     fig.add_hline(y=y_threshold, line_dash="dash", line_color="gray", annotation_text=f"净额阈值 {y_threshold:,.0f}")
     fig.add_vline(x=x_threshold, line_dash="dash", line_color="gray", annotation_text=f"退货率阈值 {x_threshold:.1f}%")
     fig.update_layout(height=500, margin=dict(l=0, r=0, t=40, b=0), hovermode="closest")
