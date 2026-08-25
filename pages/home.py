@@ -6,9 +6,17 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 from core.app_config import load_carousel_config
+from core.theme import page_header
 
 
 st.set_page_config(page_title="主页", layout="wide")
+
+page_header(
+    f"欢迎回来，{st.session_state.get('username', '伙伴')}",
+    "从这里进入经营分析工作区，快速查看关键指标与业务机会",
+    "LUNKUO DATA OS",
+    "数据已连接",
+)
 
 config = load_carousel_config()
 slides = config.get("slides", [])
@@ -83,12 +91,16 @@ components.html(
 )
 
 st.markdown("### 快速开始")
-cols = st.columns(3)
+st.markdown("""<style>
+.quick-card{min-height:142px;padding:22px;border:1px solid #dbe6ef;border-radius:16px;background:linear-gradient(145deg,#fff,#f9fcff);box-shadow:0 3px 12px rgba(16,48,82,.06);transition:.18s ease}.quick-card:hover{transform:translateY(-3px);box-shadow:0 12px 28px rgba(16,48,82,.11);border-color:#b8d4e7}.quick-icon{width:44px;height:44px;display:flex;align-items:center;justify-content:center;border-radius:12px;background:linear-gradient(135deg,#e7f5ff,#e8fbfd);font-size:22px}.quick-title{font-size:16px;font-weight:760;color:#132238;margin:14px 0 6px}.quick-desc{font-size:13px;line-height:1.55;color:#66778c;margin:0}
+</style>""", unsafe_allow_html=True)
+cols = st.columns(4)
 cards = [
     ("📊", "经营驾驶舱", "查看核心经营指标、趋势和异常提醒"),
     ("📦", "商品分析", "按本月数据分析商品表现与退货风险"),
+    ("🎤", "主播分析", "洞察主播贡献、货品结构与增长空间"),
     ("🏢", "组织与部门", "查看组织、部门与店铺的经营贡献"),
 ]
 for col, (icon, title, desc) in zip(cols, cards):
     with col:
-        st.markdown(f"<div style='padding:22px;border:1px solid #e2e8f0;border-radius:16px;background:white'><div style='font-size:28px'>{icon}</div><h4 style='margin:10px 0 6px'>{title}</h4><p style='color:#64748b;margin:0'>{desc}</p></div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='quick-card'><div class='quick-icon'>{icon}</div><div class='quick-title'>{title}</div><p class='quick-desc'>{desc}</p></div>", unsafe_allow_html=True)

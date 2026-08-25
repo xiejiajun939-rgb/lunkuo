@@ -22,6 +22,7 @@ from openai import OpenAI
 from core.db import init_supabase, get_table_name, load_product_sales, load_product_master, load_dimension_mapping, save_org_targets
 from core.utils import extract_anchor, parse_product_code, date_quick_buttons, apply_data_permission
 from core.ai import get_siliconflow_client, get_ai_summary
+from core.theme import apply_global_theme
 
 # 防抖
 if "last_rerun" not in st.session_state:
@@ -113,6 +114,8 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+apply_global_theme()
+
 # ========== Supabase 连接 ==========
 supabase = init_supabase()
 
@@ -181,11 +184,20 @@ def get_all_users():
     return users
 
 def login():
-    st.title("🔐 数据罗盘 - 登录")
+    st.markdown("""
+    <style>
+    section[data-testid="stSidebar"]{display:none!important}
+    .main .block-container,div[data-testid="stMainBlockContainer"]{max-width:470px!important;padding-top:8vh!important;margin-left:auto!important;margin-right:auto!important}
+    .login-brand{text-align:center;margin-bottom:26px}.login-mark{width:66px;height:66px;margin:0 auto 16px;display:flex;align-items:center;justify-content:center;border-radius:20px;background:linear-gradient(135deg,#0d426f,#20b7d3);box-shadow:0 14px 30px rgba(23,110,174,.25);color:#fff;font-size:27px;font-weight:850}.login-title{font-size:28px;font-weight:820;color:#132238;letter-spacing:-.04em}.login-sub{margin-top:7px;color:#6b7c90;font-size:14px}
+    div[data-testid="stForm"]{padding:26px!important;border:1px solid #dbe6ef!important;border-radius:20px!important;background:#fff!important;box-shadow:0 18px 45px rgba(16,48,82,.1)!important}
+    div[data-testid="stForm"] div:has(>div[data-testid="stFormSubmitButton"]),div[data-testid="stFormSubmitButton"]{display:block!important;width:100%!important}div[data-testid="stFormSubmitButton"] button{width:100%!important;margin-top:8px;color:#fff!important;border-color:transparent!important;background:linear-gradient(135deg,#1767a5,#1687c9)!important;box-shadow:0 6px 16px rgba(23,110,174,.24)!important}div[data-testid="stFormSubmitButton"] button p{color:#fff!important}
+    </style>
+    <div class="login-brand"><div class="login-mark">L</div><div class="login-title">数据罗盘</div><div class="login-sub">LUNKUO BUSINESS INTELLIGENCE</div></div>
+    """, unsafe_allow_html=True)
     with st.form("login_form"):
         username = st.text_input("用户名")
         password = st.text_input("密码", type="password")
-        submitted = st.form_submit_button("登录")
+        submitted = st.form_submit_button("登录工作台", type="primary")
         if submitted:
             users = get_all_users()
             if username in users and users[username]["password"] == password:
@@ -668,6 +680,7 @@ st.session_state["_admin_callbacks"] = {
 
 nav = st.navigation(pages_to_show, position="sidebar")
 nav.run()
+apply_global_theme()  # 页面级旧样式之后再次注入，确保全站设计系统优先级一致
 
 # ========== 侧边栏额外内容 ==========
 with st.sidebar:

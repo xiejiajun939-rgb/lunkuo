@@ -16,9 +16,12 @@ import time
 from core.db import init_supabase, get_table_name, fetch_sales_summary, load_org_targets, fetch_complete_sales_summary, load_dimension_mapping
 from core.ai import get_ai_summary
 from core.utils import clear_cache_on_page_change
+from core.theme import page_header
 
 st.set_page_config(page_title="组织与部门分析", layout="wide")
 clear_cache_on_page_change("org_dept")
+
+page_header("组织与部门分析", "拆解组织、部门与店铺贡献，评估目标进度和经营效率", "ORGANIZATION PERFORMANCE", "阿米巴经营")
 
 # 仅支持全部数据
 if st.session_state.get("table_suffix") != "_all":

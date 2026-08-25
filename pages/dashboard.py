@@ -9,6 +9,7 @@ import plotly.graph_objects as go
 from core.db import fetch_complete_sales_summary, get_sales_date_range
 from core.ai import get_ai_summary
 from core.utils import clear_cache_on_page_change
+from core.theme import page_header
 
 st.set_page_config(page_title="经营驾驶舱", layout="wide")
 clear_cache_on_page_change("dashboard")
@@ -41,6 +42,8 @@ st.markdown("""
     .section-title .badge { background: rgba(34, 197, 94, 0.15); color: #16a34a; font-size: 11px; padding: 2px 10px; border-radius: 12px; font-weight: 500; }
 </style>
 """, unsafe_allow_html=True)
+
+page_header("经营驾驶舱", "聚焦销售、目标、退货与经营风险，快速掌握最新经营状态", "EXECUTIVE OVERVIEW", "实时经营")
 
 # ---------- 获取日期范围 ----------
 suffix = st.session_state.table_suffix

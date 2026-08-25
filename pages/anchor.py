@@ -7,6 +7,7 @@ import plotly.graph_objects as go
 
 from core.db import load_product_sales, load_product_master, get_sales_date_range
 from core.utils import extract_anchor, date_quick_buttons, clear_cache_on_page_change
+from core.theme import page_header
 
 st.set_page_config(page_title="主播分析", layout="wide")
 clear_cache_on_page_change("anchor")
@@ -16,6 +17,7 @@ if "table_suffix" not in st.session_state:
     st.session_state.table_suffix = ""
 
 # ========== 页面内容（原 idx_anchor_compare 块） ==========
+page_header("主播分析", "对比主播销售贡献、退货表现与商品结构，发现增长抓手", "CREATOR PERFORMANCE", "本月默认")
 use_anchor = st.session_state.table_suffix == "_all"
 dimension_name = "主播" if use_anchor else "店铺"
 dimension_col = "anchor" if use_anchor else "shop_name"

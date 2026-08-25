@@ -19,6 +19,7 @@ import re
 from core.db import load_product_sales, load_product_master, get_sales_date_range
 from core.utils import extract_anchor, clear_cache_on_page_change
 from core.ai import get_ai_summary
+from core.theme import page_header
 
 st.set_page_config(page_title="商品分析助手", layout="wide", initial_sidebar_state="expanded")
 clear_cache_on_page_change("product_assistant")
@@ -355,8 +356,7 @@ if filtered.empty:
 st.session_state.pa_compare_products = [x for x in st.session_state.pa_compare_products if x in filtered["style_code"].values]
 
 # ---------- 主页面 ----------
-st.title("📦 商品分析助手")
-st.caption("基于商品销售数据的智能分析与决策支持")
+page_header("商品分析助手", "用智能矩阵、异常预警和 AI 洞察辅助商品经营决策", "AI PRODUCT COPILOT", "智能洞察")
 
 # ---------- 概览 KPI ----------
 st.markdown("#### 📊 概览")

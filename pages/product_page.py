@@ -11,6 +11,7 @@ import numpy as np
 from core.db import load_product_sales, load_product_master, get_sales_date_range
 from core.utils import date_quick_buttons, extract_anchor, clear_cache_on_page_change
 from core.ai import get_ai_summary
+from core.theme import page_header
 
 st.markdown("""
 <style>
@@ -372,7 +373,7 @@ if "sort_by" not in st.session_state:
 if "sort_ascending" not in st.session_state:
     st.session_state.sort_ascending = False
 
-st.title("📦 商品分析")
+page_header("商品分析", "从销售、退货、品类和渠道维度定位商品机会与风险", "PRODUCT INTELLIGENCE", "本月默认")
 
 # ---------- 日期选择（先确定范围，再按需查询数据库） ----------
 min_date, max_date = get_sales_date_range("_all")

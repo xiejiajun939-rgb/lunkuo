@@ -13,6 +13,7 @@ from core.db import (
     get_sales_date_range
 )
 from core.utils import clear_cache_on_page_change
+from core.theme import page_header
 
 st.set_page_config(page_title="每日明细", layout="wide")
 clear_cache_on_page_change("daily_detail")
@@ -94,7 +95,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.subheader("📋 每日明细查询")
+page_header("每日明细", "按日期、组织和店铺追踪销售表现与目标完成情况", "DAILY OPERATIONS", "精细查询")
 st.caption("展示所选日期范围内的销售数据，按组织/部门/店铺维度汇总。")
 
 # ---------- 数据源 ----------

@@ -7,6 +7,7 @@ import plotly.express as px
 
 from core.db import load_product_sales, load_product_master
 from core.utils import extract_anchor, date_quick_buttons, clear_cache_on_page_change
+from core.theme import page_header
 
 st.set_page_config(page_title="销售分布与品牌", layout="wide")
 clear_cache_on_page_change("distribution")
@@ -14,6 +15,8 @@ clear_cache_on_page_change("distribution")
 # 确保全局状态
 if "table_suffix" not in st.session_state:
     st.session_state.table_suffix = ""
+
+page_header("销售分布与品牌", "从品牌、年份、季节和款式结构洞察销售分布", "PORTFOLIO ANALYTICS", "结构洞察")
 
 with st.spinner("正在加载数据，请稍候..."):
     prod_df = load_product_sales(st.session_state.table_suffix, view_mode=st.session_state.get("view_mode"))

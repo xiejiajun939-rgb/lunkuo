@@ -10,6 +10,7 @@ from core.db import init_supabase, load_dimension_mapping
 from core.utils import clear_cache_on_page_change
 from core.app_config import load_carousel_config, save_carousel_config, upload_carousel_image
 from core.settings_panels import render_account_management, render_mapping_management
+from core.theme import page_header
 
 st.set_page_config(page_title="系统设置", layout="wide")
 clear_cache_on_page_change("settings")
@@ -43,7 +44,7 @@ div[data-testid="stVerticalBlockBorderWrapper"] { border-radius: 16px; }
 .settings-subtitle {color:#64748b;margin-bottom:18px}
 </style>
 """, unsafe_allow_html=True)
-st.markdown('<div class="settings-title">⚙️ 系统设置</div><div class="settings-subtitle">集中管理首页、数据文件、账号权限和业务配置</div>', unsafe_allow_html=True)
+page_header("系统设置", "集中管理首页、数据文件、账号权限与业务配置", "SYSTEM ADMINISTRATION", "管理员")
 
 tab_home, tab_upload, tab_tools, tab_accounts, tab_mapping = st.tabs([
     "🖼️ 首页与轮播", "📤 文件与目标", "🧰 数据工具", "👥 账号与权限", "🗂️ 映射关系"

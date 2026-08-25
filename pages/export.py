@@ -8,6 +8,7 @@ import streamlit as st
 
 from core.db import init_supabase, load_product_master, load_sold_style_codes
 from core.utils import clear_cache_on_page_change
+from core.theme import page_header
 
 st.set_page_config(page_title="商品信息管理", layout="wide")
 clear_cache_on_page_change("export")
@@ -88,8 +89,7 @@ def _upsert_records(records):
 
 callbacks = st.session_state.get("_admin_callbacks", {})
 
-st.markdown("## 📚 商品信息管理")
-st.caption("集中管理 product_master：上传、查询、筛选缺失资料、在线编辑、删除和导出。")
+page_header("商品信息管理", "维护商品档案、缺失资料、首单礼金与批量导入导出", "PRODUCT MASTER DATA", "管理员")
 tab_manage, tab_upload, tab_coupon, tab_export = st.tabs([
     "🔎 查询与维护", "📤 批量上传", "🏷️ 首单礼金", "📥 数据导出"
 ])
