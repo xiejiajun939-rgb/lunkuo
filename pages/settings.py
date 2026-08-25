@@ -5,11 +5,10 @@ import pandas as pd
 from datetime import date
 import io
 import time
-import base64
 
 from core.db import init_supabase, load_dimension_mapping
 from core.utils import clear_cache_on_page_change
-from core.app_config import load_carousel_config, save_carousel_config
+from core.app_config import load_carousel_config, save_carousel_config, upload_carousel_image
 from core.settings_panels import render_account_management, render_mapping_management
 
 st.set_page_config(page_title="系统设置", layout="wide")
@@ -83,18 +82,24 @@ with tab_home:
             if any(str(v).strip() for v in record.values()):
                 records.append({k: str(v).strip() for k, v in record.items()})
         for uploaded in uploaded_banners or []:
-            mime = uploaded.type or "image/jpeg"
-            encoded = base64.b64encode(uploaded.getvalue()).decode("ascii")
+            try:
+                image_url = upload_carousel_image(uploaded)
+            except Exception as exc:
+                st.error(f"图片上传失败：{exc}")
+                st.stop()
             records.append({
-                "image_url": f"data:{mime};base64,{encoded}",
+                "image_url": image_url,
                 "title": uploaded.name.rsplit(".", 1)[0],
                 "subtitle": "",
                 "link_url": "",
             })
         if not records:
             records = [{"image_url": "", "title": "欢迎使用数据罗盘", "subtitle": "经营数据与运营决策工作台", "link_url": ""}]
-        save_carousel_config({"interval_seconds": interval, "slides": records})
-        st.success("轮播设置已保存，返回主页即可查看。")
+        try:
+            save_carousel_config({"interval_seconds": interval, "slides": records})
+            st.success("轮播设置已保存到 Supabase，返回主页即可查看。")
+        except Exception as exc:
+            st.error(f"轮播设置保存失败：{exc}")
 
 with tab_upload:
     st.markdown("### 销售数据")
