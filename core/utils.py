@@ -173,16 +173,20 @@ def apply_data_permission(df):
     return df
 
 
-# ---------- 页面切换时自动清缓存（打开页面隐形刷新） ----------
+# ---------- 页面切换时智能刷新缓存 ----------
 def clear_cache_on_page_change(page_key):
     """
-    检测页面切换：当用户从别的页面切到当前页面时，清空 st.cache_data 缓存，
-    实现"打开页面时隐形执行一次强制刷新"，确保展示最新数据（数据变更后无需手动点强制刷新）。
+    检测页面切换：仅当自上次缓存刷新后数据源发生了变更（上传了新数据），才清空缓存。
+    普通页面间切换保留缓存，大幅提升导航速度。
 
-    页面内的交互（选日期、点按钮）不会触发，避免每次交互都重新查数据库影响性能。
+    数据变更时 websale_main 会将 _data_version 递增，并在那时清空缓存；
+    页面切换只需检查版本号是否匹配。
     用法：在每个页面脚本顶部（set_page_config 之后、数据加载之前）调用
         clear_cache_on_page_change("你的页面唯一标识")
     """
-    if st.session_state.get("_active_page_key") != page_key:
+    current_version = st.session_state.get("_data_version", 0)
+    cached_version = st.session_state.get("_cache_version", -1)
+    if cached_version != current_version:
         st.cache_data.clear()
-        st.session_state["_active_page_key"] = page_key
+        st.session_state["_cache_version"] = current_version
+    st.session_state["_active_page_key"] = page_key

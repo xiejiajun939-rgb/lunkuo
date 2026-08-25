@@ -16,7 +16,7 @@ from datetime import date, timedelta
 import io
 import re
 
-from core.db import load_product_sales, load_product_master
+from core.db import load_product_sales, load_product_master, get_sales_date_range
 from core.utils import extract_anchor, clear_cache_on_page_change
 from core.ai import get_ai_summary
 
@@ -66,7 +66,13 @@ st.markdown("""
 # ---------- 加载数据 ----------
 def load_assistant_data(suffix, start_date, end_date, platform=None, view_mode=None):
     """加载商品分析所需数据（聚合后的商品级别数据），支持平台筛选"""
-    df = load_product_sales(suffix, include_offline=False, view_mode=view_mode)
+    df = load_product_sales(
+        suffix,
+        include_offline=False,
+        view_mode=view_mode,
+        start_date=start_date,
+        end_date=end_date,
+    )
     if df.empty:
         return pd.DataFrame()
     df = df[(df["sale_date"] >= pd.to_datetime(start_date)) & (df["sale_date"] <= pd.to_datetime(end_date))]
@@ -150,7 +156,13 @@ def load_assistant_data(suffix, start_date, end_date, platform=None, view_mode=N
 
 def load_product_detail(style_code, suffix, start_date, end_date, platform=None):
     """加载单个商品的详细销售数据（用于诊断）"""
-    df = load_product_sales(suffix, include_offline=False, view_mode=st.session_state.get("view_mode"))
+    df = load_product_sales(
+        suffix,
+        include_offline=False,
+        view_mode=st.session_state.get("view_mode"),
+        start_date=start_date,
+        end_date=end_date,
+    )
     if df.empty:
         return pd.DataFrame()
     df = df[df["sale_date"] >= pd.to_datetime(start_date)]
@@ -298,27 +310,27 @@ st.sidebar.header("🔍 筛选条件")
 platform_options = ["全部", "抖音", "视频号", "小红书", "天猫", "唯品会"]
 selected_platform = st.sidebar.selectbox("平台", platform_options, index=0, key="pa_platform")
 
-df_temp = load_product_sales("_all", include_offline=False, view_mode=st.session_state.get("view_mode"))
-min_date = date(2024, 1, 1)
-max_date = date.today()
-if not df_temp.empty:
-    min_date = df_temp["sale_date"].min().date()
-    max_date = df_temp["sale_date"].max().date()
+min_date, max_date = get_sales_date_range("_all")
+if min_date is None or max_date is None:
+    st.warning("暂无商品销售数据，请先上传订单文件。")
+    st.stop()
+default_start = max(min_date, max_date.replace(day=1))
 
 st.sidebar.markdown("**日期范围**")
-start_date = st.sidebar.date_input("开始日期", min_date, min_value=min_date, max_value=max_date, key="pa_start")
-end_date = st.sidebar.date_input("结束日期", max_date, min_value=min_date, max_value=max_date, key="pa_end")
+start_date = st.sidebar.date_input("开始日期", default_start, min_value=min_date, max_value=max_date, key="pa_start_month")
+end_date = st.sidebar.date_input("结束日期", max_date, min_value=min_date, max_value=max_date, key="pa_end_month")
 if start_date > end_date:
     st.sidebar.error("开始日期不能晚于结束日期")
     st.stop()
 
-all_brands = []
-all_categories = []
-if not df_temp.empty:
-    if "brand" in df_temp.columns:
-        all_brands = sorted(df_temp["brand"].dropna().unique())
-    if "master_category" in df_temp.columns:
-        all_categories = sorted(df_temp["master_category"].dropna().unique())
+with st.spinner("加载商品数据..."):
+    df_products = load_assistant_data("_all", start_date, end_date, selected_platform)
+if df_products.empty:
+    st.warning("没有找到任何商品数据，请检查日期范围或筛选条件。")
+    st.stop()
+
+all_brands = sorted(df_products["brands"].dropna().unique()) if "brands" in df_products.columns else []
+all_categories = sorted(df_products["categories"].dropna().unique()) if "categories" in df_products.columns else []
 
 st.sidebar.markdown("**商品属性**")
 selected_brands = st.sidebar.multiselect("品牌", all_brands, default=[])
@@ -326,12 +338,6 @@ selected_categories = st.sidebar.multiselect("品类", all_categories, default=[
 min_net = st.sidebar.number_input("最小净销售额", value=0, step=100)
 max_net = st.sidebar.number_input("最大净销售额", value=100000000, step=1000, format="%d")
 max_return_rate = st.sidebar.slider("最大退货率 (%)", 0, 100, 100)
-
-with st.spinner("加载商品数据..."):
-    df_products = load_assistant_data("_all", start_date, end_date, selected_platform, view_mode=st.session_state.get("view_mode"))
-    if df_products.empty:
-        st.warning("没有找到任何商品数据，请检查日期范围或筛选条件。")
-        st.stop()
 
 filtered = df_products.copy()
 if selected_brands:
@@ -505,7 +511,14 @@ if not stagnant_products.empty:
         alerts.append(("critical", f"📉 商品 {row['style_code']} 已滞销超过30天，最近销售日期 {row['最近销售日期']}"))
 
 if len(filtered) > 0:
-    df_detail = load_product_sales("_all", include_offline=False, view_mode=st.session_state.get("view_mode"))
+    recent_end = date.today()
+    recent_start = recent_end - timedelta(days=14)
+    df_detail = load_product_sales(
+        "_all",
+        include_offline=False,
+        start_date=recent_start,
+        end_date=recent_end,
+    )
     if not df_detail.empty:
         df_detail["sale_date"] = pd.to_datetime(df_detail["sale_date"])
         if selected_platform and selected_platform != "全部":

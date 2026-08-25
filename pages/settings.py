@@ -4,9 +4,13 @@ import streamlit as st
 import pandas as pd
 from datetime import date
 import io
+import time
+import base64
 
 from core.db import init_supabase, load_dimension_mapping
 from core.utils import clear_cache_on_page_change
+from core.app_config import load_carousel_config, save_carousel_config
+from core.settings_panels import render_account_management, render_mapping_management
 
 st.set_page_config(page_title="系统设置", layout="wide")
 clear_cache_on_page_change("settings")
@@ -16,14 +20,178 @@ if st.session_state.get("role") != "admin":
     st.error("您没有管理员权限，无法访问系统设置。")
     st.stop()
 
-# ---------- 从主文件导入页面定义 ----------
-import sys
-import os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from websale_main import all_pages
+all_pages = {
+    "🏠 主页": "pages/home.py",
+    "📊 经营驾驶舱": "pages/dashboard.py",
+    "📋 每日明细": "pages/daily_detail.py",
+    "📦 商品分析": "pages/product_page.py",
+    "📊 商品分析助手": "pages/product_assistant.py",
+    "🎤 主播分析": "pages/anchor.py",
+    "📈 销售分布与品牌": "pages/distribution.py",
+    "🏢 组织与部门分析": "pages/org_dept.py",
+    "📚 商品信息管理": "pages/export.py",
+    "⚙️ 系统设置": "pages/settings.py",
+}
 
 # ---------- 辅助函数 ----------
 supabase = init_supabase()
+callbacks = st.session_state.get("_admin_callbacks", {})
+
+st.markdown("""
+<style>
+div[data-testid="stVerticalBlockBorderWrapper"] { border-radius: 16px; }
+.settings-title {font-size:30px;font-weight:750;color:#0f172a;margin-bottom:4px}
+.settings-subtitle {color:#64748b;margin-bottom:18px}
+</style>
+""", unsafe_allow_html=True)
+st.markdown('<div class="settings-title">⚙️ 系统设置</div><div class="settings-subtitle">集中管理首页、数据文件、账号权限和业务配置</div>', unsafe_allow_html=True)
+
+tab_home, tab_upload, tab_tools, tab_accounts, tab_mapping = st.tabs([
+    "🖼️ 首页与轮播", "📤 文件与目标", "🧰 数据工具", "👥 账号与权限", "🗂️ 映射关系"
+])
+
+with tab_home:
+    st.markdown("### 首页轮播广告位")
+    st.caption("可直接上传图片，也可填写公开图片 URL；留空时显示默认渐变背景。")
+    uploaded_banners = st.file_uploader(
+        "上传轮播图片（建议 1600×1200）",
+        type=["png", "jpg", "jpeg", "webp"],
+        accept_multiple_files=True,
+        key="carousel_images",
+    )
+    carousel_config = load_carousel_config()
+    slides_df = pd.DataFrame(carousel_config.get("slides", []))
+    for col in ["image_url", "title", "subtitle", "link_url"]:
+        if col not in slides_df.columns:
+            slides_df[col] = ""
+    edited_slides = st.data_editor(
+        slides_df[["image_url", "title", "subtitle", "link_url"]],
+        num_rows="dynamic",
+        width="stretch",
+        column_config={
+            "image_url": st.column_config.TextColumn("图片 URL / 已上传图片", help="建议使用 4:3 图片，例如 1600×1200"),
+            "title": st.column_config.TextColumn("主标题"),
+            "subtitle": st.column_config.TextColumn("副标题"),
+            "link_url": st.column_config.LinkColumn("点击跳转 URL"),
+        },
+        key="carousel_editor",
+    )
+    interval = st.slider("自动切换间隔（秒）", 2, 20, int(carousel_config.get("interval_seconds", 5)))
+    if st.button("💾 保存轮播设置", type="primary", key="save_carousel"):
+        records = []
+        for record in edited_slides.fillna("").to_dict(orient="records"):
+            if any(str(v).strip() for v in record.values()):
+                records.append({k: str(v).strip() for k, v in record.items()})
+        for uploaded in uploaded_banners or []:
+            mime = uploaded.type or "image/jpeg"
+            encoded = base64.b64encode(uploaded.getvalue()).decode("ascii")
+            records.append({
+                "image_url": f"data:{mime};base64,{encoded}",
+                "title": uploaded.name.rsplit(".", 1)[0],
+                "subtitle": "",
+                "link_url": "",
+            })
+        if not records:
+            records = [{"image_url": "", "title": "欢迎使用数据罗盘", "subtitle": "经营数据与运营决策工作台", "link_url": ""}]
+        save_carousel_config({"interval_seconds": interval, "slides": records})
+        st.success("轮播设置已保存，返回主页即可查看。")
+
+with tab_upload:
+    st.markdown("### 销售数据")
+    col_online, col_offline = st.columns(2)
+    with col_online:
+        with st.container(border=True):
+            st.markdown("#### 线上订单")
+            order_files = st.file_uploader("订单 Excel", type=["xlsx", "xls"], accept_multiple_files=True, key="settings_orders")
+            if st.button("上传线上订单", type="primary", key="settings_upload_orders"):
+                if not order_files:
+                    st.warning("请先选择文件。")
+                elif not callbacks:
+                    st.error("管理工具尚未初始化，请刷新页面。")
+                else:
+                    successes = 0
+                    for uploaded in order_files:
+                        ok, msg = callbacks["process_uploaded_file"](io.BytesIO(uploaded.getvalue()), "_all")
+                        st.write(f"{'✅' if ok else '❌'} {uploaded.name}：{msg}")
+                        successes += int(ok)
+                    if successes:
+                        callbacks["mark_data_changed"]()
+    with col_offline:
+        with st.container(border=True):
+            st.markdown("#### 线下收入")
+            offline_files = st.file_uploader("线下收入 Excel", type=["xlsx", "xls"], accept_multiple_files=True, key="settings_offline")
+            if st.button("上传线下收入", type="primary", key="settings_upload_offline"):
+                if not offline_files:
+                    st.warning("请先选择文件。")
+                else:
+                    total = 0
+                    for uploaded in offline_files:
+                        df = pd.read_excel(uploaded, header=1)
+                        required = ["日期", "金额/时间", "备注", "组织名称"]
+                        if not all(col in df.columns for col in required):
+                            st.error(f"{uploaded.name} 缺少必要列。")
+                            continue
+                        count = callbacks["save_offline_sales"](df)
+                        total += count
+                        st.write(f"✅ {uploaded.name}：{count} 条")
+                    if total:
+                        callbacks["mark_data_changed"]()
+
+    st.markdown("### 目标文件")
+    col_shop, col_org = st.columns(2)
+    with col_shop:
+        with st.container(border=True):
+            st.markdown("#### 店铺目标")
+            target_files = st.file_uploader("店铺目标 Excel", type=["xlsx", "xls"], accept_multiple_files=True, key="settings_targets")
+            if st.button("上传店铺目标", key="settings_upload_targets"):
+                for uploaded in target_files or []:
+                    ok, msg = callbacks["load_target_file"](io.BytesIO(uploaded.getvalue()), "_all")
+                    st.write(f"{'✅' if ok else '❌'} {uploaded.name}：{msg}")
+                if target_files:
+                    callbacks["mark_data_changed"]()
+    with col_org:
+        with st.container(border=True):
+            st.markdown("#### 组织目标")
+            org_files = st.file_uploader("组织目标 Excel", type=["xlsx", "xls"], accept_multiple_files=True, key="settings_org_targets")
+            if st.button("上传组织目标", key="settings_upload_org_targets"):
+                total = 0
+                for uploaded in org_files or []:
+                    df = pd.read_excel(uploaded, header=None)
+                    names = df.iloc[:, 0].astype(str).str.strip()
+                    values = pd.to_numeric(df.iloc[:, 1], errors="coerce")
+                    targets = {name: value for name, value in zip(names, values) if pd.notna(value) and name not in ["", "nan", "None"]}
+                    callbacks["save_org_targets"](targets, "_all")
+                    total += len(targets)
+                if total:
+                    callbacks["mark_data_changed"]()
+                    st.success(f"已保存 {total} 个组织目标。")
+
+with tab_tools:
+    st.markdown("### 缓存与数据维护")
+    col_refresh, col_clear = st.columns(2)
+    with col_refresh:
+        with st.container(border=True):
+            st.markdown("#### 刷新缓存")
+            st.caption("数据展示异常时重新生成所有汇总缓存。")
+            if st.button("🔄 强制刷新所有数据", type="primary", key="settings_force_refresh"):
+                callbacks["mark_data_changed"]()
+                st.success("缓存已刷新。")
+    with col_clear:
+        with st.container(border=True):
+            st.markdown("#### 清除店铺目标")
+            st.caption("此操作会删除当前全部店铺目标。")
+            if st.button("🗑️ 清除店铺目标", key="settings_clear_targets"):
+                callbacks["clear_targets"]("_all")
+with tab_accounts:
+    render_account_management(supabase, all_pages)
+
+with tab_mapping:
+    render_mapping_management(supabase)
+
+# 新版系统设置到此结束；下方保留的旧版实现不再执行。
+st.stop()
+
+st.markdown("---")
 
 def load_sub_accounts_from_db():
     if supabase is None:
@@ -39,7 +207,6 @@ def load_sub_accounts_from_db():
                 sub_users[row["username"]] = {
                     "password": row["password"],
                     "role": row.get("role", "viewer"),
-                    "default_suffix": row.get("default_suffix", ""),
                     "permissions": perms,
                     "filter_platform": row.get("filter_platform", "all"),
                     "filter_shop_names": row.get("filter_shop_names", [])
@@ -59,7 +226,7 @@ def save_sub_account_to_db(username, info):
             "username": username,
             "password": info["password"],
             "role": info["role"],
-            "default_suffix": info["default_suffix"],
+            "default_suffix": "_all",  # 兼容数据库现有字段
             "permissions": info.get("permissions", {}),
             "filter_platform": info.get("filter_platform", "all"),
             "filter_shop_names": info.get("filter_shop_names", [])
@@ -99,9 +266,8 @@ DEFAULT_TABS = [
 ]
 
 # ---------- 页面内容 ----------
-st.subheader("👥 账号管理与权限设置（按数据源分别设置）")
-st.info("对每个子账号，配置其在“全部数据”下能看到的选项卡。")
-st.caption("默认权限仅包含核心四个页面，如需增加“主播分析”、“商品库导出”、“组织与部门分析”等，请手动勾选。")
+st.subheader("👥 账号管理与权限设置")
+st.caption("默认权限仅包含核心四个页面，如需增加“主播分析”、“商品信息管理”、“组织与部门分析”等，请手动勾选。")
 
 if st.button("🔄 重新从数据库加载账号"):
     st.session_state.sub_users = load_sub_accounts_from_db()
@@ -113,31 +279,18 @@ if st.session_state.get("sub_users"):
         with st.expander(f"账号：{username}"):
             st.markdown(f"**{username}** 的权限配置")
             perms = info.get("permissions", {})
-            for suf in ["_all"]:
-                if suf not in perms:
-                    perms[suf] = []
-            
-            suffix_display = {"_all": "全部数据"}
+            current_permissions = perms.get("_all", perms.get("", []))
             
             with st.form(key=f"form_{username}"):
-                new_perms = {}
-                for suf, display_name in suffix_display.items():
-                    if suf == "_all":
-                        all_options = [label for label in all_pages.keys() if label != "⚙️ 系统设置"]
-                    else:
-                        all_options = [label for label in all_pages.keys() if label not in ["⚙️ 系统设置", "🏢 组织与部门分析"]]
-                    
-                    default_val = [tab for tab in perms.get(suf, []) if tab in all_options]
-                    selected = st.multiselect(
-                        f"{display_name} 允许的选项卡",
-                        options=all_options,
-                        default=default_val,
-                        key=f"perm_{username}_{suf}"
-                    )
-                    new_perms[suf] = selected
-                
-                # 数据源已固定为"全部数据"
-                new_default = "_all"
+                all_options = [label for label in all_pages.keys() if label != "⚙️ 系统设置"]
+                default_val = [tab for tab in current_permissions if tab in all_options]
+                selected = st.multiselect(
+                    "允许访问的页面",
+                    options=all_options,
+                    default=default_val,
+                    key=f"perm_{username}"
+                )
+                new_perms = {"_all": selected}
 
                 # 数据过滤权限
                 st.markdown("**数据过滤权限**")
@@ -163,7 +316,6 @@ if st.session_state.get("sub_users"):
                 submitted = st.form_submit_button("💾 保存全部权限")
                 if submitted:
                     st.session_state.sub_users[username]["permissions"] = new_perms
-                    st.session_state.sub_users[username]["default_suffix"] = new_default
                     st.session_state.sub_users[username]["filter_platform"] = new_platform
                     st.session_state.sub_users[username]["filter_shop_names"] = new_shop_names
                     ok, msg = save_sub_account_to_db(username, st.session_state.sub_users[username])
@@ -189,14 +341,7 @@ with st.expander("➕ 创建新子账号"):
         new_username = st.text_input("用户名", key="new_username_sys")
         new_password = st.text_input("密码", type="password", key="new_password_sys")
     with col2:
-        # 数据源已固定为"全部数据"
-        default_suffix = "_all"
-        
-        # 默认权限：全部数据源使用 DEFAULT_TABS（核心四个页面）
-        default_perms = {}
-        for suf in ["_all"]:
-            default_perms[suf] = DEFAULT_TABS.copy()
-        
+        default_perms = {"_all": DEFAULT_TABS.copy()}
         default_platform = "all"
     if st.button("创建子账号", key="create_sys"):
         if new_username and new_password:
@@ -206,7 +351,6 @@ with st.expander("➕ 创建新子账号"):
                 new_info = {
                     "password": new_password,
                     "role": "viewer",
-                    "default_suffix": default_suffix,
                     "permissions": default_perms,
                     "filter_platform": default_platform,
                     "filter_shop_names": []
@@ -220,7 +364,7 @@ with st.expander("➕ 创建新子账号"):
                     st.error(f"创建失败：{msg}")
 
 st.markdown("---")
-st.caption("💡 提示：子账号默认只拥有“经营驾驶舱”、“每日明细”、“商品分析”、“销售分布与品牌”四个核心页面。其他页面（如主播分析、商品库导出、组织与部门分析等）需要管理员在此手动为对应数据源勾选添加。")
+st.caption("💡 提示：子账号默认只拥有四个核心页面，其他页面需要管理员手动勾选。")
 
 
 # ========== 映射关系管理 ==========

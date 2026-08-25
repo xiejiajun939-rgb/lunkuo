@@ -19,7 +19,7 @@ import plotly.graph_objects as go
 from openai import OpenAI
 
 # ========== 导入公共模块 ==========
-from core.db import init_supabase, get_table_name, load_product_sales, load_product_master, load_dimension_mapping
+from core.db import init_supabase, get_table_name, load_product_sales, load_product_master, load_dimension_mapping, save_org_targets
 from core.utils import extract_anchor, parse_product_code, date_quick_buttons, apply_data_permission
 from core.ai import get_siliconflow_client, get_ai_summary
 
@@ -47,6 +47,27 @@ st.set_page_config(
 # ========== 自定义CSS ==========
 st.markdown("""
 <style>
+    /* 固定导航侧栏，主体区域独立占用剩余宽度 */
+    section[data-testid="stSidebar"] {
+        width: 280px !important;
+        min-width: 280px !important;
+        max-width: 280px !important;
+        flex: 0 0 280px !important;
+    }
+    section[data-testid="stSidebar"] > div {
+        width: 280px !important;
+        min-width: 280px !important;
+    }
+    div[data-testid="stAppViewContainer"] .main {
+        min-width: 0 !important;
+        flex: 1 1 auto !important;
+    }
+    div[data-testid="stAppViewContainer"] .main .block-container {
+        width: 100% !important;
+        max-width: none !important;
+        margin-left: 0 !important;
+        margin-right: 0 !important;
+    }
     .custom-main-title { font-size: 28px !important; font-weight: 600 !important; margin-top: -0.5rem !important; margin-bottom: 0.25rem !important; padding-bottom: 0 !important; color: #1e293b !important; }
     .welcome-text { font-size: 14px !important; color: #475569 !important; margin-top: 0 !important; margin-bottom: 0.5rem !important; }
     h1 { font-size: 28px !important; margin-top: -0.5rem !important; margin-bottom: 0.25rem !important; color: #1e293b !important; }
@@ -110,7 +131,6 @@ def load_sub_accounts_from_db():
                 sub_users[row["username"]] = {
                     "password": row["password"],
                     "role": row.get("role", "viewer"),
-                    "default_suffix": row.get("default_suffix", ""),
                     "permissions": perms,
                     "filter_platform": row.get("filter_platform", "all"),
                     "filter_shop_names": row.get("filter_shop_names", [])
@@ -130,7 +150,7 @@ def save_sub_account_to_db(username, info):
             "username": username,
             "password": info["password"],
             "role": info["role"],
-            "default_suffix": info["default_suffix"],
+            "default_suffix": "_all",  # 兼容数据库现有字段
             "permissions": info.get("permissions", {}),
             "filter_platform": info.get("filter_platform", "all"),
             "filter_shop_names": info.get("filter_shop_names", [])
@@ -151,9 +171,9 @@ def delete_sub_account_from_db(username):
 
 def get_all_users():
     users = {
-        "admin": {"password": "1234567890", "role": "admin", "default_suffix": ""},
-        "XDZ01": {"password": "94949468", "role": "user", "default_suffix": ""},
-        "ZBZ01": {"password": "123456", "role": "user", "default_suffix": ""}
+        "admin": {"password": "1234567890", "role": "admin"},
+        "XDZ01": {"password": "94949468", "role": "user"},
+        "ZBZ01": {"password": "123456", "role": "user"}
     }
     if "sub_users" in st.session_state:
         for username, info in st.session_state.sub_users.items():
@@ -172,13 +192,8 @@ def login():
                 st.session_state.authenticated = True
                 st.session_state.username = username
                 st.session_state.role = users[username]["role"]
-                st.session_state.table_suffix = users[username]["default_suffix"]
-                # 抹除非直播数据源：存量 "" 和 "_live" 都归一化为 "_all"（小店运营组已完全替代非直播）
-                if st.session_state.table_suffix in ("", "_live"):
-                    st.session_state.table_suffix = "_all"
-                st.session_state.view_mode = "all"
-                # 重置缓存标记
-                st.session_state.last_suffix = None
+                # 系统现在只有一个统一数据源
+                st.session_state.table_suffix = "_all"
                 st.cache_data.clear()
                 st.rerun()
             else:
@@ -194,28 +209,15 @@ if not st.session_state.authenticated:
     st.stop()
 
 # ========== 全局变量初始化 ==========
-if "df_all_daily" not in st.session_state:
-    st.session_state.df_all_daily = None
 if "target_dict" not in st.session_state:
     st.session_state.target_dict = {}
-if "latest_date" not in st.session_state:
-    st.session_state.latest_date = None
 if "uploaded_file_hash" not in st.session_state:
     st.session_state.uploaded_file_hash = None
-if "daily_latest" not in st.session_state:
-    st.session_state.daily_latest = None
-if "monthly_actual" not in st.session_state:
-    st.session_state.monthly_actual = None
 if "processing_upload" not in st.session_state:
     st.session_state.processing_upload = False
-if "table_suffix" not in st.session_state:
-    st.session_state.table_suffix = "_all"
+st.session_state.table_suffix = "_all"
 if "uploaded_file_hashes" not in st.session_state:
     st.session_state.uploaded_file_hashes = []
-if "view_mode" not in st.session_state:
-    st.session_state.view_mode = "all"
-if "last_suffix" not in st.session_state:
-    st.session_state.last_suffix = None
 
 # ========== 辅助函数 ==========
 def refresh_materialized_view(suffix=""):
@@ -228,115 +230,7 @@ def refresh_materialized_view(suffix=""):
         # 刷新失败（如 statement timeout）不影响任何页面数据，静默忽略即可。
         pass
 
-def load_daily_sales(suffix=None, apply_filter=True):
-    if supabase is None:
-        return pd.DataFrame()
-    try:
-        table_name = get_table_name("daily_sales", suffix)
-        all_data = []
-        page = 0
-        page_size = 1000
-        query_columns = "id, sale_date, shop_name, amount, cumulative_amount"
-        while True:
-            resp = supabase.table(table_name)\
-                           .select(query_columns)\
-                           .range(page * page_size, (page + 1) * page_size - 1)\
-                           .execute()
-            if not resp.data:
-                break
-            all_data.extend(resp.data)
-            if len(resp.data) < page_size:
-                break
-            page += 1
-        if all_data:
-            df = pd.DataFrame(all_data)
-            df["sale_date"] = pd.to_datetime(df["sale_date"])
-            if apply_filter:
-                df = apply_data_permission(df)
-            return df
-        else:
-            return pd.DataFrame()
-    except Exception as e:
-        st.error(f"加载店铺业绩失败：{e}")
-        return pd.DataFrame()
-
-def save_daily_sales(records, suffix=None):
-    if supabase is None or not records:
-        return
-    table_name = get_table_name("daily_sales", suffix)
-    supabase.table(table_name).upsert(records, on_conflict="sale_date,shop_name").execute()
-
-def rebuild_daily_data(suffix=None):
-    df = load_daily_sales(suffix)
-    if df.empty:
-        st.session_state.df_all_daily = None
-        st.session_state.daily_latest = None
-        st.session_state.monthly_actual = None
-        st.session_state.latest_date = None
-        return
-    df = df.rename(columns={"sale_date": "日期", "shop_name": "店铺名称",
-                            "amount": "当日金额", "cumulative_amount": "月累计金额"})
-    df_all = df.sort_values(["店铺名称", "日期"])
-    latest_date = df_all["日期"].max()
-    daily_latest = df_all.loc[df_all.groupby("店铺名称")["日期"].idxmax()].copy()
-    monthly_actual = df_all.groupby("店铺名称")["当日金额"].sum().reset_index()
-    monthly_actual["月累计金额"] = monthly_actual["当日金额"].round(2)
-    monthly_actual = monthly_actual[["店铺名称", "月累计金额"]].sort_values("店铺名称")
-    st.session_state.df_all_daily = df_all
-    st.session_state.daily_latest = daily_latest
-    st.session_state.monthly_actual = monthly_actual
-    st.session_state.latest_date = latest_date
-
-def rebuild_daily_from_product(suffix=None):
-    if supabase is None:
-        return False, "Supabase 未连接"
-    try:
-        with st.spinner("正在重建每日业绩，请稍候..."):
-            product_table = get_table_name("product_sales", suffix)
-            all_data = []
-            page = 0
-            page_size = 1000
-            while True:
-                resp = supabase.table(product_table).select("sale_date, shop_name, net_amount, remark").range(page*page_size, (page+1)*page_size-1).execute()
-                if not resp.data:
-                    break
-                all_data.extend(resp.data)
-                if len(resp.data) < page_size:
-                    break
-                page += 1
-            if not all_data:
-                daily_table = get_table_name("daily_sales", suffix)
-                supabase.table(daily_table).delete().neq("id", 0).execute()
-                return True, "商品销售表无数据，已清空每日业绩表"
-            df = pd.DataFrame(all_data)
-            df["sale_date"] = pd.to_datetime(df["sale_date"])
-            if suffix == "_all":
-                df["anchor"] = df["remark"].apply(extract_anchor)
-                daily_agg = df.groupby(["sale_date", "anchor"])["net_amount"].sum().reset_index()
-                daily_agg.columns = ["sale_date", "店铺名称", "amount"]
-            else:
-                daily_agg = df.groupby(["sale_date", "shop_name"])["net_amount"].sum().reset_index()
-                daily_agg.columns = ["sale_date", "店铺名称", "amount"]
-            daily_agg = daily_agg.sort_values(["店铺名称", "sale_date"])
-            daily_agg["cumulative_amount"] = daily_agg.groupby("店铺名称")["amount"].cumsum().round(2)
-            records = []
-            for _, row in daily_agg.iterrows():
-                records.append({
-                    "sale_date": row["sale_date"].strftime("%Y-%m-%d"),
-                    "shop_name": row["店铺名称"],
-                    "amount": float(row["amount"]),
-                    "cumulative_amount": float(row["cumulative_amount"])
-                })
-            if records:
-                daily_table = get_table_name("daily_sales", suffix)
-                supabase.table(daily_table).delete().neq("id", 0).execute()
-                batch_size = 1000
-                for i in range(0, len(records), batch_size):
-                    batch = records[i:i+batch_size]
-                    supabase.table(daily_table).insert(batch).execute()
-        return True, f"成功重建每日业绩，共 {len(records)} 条记录"
-    except Exception as e:
-        return False, str(e)
+# daily_sales 表已废弃，所有页面直接从 product_sales 查询聚合
 
 def load_targets(suffix=None):
     if supabase is None:
@@ -372,13 +266,20 @@ def save_product_sales(df_orders, suffix=None):
     master_df = load_product_master()
     master_map = {}
     if not master_df.empty:
-        for _, row in master_df.iterrows():
-            code = row["style_code"]
-            master_map[code] = {
-                "image_url": row.get("image_url", None),
-                "master_category": row.get("category", None),
-                "has_newbie_coupon": row.get("has_newbie_coupon", False)
+        master_cols = ["style_code", "image_url", "category", "has_newbie_coupon"]
+        master_subset = master_df.copy()
+        for col in master_cols:
+            if col not in master_subset.columns:
+                master_subset[col] = None if col != "has_newbie_coupon" else False
+        master_subset = master_subset.drop_duplicates("style_code", keep="last")
+        master_map = {
+            row["style_code"]: {
+                "image_url": row["image_url"],
+                "master_category": row["category"],
+                "has_newbie_coupon": bool(row["has_newbie_coupon"]),
             }
+            for row in master_subset[master_cols].to_dict(orient="records")
+        }
 
     table_name = get_table_name("product_sales", suffix)
     use_anchor = True
@@ -391,7 +292,7 @@ def save_product_sales(df_orders, suffix=None):
             raise
 
     temp_records = {}
-    for _, row in df_orders.iterrows():
+    for row in df_orders.to_dict(orient="records"):
         remark = row["备注"]
         parsed = parse_product_code(remark)
         if parsed is None:
@@ -554,43 +455,10 @@ def process_uploaded_file(uploaded_file, suffix):
             if "duplicate key" in str(e).lower():
                 return False, "数据重复：该文件中的订单备注与已存在数据冲突。"
             return False, f"保存商品销售明细失败：{str(e)}。"
-        if suffix == "_all":
-            df_valid["anchor"] = df_valid["备注"].apply(extract_anchor)
-            new_daily = df_valid.groupby(["日期", "anchor"])["金额/时间"].sum().reset_index()
-            new_daily.columns = ["日期", "店铺名称", "当日金额"]
-        else:
-            new_daily = df_valid.groupby(["日期", "店铺名称"])["金额/时间"].sum().reset_index()
-            new_daily.columns = ["日期", "店铺名称", "当日金额"]
-        new_daily["日期"] = pd.to_datetime(new_daily["日期"])
-        existing = load_daily_sales(suffix)
-        if not existing.empty:
-            new_dates = new_daily["日期"].dt.date.unique()
-            existing = existing[~existing["sale_date"].dt.date.isin(new_dates)]
-            if not existing.empty:
-                existing_df = existing[["sale_date", "shop_name", "amount"]].rename(
-                    columns={"sale_date": "日期", "shop_name": "店铺名称", "amount": "当日金额"}
-                )
-                merged = pd.concat([existing_df, new_daily], ignore_index=True)
-            else:
-                merged = new_daily.copy()
-        else:
-            merged = new_daily.copy()
-        merged = merged.sort_values(["店铺名称", "日期"])
-        merged["当日金额"] = pd.to_numeric(merged["当日金额"], errors="coerce").fillna(0)
-        merged["月累计金额"] = merged.groupby("店铺名称")["当日金额"].cumsum().round(2)
-        records = []
-        for _, row in merged.iterrows():
-            records.append({
-                "sale_date": row["日期"].strftime("%Y-%m-%d"),
-                "shop_name": row["店铺名称"],
-                "amount": float(row["当日金额"]),
-                "cumulative_amount": float(row["月累计金额"])
-            })
-        save_daily_sales(records, suffix)
+        # 上传后清除缓存并刷新目标
         if suffix == st.session_state.get("table_suffix", ""):
-            rebuild_daily_data(suffix)
             st.session_state.target_dict = load_targets(suffix)
-        latest_date = merged["日期"].max().strftime('%Y-%m-%d') if not merged.empty else "无数据"
+        latest_date = df_valid["日期"].max().strftime('%Y-%m-%d') if not df_valid.empty else "无数据"
         refresh_materialized_view(suffix)
         return True, f"处理完成！最新日期：{latest_date}"
     except Exception as e:
@@ -715,20 +583,28 @@ def update_product_master_flag(style_code, flag_value):
     except Exception as e:
         return False, str(e)
 
-# ========== 页面初始化（重建每日数据） ==========
-# 检测数据源是否变化，若变化则清除所有缓存并重新加载
-if st.session_state.last_suffix != st.session_state.table_suffix:
-    st.cache_data.clear()
-    st.session_state.last_suffix = st.session_state.table_suffix
+# ========== 数据版本号（用于智能刷新缓存） ==========
+# 上传新数据时递增此版本号，页面切换时版本号不变则保留缓存
+if "_data_version" not in st.session_state:
+    st.session_state._data_version = 0
+if "_cache_version" not in st.session_state:
+    st.session_state._cache_version = -1
 
-rebuild_daily_data(st.session_state.table_suffix)
+def mark_data_changed():
+    """数据变更后调用：清缓存 + 递增版本号"""
+    st.cache_data.clear()
+    st.session_state._data_version += 1
+    st.session_state._cache_version = st.session_state._data_version
+
+# ========== 页面初始化 ==========
 if st.session_state.target_dict == {}:
-    st.session_state.target_dict = load_targets(st.session_state.table_suffix)
+    st.session_state.target_dict = load_targets("_all")
 
 # ========== 构建导航页面（根据权限动态显示） ==========
 from streamlit import navigation, Page
 
 all_pages = {
+    "🏠 主页": "pages/home.py",
     "📊 经营驾驶舱": "pages/dashboard.py",
     "📋 每日明细": "pages/daily_detail.py",
     "📦 商品分析": "pages/product_page.py",
@@ -736,13 +612,13 @@ all_pages = {
     "🎤 主播分析": "pages/anchor.py",
     "📈 销售分布与品牌": "pages/distribution.py",
     "🏢 组织与部门分析": "pages/org_dept.py",
-    "📚 商品库导出": "pages/export.py",
+    "📚 商品信息管理": "pages/export.py",
     "⚙️ 系统设置": "pages/settings.py",
 }
 
 role = st.session_state.role
 username = st.session_state.username
-current_suffix = st.session_state.table_suffix
+current_suffix = "_all"
 
 if role == "admin":
     allowed_labels = list(all_pages.keys())
@@ -764,17 +640,31 @@ for label, path in all_pages.items():
         continue
     # 新页面添加任何特殊限制（例如只在全部数据源显示）可在此添加
     # 但商品分析助手不限数据源，所以不需要额外条件
-    if label in allowed_labels:
-        pages_to_show.append(Page(path, title=label))
+    if label == "🏠 主页" or label in allowed_labels:
+        pages_to_show.append(Page(path, title=label, default=(label == "🏠 主页")))
 
 # ... 其余部分不变
 
 if not pages_to_show:
     pages_to_show = [
+        Page("pages/home.py", title="🏠 主页", default=True),
         Page("pages/dashboard.py", title="📊 经营驾驶舱"),
         Page("pages/daily_detail.py", title="📋 每日明细"),
         Page("pages/product_page.py", title="📦 商品分析"),
     ]
+
+# 页面执行前注册管理员工具回调，供系统设置页复用
+st.session_state["_admin_callbacks"] = {
+    "process_uploaded_file": process_uploaded_file,
+    "load_target_file": load_target_file,
+    "save_offline_sales": save_offline_sales,
+    "save_org_targets": save_org_targets,
+    "load_targets": load_targets,
+    "clear_targets": clear_targets,
+    "mark_data_changed": mark_data_changed,
+    "manage_newbie_coupon": manage_newbie_coupon,
+    "batch_manage_newbie_coupon": batch_manage_newbie_coupon,
+}
 
 nav = st.navigation(pages_to_show, position="sidebar")
 nav.run()
@@ -785,13 +675,11 @@ with st.sidebar:
     st.markdown(f"**👤 {st.session_state.username}** ({st.session_state.role})")
     st.markdown("---")
 
-    if st.session_state.role != "admin":
-        # 非管理员：数据源已固定为"全部数据"，只显示退出登录
-        st.info("📌 当前数据源：全部数据")
-        st.markdown("---")
+    if True:
+        # 管理功能已迁移到系统设置，侧栏仅保留退出登录
         if st.button("🚪 退出登录", key="logout_final"):
             st.session_state.authenticated = False
-            for key in ["username", "role", "table_suffix", "view_mode", "last_suffix"]:
+            for key in ["username", "role", "table_suffix"]:
                 if key in st.session_state:
                     del st.session_state[key]
             st.rerun()
@@ -800,12 +688,7 @@ with st.sidebar:
         st.sidebar.markdown("---")
         st.sidebar.markdown("[🏠 主页](/)")
         st.sidebar.markdown("---")
-        st.header("📂 数据加载")
-        st.info("📌 当前数据源：全部数据")
-        st.markdown("---")
-
-        current_display_suffix = st.session_state.table_suffix
-        current_view_mode = st.session_state.view_mode
+        st.header("📂 文件上传")
 
         # 上传成功后清除文件选择器：Streamlit 禁止在 widget 实例化后直接改其 session_state，
         # 所以这里用标记记录，在下一轮 file_uploader 实例化之前统一清除。
@@ -865,8 +748,7 @@ with st.sidebar:
             for result in results:
                 st.text(result)
             if total_success > 0:
-                st.cache_data.clear()
-                rebuild_daily_data(suffix)
+                mark_data_changed()
                 st.session_state.target_dict = load_targets(suffix)
                 # 上传成功后清空文件选择器（通过标记，在下一轮 file_uploader 实例化前清除）
                 if uploader_key:
@@ -876,41 +758,26 @@ with st.sidebar:
             else:
                 st.warning("没有文件被成功处理，请检查文件格式和内容")
 
-        if current_view_mode == "shop":
-            st.subheader("🏪 小店运营数据上传")
-            uploaded_orders = st.file_uploader(
-                "选择订单文件 (Excel)，支持多选", type=["xlsx", "xls"],
-                key="order_uploader_shop_multi", accept_multiple_files=True
-            )
-            if uploaded_orders and st.button("📤 确认上传", key="confirm_upload_shop_multi"):
-                handle_multiple_upload(uploaded_orders, "_all", "order", "order_uploader_shop_multi")
-            target_files = st.file_uploader(
-                "选择目标文件 (Excel)，支持多选", type=["xlsx", "xls"],
-                key="target_upload_shop_multi", accept_multiple_files=True
-            )
-            if target_files and st.button("📤 确认上传目标", key="confirm_target_shop_multi"):
-                handle_multiple_upload(target_files, "_all", "target", "target_upload_shop_multi")
-        else:
-            st.subheader("📊 全部数据上传")
-            uploaded_orders = st.file_uploader(
-                "选择订单文件 (Excel)，支持多选", type=["xlsx", "xls"],
-                key="order_uploader_all_multi", accept_multiple_files=True
-            )
-            if uploaded_orders and st.button("📤 确认上传", key="confirm_upload_all_multi"):
-                handle_multiple_upload(uploaded_orders, "_all", "order", "order_uploader_all_multi")
-            target_files = st.file_uploader(
-                "选择目标文件 (Excel)，支持多选", type=["xlsx", "xls"],
-                key="target_upload_all_multi", accept_multiple_files=True
-            )
-            if target_files and st.button("📤 确认上传目标", key="confirm_target_all_multi"):
-                handle_multiple_upload(target_files, "_all", "target", "target_upload_all_multi")
-            st.markdown("---")
-            st.subheader("🏷️ 线下收入上传")
-            uploaded_offline = st.file_uploader(
-                "选择线下收入文件 (Excel)，支持多选", type=["xlsx", "xls"],
-                key="offline_uploader_multi", accept_multiple_files=True
-            )
-            if uploaded_offline and st.button("📤 上传线下收入", key="upload_offline_multi"):
+        st.subheader("📊 销售数据上传")
+        uploaded_orders = st.file_uploader(
+            "选择订单文件 (Excel)，支持多选", type=["xlsx", "xls"],
+            key="order_uploader_all_multi", accept_multiple_files=True
+        )
+        if uploaded_orders and st.button("📤 确认上传", key="confirm_upload_all_multi"):
+            handle_multiple_upload(uploaded_orders, "_all", "order", "order_uploader_all_multi")
+        target_files = st.file_uploader(
+            "选择目标文件 (Excel)，支持多选", type=["xlsx", "xls"],
+            key="target_upload_all_multi", accept_multiple_files=True
+        )
+        if target_files and st.button("📤 确认上传目标", key="confirm_target_all_multi"):
+            handle_multiple_upload(target_files, "_all", "target", "target_upload_all_multi")
+        st.markdown("---")
+        st.subheader("🏷️ 线下收入上传")
+        uploaded_offline = st.file_uploader(
+            "选择线下收入文件 (Excel)，支持多选", type=["xlsx", "xls"],
+            key="offline_uploader_multi", accept_multiple_files=True
+        )
+        if uploaded_offline and st.button("📤 上传线下收入", key="upload_offline_multi"):
                 try:
                     total_offline = 0
                     off_progress = st.progress(0, text="0%")
@@ -934,7 +801,8 @@ with st.sidebar:
                     off_progress.empty()
                     off_status.empty()
                     st.success(f"✅ 总共成功上传 {total_offline} 条线下收入记录")
-                    st.cache_data.clear()
+                    if total_offline > 0:
+                        mark_data_changed()
                     st.session_state["_pending_clear_uploader"] = "offline_uploader_multi"
                     time.sleep(0.5)
                     st.rerun()
@@ -943,9 +811,9 @@ with st.sidebar:
 
         st.markdown("---")
         st.header("⚙️ 工具")
-        if st.session_state.view_mode == "all":
-            st.markdown("---")
-            st.subheader("📊 组织目标管理")
+        st.markdown("---")
+        st.subheader("📊 组织目标管理")
+        if True:  # 单一数据源下始终显示组织目标管理
             uploaded_org_target = st.file_uploader(
                 "上传组织目标文件 (Excel)，支持多选", type=["xlsx", "xls"],
                 key="org_target_upload_multi", accept_multiple_files=True
@@ -972,7 +840,8 @@ with st.sidebar:
                     org_progress.empty()
                     org_status.empty()
                     st.success(f"✅ 总共加载 {total_org} 个组织目标")
-                    st.cache_data.clear()
+                    if total_org > 0:
+                        mark_data_changed()
                     st.session_state["_pending_clear_uploader"] = "org_target_upload_multi"
                     st.rerun()
                 except Exception as e:
@@ -991,17 +860,8 @@ with st.sidebar:
         if st.button("🗑️ 清除当前用户的目标记忆", key="clear_targets_final"):
             clear_targets(st.session_state.table_suffix)
         if st.button("🔄 强制刷新所有数据", key="force_refresh_final"):
-            st.cache_data.clear()
+            mark_data_changed()
             st.rerun()
-        if st.button("🔄 从商品明细重建每日业绩", key="rebuild_daily_final"):
-            ok, msg = rebuild_daily_from_product(st.session_state.table_suffix)
-            if ok:
-                st.success(msg)
-                rebuild_daily_data(st.session_state.table_suffix)
-                st.cache_data.clear()
-                st.rerun()
-            else:
-                st.error(msg)
         st.markdown("---")
         with st.expander("🏷️ 单商品礼金标签管理"):
             manage_newbie_coupon()
@@ -1011,18 +871,17 @@ with st.sidebar:
         st.markdown("---")
         if st.button("🚪 退出登录", key="logout_admin"):
             st.session_state.authenticated = False
-            for key in ["username", "role", "table_suffix", "view_mode", "last_suffix"]:
+            for key in ["username", "role", "table_suffix"]:
                 if key in st.session_state:
                     del st.session_state[key]
             st.rerun()
 
 # ========== 主内容区（根路径欢迎信息） ==========
-if "page" not in st.query_params:
+if False:  # 主页内容由 pages/home.py 负责
     st.markdown("""
     <div style="display: flex; justify-content: center; align-items: center; height: 50vh; flex-direction: column;">
         <h1 style="color: #1e293b;">📊 欢迎使用数据罗盘</h1>
         <p style="color: #475569; font-size: 18px;">请从左侧导航栏选择一个功能页面开始分析。</p>
-        <p style="color: #94a3b8; font-size: 14px;">当前数据源：<strong>全部数据</strong></p>
     </div>
     """, unsafe_allow_html=True)
 

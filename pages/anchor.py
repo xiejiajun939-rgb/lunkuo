@@ -5,7 +5,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 
-from core.db import load_product_sales, load_product_master
+from core.db import load_product_sales, load_product_master, get_sales_date_range
 from core.utils import extract_anchor, date_quick_buttons, clear_cache_on_page_change
 
 st.set_page_config(page_title="主播分析", layout="wide")
@@ -20,8 +20,27 @@ use_anchor = st.session_state.table_suffix == "_all"
 dimension_name = "主播" if use_anchor else "店铺"
 dimension_col = "anchor" if use_anchor else "shop_name"
 
+# 先获取轻量日期边界，默认仅加载数据最新月份
+min_date, max_date = get_sales_date_range("_all")
+if min_date is None or max_date is None:
+    st.info("暂无商品销售数据，请先上传订单文件。")
+    st.stop()
+default_start = max(min_date, max_date.replace(day=1))
+date_quick_buttons("compare_start_month", "compare_end_month",
+                   default_start=default_start,
+                   default_end=max_date,
+                   min_date=min_date,
+                   max_date=max_date)
+start_date = st.session_state.get("compare_start_month", default_start)
+end_date = st.session_state.get("compare_end_month", max_date)
+
 with st.spinner("正在加载数据..."):
-    prod_df = load_product_sales(st.session_state.table_suffix, view_mode=st.session_state.get("view_mode"))
+    prod_df = load_product_sales(
+        "_all",
+        include_offline=False,
+        start_date=start_date,
+        end_date=end_date,
+    )
 
 if prod_df.empty:
     st.info("暂无商品销售数据，请先上传订单文件。")
@@ -56,17 +75,6 @@ with col_select2:
     selected_metrics = st.multiselect("选择要对比的指标", options=metric_options, default=["净销售金额"])
 with col_select3:
     chart_type = st.radio("图表类型", ["折线图", "柱状图"], horizontal=True, key="compare_chart_type")
-
-min_date = prod_df["sale_date"].min().date()
-max_date = prod_df["sale_date"].max().date()
-
-date_quick_buttons("compare_start", "compare_end",
-                   default_start=min_date,
-                   default_end=max_date,
-                   min_date=min_date,
-                   max_date=max_date)
-start_date = st.session_state.get("compare_start", min_date)
-end_date = st.session_state.get("compare_end", max_date)
 
 if not selected_dimensions:
     st.info(f"请至少选择一个{dimension_name}")

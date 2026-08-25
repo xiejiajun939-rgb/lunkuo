@@ -90,7 +90,7 @@ if has_dept:
             st.stop()
 else:
     selected_dept = '全部'
-    st.caption("当前数据源无部门维度，显示全部数据。")
+    st.caption("暂无部门维度，显示全部数据。")
 
 # ---------- 按日期汇总净销售额 ----------
 daily_sales = df_summary.groupby(df_summary["sale_date"].dt.date)["total_net"].sum().reset_index()

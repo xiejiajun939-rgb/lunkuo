@@ -1,42 +1,282 @@
-# pages/6_export.py
 # -*- coding: utf-8 -*-
-import streamlit as st
-import pandas as pd
-from datetime import date
 import io
+import math
+from datetime import date, datetime, timezone
 
-from core.db import load_product_master
+import pandas as pd
+import streamlit as st
+
+from core.db import init_supabase, load_product_master, load_sold_style_codes
 from core.utils import clear_cache_on_page_change
 
-st.set_page_config(page_title="商品库导出", layout="wide")
+st.set_page_config(page_title="商品信息管理", layout="wide")
 clear_cache_on_page_change("export")
 
-# 仅管理员可访问
 if st.session_state.get("role") != "admin":
     st.error("您没有管理员权限，无法访问此页面。")
     st.stop()
 
-st.subheader("📚 导出商品库数据（product_master）")
+supabase = init_supabase()
+EDIT_COLUMNS = ["id", "style_code", "image_url", "category", "has_newbie_coupon"]
 
-with st.spinner("正在加载商品库数据..."):
+
+def _is_missing(series):
+    text = series.astype("string").str.strip()
+    return series.isna() | text.isin(["", "nan", "None", "<NA>"])
+
+
+def _to_bool(value):
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "是", "有", "参与"}
+
+
+def _normalize_upload(df):
+    aliases = {
+        "货号": "style_code", "商品货号": "style_code", "款号": "style_code",
+        "图片": "image_url", "图片地址": "image_url", "商品图片": "image_url",
+        "品类": "category", "商品品类": "category",
+        "新人礼金": "has_newbie_coupon", "是否新人礼金": "has_newbie_coupon",
+    }
+    result = df.rename(columns={c: aliases.get(str(c).strip(), str(c).strip()) for c in df.columns}).copy()
+    if "style_code" not in result.columns:
+        raise ValueError("文件中缺少货号列（style_code／货号／商品货号／款号）。")
+    for col in ["image_url", "category"]:
+        if col not in result.columns:
+            result[col] = ""
+    if "has_newbie_coupon" not in result.columns:
+        result["has_newbie_coupon"] = False
+    result = result[["style_code", "image_url", "category", "has_newbie_coupon"]]
+    result["style_code"] = result["style_code"].astype("string").str.strip().str.upper()
+    result = result[~_is_missing(result["style_code"])].drop_duplicates("style_code", keep="last")
+    result["image_url"] = result["image_url"].fillna("").astype(str).str.strip()
+    result["category"] = result["category"].fillna("").astype(str).str.strip()
+    result["has_newbie_coupon"] = result["has_newbie_coupon"].map(_to_bool)
+    return result
+
+
+def _upsert_records(records):
+    now = datetime.now(timezone.utc).isoformat()
+    existing = []
+    incoming = []
+    for record in records:
+        style_code = str(record.get("style_code", "")).strip().upper()
+        if not style_code:
+            continue
+        payload = {
+            "style_code": style_code,
+            "image_url": str(record.get("image_url") or "").strip() or None,
+            "category": str(record.get("category") or "").strip() or None,
+            "has_newbie_coupon": bool(record.get("has_newbie_coupon", False)),
+            "updated_at": now,
+        }
+        if pd.notna(record.get("id")):
+            payload["id"] = int(record["id"])
+            existing.append(payload)
+        else:
+            incoming.append(payload)
+    for start in range(0, len(existing), 500):
+        supabase.table("product_master").upsert(
+            existing[start:start + 500], on_conflict="id"
+        ).execute()
+    for start in range(0, len(incoming), 500):
+        supabase.table("product_master").upsert(
+            incoming[start:start + 500], on_conflict="style_code"
+        ).execute()
+    return len(existing) + len(incoming)
+
+
+callbacks = st.session_state.get("_admin_callbacks", {})
+
+st.markdown("## 📚 商品信息管理")
+st.caption("集中管理 product_master：上传、查询、筛选缺失资料、在线编辑、删除和导出。")
+tab_manage, tab_upload, tab_coupon, tab_export = st.tabs([
+    "🔎 查询与维护", "📤 批量上传", "🏷️ 首单礼金", "📥 数据导出"
+])
+
+with st.spinner("正在加载商品库..."):
     master_df = load_product_master()
+for col in EDIT_COLUMNS:
+    if col not in master_df.columns:
+        master_df[col] = False if col == "has_newbie_coupon" else None
 
-if master_df.empty:
-    st.warning("商品库（product_master）为空，无法导出。")
-else:
-    st.write(f"当前商品库共有 **{len(master_df)}** 条记录。")
-    
-    with st.expander("点击预览商品库数据（前10条）"):
-        st.dataframe(master_df.head(10), use_container_width=True)
-    
-    # 导出为 Excel
+with st.spinner("正在核对销售数据中的商品货号..."):
+    sold_styles_df = load_sold_style_codes("_all")
+
+# 以销售数据货号为完整性检查基准，同时保留尚未产生销售的人工商品档案。
+catalog_df = sold_styles_df.merge(master_df, on="style_code", how="outer")
+catalog_df["has_newbie_coupon"] = catalog_df["has_newbie_coupon"].fillna(False).astype(bool)
+
+with tab_manage:
+    total_count = len(catalog_df)
+    missing_record_count = int(catalog_df["id"].isna().sum()) if total_count else 0
+    missing_image_count = int(_is_missing(catalog_df["image_url"]).sum()) if total_count else 0
+    missing_category_count = int(_is_missing(catalog_df["category"]).sum()) if total_count else 0
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("销售出现货号", f"{len(sold_styles_df):,}")
+    c2.metric("尚未建立档案", f"{missing_record_count:,}")
+    c3.metric("缺少图片", f"{missing_image_count:,}")
+    c4.metric("缺少品类", f"{missing_category_count:,}")
+
+    with st.container(border=True):
+        col_search, col_category, col_missing = st.columns([1.3, 1, 1.3])
+        with col_search:
+            keyword = st.text_input("搜索货号", placeholder="支持部分货号", key="master_keyword")
+        with col_category:
+            categories = sorted(v for v in catalog_df["category"].dropna().astype(str).str.strip().unique() if v)
+            selected_categories = st.multiselect("筛选品类", categories, key="master_categories")
+        with col_missing:
+            missing_filters = st.multiselect(
+                "缺失资料筛选", ["尚未建立商品档案", "缺少图片", "缺少品类", "任意资料缺失"],
+                key="master_missing_filters",
+            )
+
+    filtered = catalog_df.copy()
+    if keyword.strip():
+        filtered = filtered[filtered["style_code"].astype("string").str.contains(
+            keyword.strip(), case=False, na=False, regex=False
+        )]
+    if selected_categories:
+        filtered = filtered[filtered["category"].astype(str).isin(selected_categories)]
+    missing_image = _is_missing(filtered["image_url"])
+    missing_category = _is_missing(filtered["category"])
+    missing_record = filtered["id"].isna()
+    if "任意资料缺失" in missing_filters:
+        filtered = filtered[missing_record | missing_image | missing_category]
+    else:
+        mask = pd.Series(True, index=filtered.index)
+        if "尚未建立商品档案" in missing_filters:
+            mask &= missing_record
+        if "缺少图片" in missing_filters:
+            mask &= missing_image
+        if "缺少品类" in missing_filters:
+            mask &= missing_category
+        filtered = filtered[mask]
+
+    st.caption(f"筛选结果：{len(filtered):,} 条")
+    page_col, size_col, _ = st.columns([1, 1, 3])
+    with size_col:
+        page_size = st.selectbox("每页数量", [50, 100, 200, 500], index=1, key="master_page_size")
+    page_count = max(1, math.ceil(len(filtered) / page_size))
+    if st.session_state.get("master_page_number", 1) > page_count:
+        st.session_state.master_page_number = 1
+    with page_col:
+        page_number = st.number_input("页码", 1, page_count, 1, key="master_page_number")
+    start = (int(page_number) - 1) * page_size
+    page_df = filtered.iloc[start:start + page_size][EDIT_COLUMNS].copy().reset_index(drop=True)
+    page_df.insert(0, "选择删除", False)
+
+    edited_df = st.data_editor(
+        page_df, width="stretch", hide_index=True, num_rows="dynamic",
+        column_config={
+            "选择删除": st.column_config.CheckboxColumn("删除", default=False),
+            "id": st.column_config.NumberColumn("ID", disabled=True),
+            "style_code": st.column_config.TextColumn("商品货号", required=True),
+            "image_url": st.column_config.LinkColumn("图片地址", display_text="查看图片"),
+            "category": st.column_config.TextColumn("品类"),
+            "has_newbie_coupon": st.column_config.CheckboxColumn("新人礼金", default=False),
+        }, key="product_master_editor",
+    )
+
+    action_save, action_delete, confirm_col = st.columns([1, 1, 2])
+    with action_save:
+        if st.button("💾 保存本页修改", type="primary", width="stretch"):
+            try:
+                count = _upsert_records(edited_df[~edited_df["选择删除"]].to_dict("records"))
+                st.cache_data.clear()
+                st.success(f"已保存 {count} 条商品信息。")
+                st.rerun()
+            except Exception as exc:
+                st.error(f"保存失败：{exc}")
+    with confirm_col:
+        confirm_delete = st.checkbox("我确认删除勾选的商品（删除后不可恢复）")
+    with action_delete:
+        if st.button("🗑️ 删除勾选商品", width="stretch"):
+            delete_ids = [int(v) for v in edited_df.loc[edited_df["选择删除"], "id"].dropna()]
+            if not delete_ids:
+                st.warning("请先勾选需要删除的商品。")
+            elif not confirm_delete:
+                st.warning("请先勾选删除确认。")
+            else:
+                try:
+                    for offset in range(0, len(delete_ids), 200):
+                        supabase.table("product_master").delete().in_("id", delete_ids[offset:offset + 200]).execute()
+                    st.cache_data.clear()
+                    st.success(f"已删除 {len(delete_ids)} 条商品信息。")
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"删除失败：{exc}")
+
+with tab_upload:
+    st.markdown("### 批量上传商品信息")
+    st.caption("支持 Excel/CSV；同货号会更新，新货号会新增，并识别常用中英文列名。")
+    unregistered_template = catalog_df[catalog_df["id"].isna()][["style_code"]].copy()
+    unregistered_template["image_url"] = ""
+    unregistered_template["category"] = ""
+    unregistered_template["has_newbie_coupon"] = False
+    unregistered_template = unregistered_template.rename(columns={
+        "style_code": "货号",
+        "image_url": "图片地址",
+        "category": "品类",
+        "has_newbie_coupon": "新人礼金",
+    })
+    pending_buffer = io.BytesIO()
+    with pd.ExcelWriter(pending_buffer, engine="openpyxl") as writer:
+        unregistered_template.to_excel(writer, index=False, sheet_name="待维护商品")
+
+    template = pd.DataFrame(columns=["style_code", "image_url", "category", "has_newbie_coupon"])
+    template_buffer = io.BytesIO()
+    with pd.ExcelWriter(template_buffer, engine="openpyxl") as writer:
+        template.to_excel(writer, index=False, sheet_name="商品信息")
+    download_pending, download_blank = st.columns(2)
+    with download_pending:
+        st.download_button(
+            f"📋 下载待维护商品模板（{len(unregistered_template):,} 条）",
+            pending_buffer.getvalue(),
+            file_name=f"待维护商品_{date.today().strftime('%Y%m%d')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            type="primary",
+            width="stretch",
+        )
+    with download_blank:
+        st.download_button(
+            "📄 下载空白上传模板", template_buffer.getvalue(), file_name="product_master_upload_template.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", width="stretch",
+        )
+    uploaded_file = st.file_uploader("选择商品信息文件", type=["xlsx", "xls", "csv"], key="master_upload")
+    if uploaded_file is not None:
+        try:
+            raw_upload = pd.read_csv(uploaded_file) if uploaded_file.name.lower().endswith(".csv") else pd.read_excel(uploaded_file)
+            normalized_upload = _normalize_upload(raw_upload)
+            st.info(f"识别到 {len(normalized_upload):,} 个有效货号。")
+            st.dataframe(normalized_upload.head(20), width="stretch", hide_index=True)
+            if st.button("📤 确认上传并更新商品库", type="primary"):
+                count = _upsert_records(normalized_upload.to_dict("records"))
+                st.cache_data.clear()
+                st.success(f"上传完成，共处理 {count} 条商品信息。")
+                st.rerun()
+        except Exception as exc:
+            st.error(f"文件处理失败：{exc}")
+
+with tab_coupon:
+    st.markdown("### 🏷️ 首单礼金管理")
+    st.caption("维护单个商品或批量商品的首单礼金标签。")
+    if not callbacks:
+        st.warning("管理工具尚未初始化，请刷新页面后重试。")
+    else:
+        with st.expander("单商品礼金标签", expanded=True):
+            callbacks["manage_newbie_coupon"]()
+        with st.expander("批量礼金标签管理"):
+            callbacks["batch_manage_newbie_coupon"]()
+
+with tab_export:
+    st.markdown("### 导出商品库")
+    st.write(f"当前商品库共有 **{len(master_df):,}** 条记录。")
     output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
         master_df.to_excel(writer, index=False, sheet_name="商品库")
-    
     st.download_button(
-        label="📥 导出全部商品库数据 (Excel)",
-        data=output.getvalue(),
+        "📥 导出全部商品库数据 (Excel)", output.getvalue(),
         file_name=f"product_master_{date.today().strftime('%Y%m%d')}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", type="primary",
     )

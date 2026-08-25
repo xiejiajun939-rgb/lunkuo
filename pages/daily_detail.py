@@ -182,7 +182,6 @@ st.markdown("#### 📅 选择日期范围")
 col_btns = st.columns(5)
 with col_btns[0]:
     if st.button("📆 本月"):
-        st.cache_data.clear()
         st.session_state["range_start"] = max_date.replace(day=1)
         st.session_state["range_end"] = max_date
         st.rerun()

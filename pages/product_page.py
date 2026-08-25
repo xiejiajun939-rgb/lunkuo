@@ -8,7 +8,7 @@ import io
 import re
 import numpy as np
 
-from core.db import load_product_sales, load_product_master
+from core.db import load_product_sales, load_product_master, get_sales_date_range
 from core.utils import date_quick_buttons, extract_anchor, clear_cache_on_page_change
 from core.ai import get_ai_summary
 
@@ -374,9 +374,28 @@ if "sort_ascending" not in st.session_state:
 
 st.title("📦 商品分析")
 
-# ---------- 加载数据 ----------
+# ---------- 日期选择（先确定范围，再按需查询数据库） ----------
+min_date, max_date = get_sales_date_range("_all")
+if min_date is None or max_date is None:
+    st.warning("暂无数据，请先上传订单文件。")
+    st.stop()
+default_start = max(min_date, max_date.replace(day=1))
+date_quick_buttons("prod_start_month", "prod_end_month",
+                   default_start=default_start,
+                   default_end=max_date,
+                   min_date=min_date,
+                   max_date=max_date)
+start_date = st.session_state.get("prod_start_month", default_start)
+end_date = st.session_state.get("prod_end_month", max_date)
+
+# ---------- 加载所选日期范围的数据 ----------
 with st.spinner("加载商品销售数据..."):
-    prod_df = load_product_sales(st.session_state.table_suffix, include_offline=False, view_mode=st.session_state.get("view_mode"))
+    prod_df = load_product_sales(
+        "_all",
+        include_offline=False,
+        start_date=start_date,
+        end_date=end_date,
+    )
 
 if prod_df.empty:
     st.warning("暂无数据，请先上传订单文件。")
@@ -390,18 +409,6 @@ else:
 
 if st.session_state.table_suffix == "_all" and "anchor" not in prod_df.columns:
     prod_df["anchor"] = prod_df["remark"].astype(str).apply(extract_anchor)
-
-min_date = prod_df["sale_date"].min().date()
-max_date = prod_df["sale_date"].max().date()
-
-# ---------- 日期选择 ----------
-date_quick_buttons("prod_start", "prod_end",
-                   default_start=min_date,
-                   default_end=max_date,
-                   min_date=min_date,
-                   max_date=max_date)
-start_date = st.session_state.get("prod_start", min_date)
-end_date = st.session_state.get("prod_end", max_date)
 
 # ---------- 筛选条件（一行4列） ----------
 st.subheader("🔍 筛选条件")
