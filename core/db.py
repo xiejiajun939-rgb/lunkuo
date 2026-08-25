@@ -7,6 +7,7 @@
 import streamlit as st
 import pandas as pd
 import re
+import time
 from supabase import create_client
 
 # ---------- Supabase 配置 ----------
@@ -36,7 +37,6 @@ def extract_anchor(remark):
     return match.group(1).strip() if match else None
 
 # ---------- 维度映射加载（ttl=60） ----------
-@st.cache_data(ttl=60)
 def load_dimension_mapping():
     if supabase is None:
         return pd.DataFrame()
@@ -56,7 +56,6 @@ def load_dimension_mapping():
         return pd.DataFrame()
 
 # ---------- 核心聚合函数（缓存60秒） ----------
-@st.cache_data(ttl=60)
 def fetch_sales_summary(start_date, end_date, suffix="", view_mode=None):
     """
     获取销售汇总数据，返回明细（含组织、部门、店铺、主播），用于组织排行、部门排行及线下明细。
@@ -227,13 +226,11 @@ def fetch_sales_summary(start_date, end_date, suffix="", view_mode=None):
     return df[required_columns]
 
 # ---------- 完整的销售汇总（兼容旧版） ----------
-@st.cache_data(ttl=60)
 def fetch_complete_sales_summary(start_date, end_date, suffix="_all", view_mode=None):
     return fetch_sales_summary(start_date, end_date, suffix, view_mode=view_mode)
 
 # ---------- 商品销售数据加载（用于商品详情页，同样修正线下部分） ----------
-@st.cache_data(ttl=300)
-def load_product_sales(suffix=None, apply_filter=True, include_offline=True):
+def load_product_sales(suffix=None, apply_filter=True, include_offline=True, view_mode=None):
     if supabase is None:
         return pd.DataFrame()
     try:
@@ -332,7 +329,8 @@ def load_product_sales(suffix=None, apply_filter=True, include_offline=True):
             df["org_name"] = "未分配组织"
             df["dept"] = "未分配部门"
 
-        view_mode_to_use = st.session_state.get("view_mode")
+        # view_mode 作为参数参与缓存 key，避免切换数据源（尤其"小店运营"）时命中旧缓存
+        view_mode_to_use = view_mode if view_mode is not None else st.session_state.get("view_mode")
         if view_mode_to_use == "shop":
             if 'dept' in df.columns:
                 df = df[df['dept'] == '小店运营']
@@ -348,33 +346,37 @@ def load_product_sales(suffix=None, apply_filter=True, include_offline=True):
         return pd.DataFrame()
 
 # ---------- 获取日期范围 ----------
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=10)
 def get_sales_date_range(suffix=""):
     if supabase is None:
         return None, None
-    try:
-        table_name = get_table_name("product_sales", suffix)
-        min_resp = supabase.table(table_name).select("sale_date").order("sale_date", desc=False).limit(1).execute()
-        max_resp = supabase.table(table_name).select("sale_date").order("sale_date", desc=True).limit(1).execute()
-        min_date = pd.to_datetime(min_resp.data[0]["sale_date"]).date() if min_resp.data else None
-        max_date = pd.to_datetime(max_resp.data[0]["sale_date"]).date() if max_resp.data else None
-        if suffix == "_all":
-            try:
-                offline_min = supabase.table("offline_sales_all").select("sale_date").order("sale_date", desc=False).limit(1).execute()
-                offline_max = supabase.table("offline_sales_all").select("sale_date").order("sale_date", desc=True).limit(1).execute()
-                if offline_min.data and offline_max.data:
-                    off_min = pd.to_datetime(offline_min.data[0]["sale_date"]).date()
-                    off_max = pd.to_datetime(offline_max.data[0]["sale_date"]).date()
-                    if min_date is None or off_min < min_date:
-                        min_date = off_min
-                    if max_date is None or off_max > max_date:
-                        max_date = off_max
-            except:
-                pass
-        return min_date, max_date
-    except Exception as e:
-        st.error(f"获取日期范围失败：{e}")
-        return None, None
+    for attempt in range(3):
+        try:
+            table_name = get_table_name("product_sales", suffix)
+            min_resp = supabase.table(table_name).select("sale_date").order("sale_date", desc=False).limit(1).execute()
+            max_resp = supabase.table(table_name).select("sale_date").order("sale_date", desc=True).limit(1).execute()
+            min_date = pd.to_datetime(min_resp.data[0]["sale_date"]).date() if min_resp.data else None
+            max_date = pd.to_datetime(max_resp.data[0]["sale_date"]).date() if max_resp.data else None
+            if suffix == "_all":
+                try:
+                    offline_min = supabase.table("offline_sales_all").select("sale_date").order("sale_date", desc=False).limit(1).execute()
+                    offline_max = supabase.table("offline_sales_all").select("sale_date").order("sale_date", desc=True).limit(1).execute()
+                    if offline_min.data and offline_max.data:
+                        off_min = pd.to_datetime(offline_min.data[0]["sale_date"]).date()
+                        off_max = pd.to_datetime(offline_max.data[0]["sale_date"]).date()
+                        if min_date is None or off_min < min_date:
+                            min_date = off_min
+                        if max_date is None or off_max > max_date:
+                            max_date = off_max
+                except:
+                    pass
+            return min_date, max_date
+        except Exception as e:
+            if attempt == 2:
+                st.error(f"获取日期范围失败：{e}")
+                return None, None
+            time.sleep(0.5)
+    return None, None
 
 # ---------- 商品主数据加载 ----------
 @st.cache_data(ttl=300)

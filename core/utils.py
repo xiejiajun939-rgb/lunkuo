@@ -171,3 +171,18 @@ def apply_data_permission(df):
         df = df[df["anchor"].isin(filter_shop_names)]
 
     return df
+
+
+# ---------- 页面切换时自动清缓存（打开页面隐形刷新） ----------
+def clear_cache_on_page_change(page_key):
+    """
+    检测页面切换：当用户从别的页面切到当前页面时，清空 st.cache_data 缓存，
+    实现"打开页面时隐形执行一次强制刷新"，确保展示最新数据（数据变更后无需手动点强制刷新）。
+
+    页面内的交互（选日期、点按钮）不会触发，避免每次交互都重新查数据库影响性能。
+    用法：在每个页面脚本顶部（set_page_config 之后、数据加载之前）调用
+        clear_cache_on_page_change("你的页面唯一标识")
+    """
+    if st.session_state.get("_active_page_key") != page_key:
+        st.cache_data.clear()
+        st.session_state["_active_page_key"] = page_key

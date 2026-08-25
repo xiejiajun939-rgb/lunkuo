@@ -11,11 +11,14 @@ from datetime import date, timedelta
 import plotly.express as px
 import plotly.graph_objects as go
 import io
+import time
 
 from core.db import init_supabase, get_table_name, fetch_sales_summary, load_org_targets, fetch_complete_sales_summary, load_dimension_mapping
 from core.ai import get_ai_summary
+from core.utils import clear_cache_on_page_change
 
 st.set_page_config(page_title="组织与部门分析", layout="wide")
+clear_cache_on_page_change("org_dept")
 
 # 仅支持全部数据
 if st.session_state.get("table_suffix") != "_all":
@@ -23,45 +26,48 @@ if st.session_state.get("table_suffix") != "_all":
     st.stop()
 
 # ---------- 辅助函数 ----------
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=10)
 def get_date_range(suffix):
     """获取数据表中的最早和最晚日期"""
     supabase = init_supabase()
     if supabase is None:
         return None, None
-    try:
-        min_dates, max_dates = [], []
-        
-        # 查询 product_sales 表
-        table_name = get_table_name("product_sales", suffix)
-        resp = supabase.table(table_name).select("sale_date").order("sale_date", desc=False).limit(1).execute()
-        if resp.data:
-            min_dates.append(pd.to_datetime(resp.data[0]["sale_date"]).date())
-        resp = supabase.table(table_name).select("sale_date").order("sale_date", desc=True).limit(1).execute()
-        if resp.data:
-            max_dates.append(pd.to_datetime(resp.data[0]["sale_date"]).date())
-        
-        # 查询 offline_sales_all 表（全部数据时）
-        if suffix == "_all":
-            try:
-                offline_resp = supabase.table("offline_sales_all").select("sale_date").order("sale_date", desc=False).limit(1).execute()
-                if offline_resp.data:
-                    min_dates.append(pd.to_datetime(offline_resp.data[0]["sale_date"]).date())
-                offline_resp = supabase.table("offline_sales_all").select("sale_date").order("sale_date", desc=True).limit(1).execute()
-                if offline_resp.data:
-                    max_dates.append(pd.to_datetime(offline_resp.data[0]["sale_date"]).date())
-            except:
-                pass
-        
-        if min_dates and max_dates:
-            return min(min_dates), max(max_dates)
-        return None, None
-    except Exception as e:
-        st.error(f"获取日期范围失败：{e}")
-        return None, None
+    for attempt in range(3):
+        try:
+            min_dates, max_dates = [], []
+            
+            # 查询 product_sales 表
+            table_name = get_table_name("product_sales", suffix)
+            resp = supabase.table(table_name).select("sale_date").order("sale_date", desc=False).limit(1).execute()
+            if resp.data:
+                min_dates.append(pd.to_datetime(resp.data[0]["sale_date"]).date())
+            resp = supabase.table(table_name).select("sale_date").order("sale_date", desc=True).limit(1).execute()
+            if resp.data:
+                max_dates.append(pd.to_datetime(resp.data[0]["sale_date"]).date())
+            
+            # 查询 offline_sales_all 表（全部数据时）
+            if suffix == "_all":
+                try:
+                    offline_resp = supabase.table("offline_sales_all").select("sale_date").order("sale_date", desc=False).limit(1).execute()
+                    if offline_resp.data:
+                        min_dates.append(pd.to_datetime(offline_resp.data[0]["sale_date"]).date())
+                    offline_resp = supabase.table("offline_sales_all").select("sale_date").order("sale_date", desc=True).limit(1).execute()
+                    if offline_resp.data:
+                        max_dates.append(pd.to_datetime(offline_resp.data[0]["sale_date"]).date())
+                except:
+                    pass
+            
+            if min_dates and max_dates:
+                return min(min_dates), max(max_dates)
+            return None, None
+        except Exception as e:
+            if attempt == 2:
+                st.error(f"获取日期范围失败：{e}")
+                return None, None
+            time.sleep(0.5)
+    return None, None
 
 # ---------- 加载所有部门（从mapping表） ----------
-@st.cache_data(ttl=300)
 def load_all_depts():
     """从mapping表中提取所有唯一的部门名称，并确保包含'未分配部门'"""
     mapping_df = load_dimension_mapping()

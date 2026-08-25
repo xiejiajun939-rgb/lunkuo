@@ -6,21 +6,22 @@ import plotly.express as px
 import plotly.graph_objects as go
 
 from core.db import load_product_sales, load_product_master
-from core.utils import extract_anchor, date_quick_buttons
+from core.utils import extract_anchor, date_quick_buttons, clear_cache_on_page_change
 
 st.set_page_config(page_title="主播分析", layout="wide")
+clear_cache_on_page_change("anchor")
 
 # 确保全局状态
 if "table_suffix" not in st.session_state:
     st.session_state.table_suffix = ""
 
 # ========== 页面内容（原 idx_anchor_compare 块） ==========
-use_anchor = st.session_state.table_suffix in ["_live", "_all"]
+use_anchor = st.session_state.table_suffix == "_all"
 dimension_name = "主播" if use_anchor else "店铺"
 dimension_col = "anchor" if use_anchor else "shop_name"
 
 with st.spinner("正在加载数据..."):
-    prod_df = load_product_sales(st.session_state.table_suffix)
+    prod_df = load_product_sales(st.session_state.table_suffix, view_mode=st.session_state.get("view_mode"))
 
 if prod_df.empty:
     st.info("暂无商品销售数据，请先上传订单文件。")

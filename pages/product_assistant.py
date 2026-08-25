@@ -17,10 +17,11 @@ import io
 import re
 
 from core.db import load_product_sales, load_product_master
-from core.utils import extract_anchor
+from core.utils import extract_anchor, clear_cache_on_page_change
 from core.ai import get_ai_summary
 
 st.set_page_config(page_title="商品分析助手", layout="wide", initial_sidebar_state="expanded")
+clear_cache_on_page_change("product_assistant")
 
 # ---------- 固定使用全部数据 ----------
 SUFFIX = "_all"
@@ -63,10 +64,9 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ---------- 加载数据 ----------
-@st.cache_data(ttl=300)
-def load_assistant_data(suffix, start_date, end_date, platform=None):
+def load_assistant_data(suffix, start_date, end_date, platform=None, view_mode=None):
     """加载商品分析所需数据（聚合后的商品级别数据），支持平台筛选"""
-    df = load_product_sales(suffix, include_offline=False)
+    df = load_product_sales(suffix, include_offline=False, view_mode=view_mode)
     if df.empty:
         return pd.DataFrame()
     df = df[(df["sale_date"] >= pd.to_datetime(start_date)) & (df["sale_date"] <= pd.to_datetime(end_date))]
@@ -150,7 +150,7 @@ def load_assistant_data(suffix, start_date, end_date, platform=None):
 
 def load_product_detail(style_code, suffix, start_date, end_date, platform=None):
     """加载单个商品的详细销售数据（用于诊断）"""
-    df = load_product_sales(suffix, include_offline=False)
+    df = load_product_sales(suffix, include_offline=False, view_mode=st.session_state.get("view_mode"))
     if df.empty:
         return pd.DataFrame()
     df = df[df["sale_date"] >= pd.to_datetime(start_date)]
@@ -298,7 +298,7 @@ st.sidebar.header("🔍 筛选条件")
 platform_options = ["全部", "抖音", "视频号", "小红书", "天猫", "唯品会"]
 selected_platform = st.sidebar.selectbox("平台", platform_options, index=0, key="pa_platform")
 
-df_temp = load_product_sales("_all", include_offline=False)
+df_temp = load_product_sales("_all", include_offline=False, view_mode=st.session_state.get("view_mode"))
 min_date = date(2024, 1, 1)
 max_date = date.today()
 if not df_temp.empty:
@@ -328,7 +328,7 @@ max_net = st.sidebar.number_input("最大净销售额", value=100000000, step=10
 max_return_rate = st.sidebar.slider("最大退货率 (%)", 0, 100, 100)
 
 with st.spinner("加载商品数据..."):
-    df_products = load_assistant_data("_all", start_date, end_date, selected_platform)
+    df_products = load_assistant_data("_all", start_date, end_date, selected_platform, view_mode=st.session_state.get("view_mode"))
     if df_products.empty:
         st.warning("没有找到任何商品数据，请检查日期范围或筛选条件。")
         st.stop()
@@ -505,7 +505,7 @@ if not stagnant_products.empty:
         alerts.append(("critical", f"📉 商品 {row['style_code']} 已滞销超过30天，最近销售日期 {row['最近销售日期']}"))
 
 if len(filtered) > 0:
-    df_detail = load_product_sales("_all", include_offline=False)
+    df_detail = load_product_sales("_all", include_offline=False, view_mode=st.session_state.get("view_mode"))
     if not df_detail.empty:
         df_detail["sale_date"] = pd.to_datetime(df_detail["sale_date"])
         if selected_platform and selected_platform != "全部":

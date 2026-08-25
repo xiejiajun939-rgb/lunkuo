@@ -9,7 +9,7 @@ import re
 import numpy as np
 
 from core.db import load_product_sales, load_product_master
-from core.utils import date_quick_buttons, extract_anchor
+from core.utils import date_quick_buttons, extract_anchor, clear_cache_on_page_change
 from core.ai import get_ai_summary
 
 st.markdown("""
@@ -342,6 +342,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 st.set_page_config(page_title="商品分析", layout="wide")
+clear_cache_on_page_change("product_page")
 
 # ---------- 初始化 session_state ----------
 if "table_suffix" not in st.session_state:
@@ -373,19 +374,9 @@ if "sort_ascending" not in st.session_state:
 
 st.title("📦 商品分析")
 
-# ---------- 数据源选择（主体顶部） ----------
-col1, col2 = st.columns([1, 4])
-with col1:
-    source = st.radio("数据源", ["非直播", "全部"], index=0 if st.session_state.table_suffix == "" else 1, key="src_radio")
-    new_suffix = "" if source == "非直播" else "_all"
-    if new_suffix != st.session_state.table_suffix:
-        st.session_state.table_suffix = new_suffix
-        st.cache_data.clear()
-        st.rerun()
-
 # ---------- 加载数据 ----------
 with st.spinner("加载商品销售数据..."):
-    prod_df = load_product_sales(st.session_state.table_suffix, include_offline=False)
+    prod_df = load_product_sales(st.session_state.table_suffix, include_offline=False, view_mode=st.session_state.get("view_mode"))
 
 if prod_df.empty:
     st.warning("暂无数据，请先上传订单文件。")
@@ -397,7 +388,7 @@ if "style_code" in prod_df.columns:
 else:
     prod_df["style_code"] = prod_df["product_code"].str[:8].str.strip().str.upper()
 
-if st.session_state.table_suffix in ["_live", "_all"] and "anchor" not in prod_df.columns:
+if st.session_state.table_suffix == "_all" and "anchor" not in prod_df.columns:
     prod_df["anchor"] = prod_df["remark"].astype(str).apply(extract_anchor)
 
 min_date = prod_df["sale_date"].min().date()
@@ -441,7 +432,7 @@ with col5:
     coupon_filter = st.selectbox("是否首单礼金", ["全部", "仅首单礼金", "非首单礼金"], key="cf")
 with col6:
     selected_anchors = []
-    if st.session_state.table_suffix in ["_live", "_all"]:
+    if st.session_state.table_suffix == "_all":
         if "anchor" in prod_df.columns:
             anchors = sorted(prod_df["anchor"].dropna().unique())
             if anchors:
@@ -449,7 +440,11 @@ with col6:
             else:
                 st.info("未识别到主播信息，请检查备注字段。")
 with col7:
-    pass
+    selected_orgs = []
+    if "org_name" in prod_df.columns:
+        orgs = sorted(prod_df["org_name"].dropna().unique())
+        if orgs:
+            selected_orgs = st.multiselect("组织", orgs, key="orgf")
 with col8:
     pass
 
@@ -469,6 +464,8 @@ if selected_brand != "全部":
     filtered = filtered[filtered["brand"] == selected_brand]
 if selected_anchors:
     filtered = filtered[filtered["anchor"].isin(selected_anchors)]
+if selected_orgs:
+    filtered = filtered[filtered["org_name"].isin(selected_orgs)]
 
 # ---------- 过滤线下订单（remark 以 LA、PA、FA 开头） ----------
 if "remark" in filtered.columns:
@@ -572,8 +569,8 @@ with col_next:
             st.session_state.product_page_num += 1
             st.rerun()
 with col_export:
-    is_live_or_all = st.session_state.table_suffix in ["_live", "_all"]
-    detail_label = "明细（货号+主播）" if is_live_or_all else "明细（货号+店铺）"
+    is_all = st.session_state.table_suffix == "_all"
+    detail_label = "明细（货号+主播）" if is_all else "明细（货号+店铺）"
     export_type = st.radio("导出类型", ["汇总（货号级别）", detail_label], horizontal=True, key="export_type")
     if st.button("📥 下载数据", key="exp"):
         if export_type == "汇总（货号级别）":
@@ -591,7 +588,7 @@ with col_export:
             sheet_name = "货号汇总"
             file_suffix = "货号汇总"
         else:
-            if is_live_or_all:
+            if is_all:
                 group_col = "anchor"
                 group_name = "主播"
             else:
@@ -671,7 +668,7 @@ for idx, row in page_df.iterrows():
             def extract_anchor_fn(remark):
                 match = re.search(r'主播[：:]([^_]+)', remark)
                 return match.group(1).strip() if match else None
-            if suffix in ["_live", "_all"]:
+            if suffix == "_all":
                 detail_df["anchor"] = detail_df["remark"].apply(extract_anchor_fn)
                 detail_df = detail_df[detail_df["anchor"].notna()]
                 if not detail_df.empty:

@@ -12,16 +12,16 @@ from core.db import (
     load_targets,
     get_sales_date_range
 )
+from core.utils import clear_cache_on_page_change
 
 st.set_page_config(page_title="每日明细", layout="wide")
+clear_cache_on_page_change("daily_detail")
 
 # ---------- 状态初始化 ----------
 if "table_suffix" not in st.session_state:
     st.session_state.table_suffix = ""
 if "target_dict" not in st.session_state:
     st.session_state.target_dict = {}
-if "diagnose" not in st.session_state:
-    st.session_state.diagnose = False
 
 # ---------- 页面样式 ----------
 st.markdown("""
@@ -95,7 +95,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.subheader("📋 每日明细查询")
-st.info("展示所选日期范围内的销售数据，按组织/部门/店铺维度汇总。")
+st.caption("展示所选日期范围内的销售数据，按组织/部门/店铺维度汇总。")
 
 # ---------- 数据源 ----------
 suffix = st.session_state.table_suffix
@@ -113,53 +113,63 @@ if is_all:
     has_org = not mapping_df.empty and 'org_name' in mapping_df.columns
     if has_org:
         org_targets = load_org_targets("_all")
-        dimension_options = ["阿米巴组织", "部门", "小店运营组"]
+        dimension_options = ["部门", "小店运营组"]
         selected_dim = st.radio("选择维度", dimension_options, horizontal=True, key="dimension_select_daily")
 
-        if selected_dim == "阿米巴组织":
-            all_orgs = sorted(mapping_df['org_name'].dropna().unique())
-            selected_org = st.selectbox("选择组织", all_orgs, key="org_select")
-            group_col = "org_name"
-            dim_label = "组织"
-            target_dict = org_targets
-            use_shop_detail = False
-            org_filter = None
-        elif selected_dim == "部门":
-            group_col = "dept"
-            dim_label = "部门"
-            dept_targets = {}
-            if not mapping_df.empty:
+        # 需要细分到组织的部门（其余部门只显示总计）
+        detail_depts = ["零售线下", "阿里", "自媒体", "零售线上"]
+
+        if selected_dim == "部门":
+            all_depts = sorted(mapping_df['dept'].dropna().unique())
+            # 小店运营有单独维度，从部门列表排除
+            all_depts = [d for d in all_depts if d != "小店运营"]
+            selected_dept = st.selectbox("选择部门", all_depts, key="dept_select")
+
+            if selected_dept in detail_depts:
+                # 细分到组织
+                group_col = "org_name"
+                dim_label = "组织"
+                target_dict = org_targets
+            else:
+                # 显示部门总计
+                group_col = "dept"
+                dim_label = "部门"
+                dept_targets = {}
                 org_dept_map = mapping_df[['org_name', 'dept']].drop_duplicates()
                 for _, row in org_dept_map.iterrows():
                     org = row['org_name']
                     dept = row['dept']
                     target = org_targets.get(org, 0)
                     dept_targets[dept] = dept_targets.get(dept, 0) + target
-            # 强制零售线上目标为 0
-            if "零售线上" in dept_targets:
-                dept_targets["零售线上"] = 0
-            target_dict = dept_targets
-            use_shop_detail = False
+                if "零售线上" in dept_targets:
+                    dept_targets["零售线上"] = 0
+                target_dict = dept_targets
+
+            dept_filter = selected_dept
             org_filter = None
+            use_shop_detail = False
         else:  # 小店运营组
             group_col = "shop_name"
             dim_label = "店铺"
-            target_dict = load_targets()
+            target_dict = load_targets("")
             use_shop_detail = True
             org_filter = "小店运营组"
-            st.info("当前选择：小店运营组 → 展示该组织下所有店铺的销售明细，目标取自店铺目标表。")
+            dept_filter = None
+            st.caption("当前选择：小店运营组 → 展示该组织下所有店铺的销售明细，目标取自店铺目标表。")
     else:
         group_col = "shop_name"
         dim_label = "店铺名称"
         target_dict = st.session_state.target_dict
         use_shop_detail = False
         org_filter = None
+        dept_filter = None
 else:
     group_col = "shop_name"
     dim_label = "店铺名称"
     target_dict = st.session_state.target_dict
     use_shop_detail = False
     org_filter = None
+    dept_filter = None
 
 # ---------- 日期初始化（默认本月） ----------
 if "range_start" not in st.session_state or st.session_state["range_start"] < min_date or st.session_state["range_start"] > max_date:
@@ -206,15 +216,9 @@ with col1:
 with col2:
     st.date_input("结束日期", key="range_end", min_value=min_date, max_value=max_date)
 
-# ---------- 查询和诊断 ----------
-col_query, col_diag = st.columns([1, 1])
-with col_query:
-    if st.button("🔍 查询", key="range_query"):
-        st.rerun()
-with col_diag:
-    if st.button("🔍 诊断商品部", key="diagnose_btn"):
-        st.session_state.diagnose = True
-        st.rerun()
+# ---------- 查询 ----------
+if st.button("🔍 查询", key="range_query"):
+    st.rerun()
 
 # ---------- 加载数据 ----------
 start = st.session_state["range_start"]
@@ -224,7 +228,6 @@ if start > end:
     st.session_state["range_start"] = start
     st.session_state["range_end"] = end
 
-@st.cache_data(ttl=60)
 def load_aggregated_data(start_date, end_date, suffix):
     return fetch_sales_summary(start_date, end_date, suffix)
 
@@ -235,45 +238,17 @@ if df.empty:
     st.warning("所选范围内无销售数据")
     st.stop()
 
-# ---------- 组织过滤 ----------
-if use_shop_detail and org_filter:
+# ---------- 过滤 ----------
+if dept_filter:
+    df = df[df['dept'] == dept_filter]
+    if df.empty:
+        st.warning(f"部门 {dept_filter} 无销售数据")
+        st.stop()
+if org_filter:
     df = df[df['org_name'] == org_filter]
     if df.empty:
         st.warning(f"组织 {org_filter} 无销售数据")
         st.stop()
-
-# ---------- 诊断逻辑（保留） ----------
-if st.session_state.diagnose:
-    st.session_state.diagnose = False
-    st.markdown("### 🛠️ 诊断信息")
-    with st.expander("点击展开调试数据", expanded=True):
-        st.write(f"总行数: {len(df)}")
-        if 'dept' in df.columns:
-            st.write(f"dept 唯一值: {df['dept'].unique().tolist()}")
-            dept_count = df[df['dept'] == '商品部'].shape[0]
-            st.write(f"商品部记录数: {dept_count}")
-            if dept_count > 0:
-                st.dataframe(df[df['dept'] == '商品部'].head(5))
-            else:
-                st.warning("当前查询无商品部")
-                st.write("涉及所有店铺（去重后）:", df['shop_name'].unique().tolist())
-        if 'shop_name' in df.columns:
-            st.write(f"涉及店铺数量: {len(df['shop_name'].unique())}")
-        # 检查特定店铺
-        target = "商品组"
-        if 'shop_name' in df.columns:
-            shops = df['shop_name'].astype(str).str.strip().str.upper().unique()
-            if target.upper() in shops:
-                st.success(f"✅ 数据中包含店铺 '{target}'")
-                sample = df[df['shop_name'].str.upper() == target.upper()]
-                st.dataframe(sample)
-            else:
-                st.error(f"❌ 数据中不包含店铺 '{target}'")
-        # 显示映射表
-        mapping_df = load_dimension_mapping()
-        if not mapping_df.empty:
-            st.write("映射表中的商品组相关记录:")
-            st.dataframe(mapping_df[mapping_df['shop_name'].str.contains('商品组', case=False)])
 
 # ---------- 展示结果 ----------
 st.markdown(f"#### 📊 查询结果（{start} ~ {end}）")
@@ -289,43 +264,7 @@ col_m1.metric("总发货", f"¥{total_ship:,.2f}")
 col_m2.metric("总退货", f"¥{total_return:,.2f}")
 col_m3.metric("总净额", f"¥{total_net:,.2f}", delta=f"退货率 {return_rate:.2f}%")
 
-# ========== 新增：商品部业绩专区 ==========
-st.markdown("---")
-st.markdown("#### 🏷️ 商品部业绩专区")
-if 'dept' in df.columns:
-    dept_data = df[df['dept'] == '商品部']
-    if not dept_data.empty:
-        dept_ship = dept_data["total_ship"].sum()
-        dept_return = dept_data["total_return"].sum()
-        dept_net = dept_data["total_net"].sum()
-        dept_records = len(dept_data)
-        dept_shops = dept_data["shop_name"].nunique()
-        # 计算占比
-        dept_ratio = (dept_ship / total_ship * 100) if total_ship > 0 else 0.0
-        col_d1, col_d2, col_d3, col_d4, col_d5 = st.columns(5)
-        col_d1.metric("商品部发货", f"¥{dept_ship:,.2f}", delta=f"{dept_ratio:.1f}% 占比")
-        col_d2.metric("商品部退货", f"¥{dept_return:,.2f}")
-        col_d3.metric("商品部净额", f"¥{dept_net:,.2f}")
-        col_d4.metric("记录条数", f"{dept_records}")
-        col_d5.metric("涉及店铺", f"{dept_shops}")
-        # 可展开查看店铺列表
-        with st.expander("查看商品部涉及店铺"):
-            st.write(dept_data["shop_name"].unique().tolist())
-    else:
-        st.warning("当前查询中无「商品部」数据")
-        # 检查映射表中是否存在商品部
-        mapping_df = load_dimension_mapping()
-        if not mapping_df.empty:
-            possible_shops = mapping_df[mapping_df['dept'] == '商品部']['shop_name'].unique().tolist()
-            if possible_shops:
-                st.info(f"映射表中属于商品部的店铺有：{possible_shops}，但当前查询中未包含这些店铺的销售数据。请检查日期范围或数据源。")
-            else:
-                st.info("映射表中未定义「商品部」，请先在 mapping 表中添加部门为「商品部」的店铺记录。")
-        else:
-            st.info("映射表为空，无法判断商品部配置。")
-# ======================================
-
-# 2. 按维度汇总（原有）
+# 2. 按维度汇总
 if group_col in df.columns:
     dim_agg = df.groupby(group_col).agg(
         发货金额=("total_ship", "sum"),
@@ -341,6 +280,18 @@ if group_col in df.columns:
             lambda r: (r['净销售金额'] / r['目标金额'] * 100) if r['目标金额'] != 0 else 0.0, axis=1
         ).map(lambda x: f"{x:.2f}%")
         display_cols = [dim_label, "发货金额", "退货金额", "净销售金额", "退货率", "目标金额", "达成率"]
+        # 追加"小店运营汇总"总计行
+        total_target = sum(target_dict.values()) if target_dict else 0
+        total_row = {
+            dim_label: "🏪 小店运营汇总",
+            "发货金额": total_ship,
+            "退货金额": total_return,
+            "净销售金额": total_net,
+            "退货率": f"{return_rate:.2f}%" if total_ship != 0 else "-",
+            "目标金额": total_target,
+            "达成率": f"{(total_net / total_target * 100):.2f}%" if total_target != 0 else "0.00%"
+        }
+        dim_agg = pd.concat([dim_agg, pd.DataFrame([total_row])], ignore_index=True)
     else:
         display_cols = [dim_label, "发货金额", "退货金额", "净销售金额", "退货率"]
 
@@ -354,6 +305,8 @@ if (end - start).days >= 1 and group_col in df.columns:
     ).reset_index()
     pivot = daily_dim.pivot(index="sale_date", columns=group_col, values="净销售金额").fillna(0)
     pivot.index = pd.to_datetime(pivot.index).date
+    if use_shop_detail and group_col == "shop_name":
+        pivot["🏪 小店运营汇总"] = pivot.sum(axis=1)
     st.markdown("#### 每日净销售金额明细")
     st.dataframe(pivot, use_container_width=True)
 

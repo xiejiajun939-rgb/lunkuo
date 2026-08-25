@@ -6,16 +6,17 @@ import io
 import plotly.express as px
 
 from core.db import load_product_sales, load_product_master
-from core.utils import extract_anchor, date_quick_buttons
+from core.utils import extract_anchor, date_quick_buttons, clear_cache_on_page_change
 
 st.set_page_config(page_title="销售分布与品牌", layout="wide")
+clear_cache_on_page_change("distribution")
 
 # 确保全局状态
 if "table_suffix" not in st.session_state:
     st.session_state.table_suffix = ""
 
 with st.spinner("正在加载数据，请稍候..."):
-    prod_df = load_product_sales(st.session_state.table_suffix)
+    prod_df = load_product_sales(st.session_state.table_suffix, view_mode=st.session_state.get("view_mode"))
 
 if prod_df.empty:
     st.warning("暂无商品销售数据，请先上传订单文件。")
@@ -26,7 +27,7 @@ if "style_code" in prod_df.columns:
 else:
     prod_df["style_code"] = prod_df["product_code"].str[:8].str.strip().str.upper()
 
-if st.session_state.table_suffix in ["_live", "_all"]:
+if st.session_state.table_suffix == "_all":
     if "anchor" not in prod_df.columns:
         prod_df["anchor"] = prod_df["remark"].astype(str).apply(extract_anchor)
 
@@ -62,7 +63,7 @@ with col_brand:
     selected_brand = st.selectbox("品牌", brands_all, key="dist_brand_v2")
 with col_anchor:
     selected_anchors = []
-    if st.session_state.table_suffix in ["_live", "_all"]:
+    if st.session_state.table_suffix == "_all":
         if "anchor" not in prod_df.columns:
             prod_df["anchor"] = prod_df["remark"].astype(str).apply(extract_anchor)
         all_anchors = prod_df["anchor"].dropna().unique().tolist()

@@ -106,7 +106,7 @@ def load_sub_accounts_from_db():
             for row in resp.data:
                 perms = row.get("permissions", {})
                 if not perms and "allowed_tabs" in row:
-                    perms = {"": row["allowed_tabs"], "_live": row["allowed_tabs"], "_all": row["allowed_tabs"]}
+                    perms = {"": row["allowed_tabs"], "_all": row["allowed_tabs"]}
                 sub_users[row["username"]] = {
                     "password": row["password"],
                     "role": row.get("role", "viewer"),
@@ -153,7 +153,7 @@ def get_all_users():
     users = {
         "admin": {"password": "1234567890", "role": "admin", "default_suffix": ""},
         "XDZ01": {"password": "94949468", "role": "user", "default_suffix": ""},
-        "ZBZ01": {"password": "123456", "role": "user", "default_suffix": "_live"}
+        "ZBZ01": {"password": "123456", "role": "user", "default_suffix": ""}
     }
     if "sub_users" in st.session_state:
         for username, info in st.session_state.sub_users.items():
@@ -173,12 +173,10 @@ def login():
                 st.session_state.username = username
                 st.session_state.role = users[username]["role"]
                 st.session_state.table_suffix = users[username]["default_suffix"]
-                if st.session_state.table_suffix == "":
-                    st.session_state.view_mode = "normal"
-                elif st.session_state.table_suffix == "_all":
-                    st.session_state.view_mode = "all"
-                else:
-                    st.session_state.view_mode = "live"
+                # 抹除非直播数据源：存量 "" 和 "_live" 都归一化为 "_all"（小店运营组已完全替代非直播）
+                if st.session_state.table_suffix in ("", "_live"):
+                    st.session_state.table_suffix = "_all"
+                st.session_state.view_mode = "all"
                 # 重置缓存标记
                 st.session_state.last_suffix = None
                 st.cache_data.clear()
@@ -211,16 +209,11 @@ if "monthly_actual" not in st.session_state:
 if "processing_upload" not in st.session_state:
     st.session_state.processing_upload = False
 if "table_suffix" not in st.session_state:
-    st.session_state.table_suffix = ""
+    st.session_state.table_suffix = "_all"
 if "uploaded_file_hashes" not in st.session_state:
     st.session_state.uploaded_file_hashes = []
 if "view_mode" not in st.session_state:
-    if st.session_state.table_suffix == "":
-        st.session_state.view_mode = "normal"
-    elif st.session_state.table_suffix == "_all":
-        st.session_state.view_mode = "all"
-    else:
-        st.session_state.view_mode = "normal"
+    st.session_state.view_mode = "all"
 if "last_suffix" not in st.session_state:
     st.session_state.last_suffix = None
 
@@ -230,10 +223,11 @@ def refresh_materialized_view(suffix=""):
         return
     try:
         supabase.rpc('refresh_mv', {'suffix': suffix}).execute()
-    except Exception as e:
-        st.warning(f"物化视图刷新失败（不影响数据入库）：{e}")
+    except Exception:
+        # 物化视图仅供外部预聚合/BI 使用，lunkuo 自身所有查询都直接走源表，不读取它；
+        # 刷新失败（如 statement timeout）不影响任何页面数据，静默忽略即可。
+        pass
 
-@st.cache_data(ttl=300)
 def load_daily_sales(suffix=None, apply_filter=True):
     if supabase is None:
         return pd.DataFrame()
@@ -447,9 +441,20 @@ def save_product_sales(df_orders, suffix=None):
             supabase.table(table_name).upsert(batch, on_conflict="remark").execute()
 
 def save_offline_sales(df_orders):
+    """保存线下收入，返回实际写入条数（0 表示无数据/空行被过滤）
+
+    去重策略：以 remark（订单号）为唯一键，重复时覆盖更新——
+    同一文件内后出现的覆盖先出现的；数据库已存在的 remark 则更新最早一条、
+    删除多余重复记录，避免历史重复继续累积。
+    """
     if supabase is None or df_orders.empty:
-        return
+        return 0
     df = df_orders.copy()
+    # 过滤掉日期为空的空行（当天无业绩时，润乾导出的是全空行）
+    if '日期' in df.columns:
+        df = df[df['日期'].notna()]
+    if df.empty:
+        return 0
     df['sale_date'] = pd.to_datetime(df['日期']).dt.strftime('%Y-%m-%d')
     df['shop_name'] = df['组织名称'].astype(str).str.strip()
     df['amount'] = pd.to_numeric(df['金额/时间'], errors='coerce').fillna(0)
@@ -457,22 +462,60 @@ def save_offline_sales(df_orders):
     df['return_amount'] = (-df['amount']).clip(lower=0)
     df['net_amount'] = df['amount']
     df['remark'] = df['备注'].astype(str).str.strip()
-    records = df[['sale_date', 'shop_name', 'ship_amount', 'return_amount', 'net_amount', 'remark']].to_dict(orient='records')
+    # 清理 NaN 为 None，避免 JSON 序列化报错
+    df = df[['sale_date', 'shop_name', 'ship_amount', 'return_amount', 'net_amount', 'remark']]
+    df = df.where(pd.notna(df), None)
+    records = df.to_dict(orient='records')
     if not records:
-        return
+        return 0
+
+    # 同一文件内按 remark 去重（后出现的覆盖先出现的）
+    merged = {}
+    for rec in records:
+        merged[rec['remark']] = rec
+    records = list(merged.values())
+
     table_name = "offline_sales_all"
-    batch_size = 500
-    for i in range(0, len(records), batch_size):
-        batch = records[i:i+batch_size]
-        for attempt in range(3):
-            try:
-                supabase.table(table_name).insert(batch).execute()
-                break
-            except Exception as e:
-                if attempt == 2:
-                    raise e
-                time.sleep(2 ** attempt)
+    remarks = [r['remark'] for r in records]
+
+    # 查询数据库中已存在的 remark -> [id, ...]，用于判断是否需要覆盖更新
+    existing = {}
+    for i in range(0, len(remarks), 200):
+        chunk = remarks[i:i+200]
+        resp = supabase.table(table_name).select('id,remark').in_('remark', chunk).execute()
+        for r in (resp.data or []):
+            existing.setdefault(r['remark'], []).append(r['id'])
+
+    to_insert = []       # 全新记录
+    to_update = []       # (保留的 id, 新数据) 覆盖更新
+    to_delete_ids = []   # 多余重复记录的 id
+    for rec in records:
+        rm = rec['remark']
+        ids = existing.get(rm)
+        if not ids:
+            to_insert.append(rec)
+        else:
+            ids_sorted = sorted(ids)
+            keep_id = ids_sorted[0]  # 保留最早一条（id 最小）
+            to_update.append((keep_id, rec))
+            for extra_id in ids_sorted[1:]:
+                to_delete_ids.append(extra_id)
+
+    # 插入新记录
+    if to_insert:
+        for i in range(0, len(to_insert), 500):
+            supabase.table(table_name).insert(to_insert[i:i+500]).execute()
+    # 覆盖更新已存在记录（remark 为键，值不变，故从 payload 中剔除）
+    for keep_id, rec in to_update:
+        update_payload = {k: v for k, v in rec.items() if k != 'remark'}
+        supabase.table(table_name).update(update_payload).eq('id', keep_id).execute()
+    # 删除多余重复记录
+    if to_delete_ids:
+        for i in range(0, len(to_delete_ids), 500):
+            supabase.table(table_name).delete().in_('id', to_delete_ids[i:i+500]).execute()
+
     refresh_materialized_view("_all")
+    return len(records)
 
 def validate_order_data(df):
     try:
@@ -717,7 +760,7 @@ for label, path in all_pages.items():
         continue
     if label == "🏢 组织与部门分析" and current_suffix != "_all":
         continue
-    if label == "🎤 主播分析" and current_suffix not in ["_live", "_all"]:
+    if label == "🎤 主播分析" and current_suffix != "_all":
         continue
     # 新页面添加任何特殊限制（例如只在全部数据源显示）可在此添加
     # 但商品分析助手不限数据源，所以不需要额外条件
@@ -743,37 +786,8 @@ with st.sidebar:
     st.markdown("---")
 
     if st.session_state.role != "admin":
-        # 非管理员：只显示数据源切换 + 退出登录
-        st.subheader("🔄 数据源模式切换")
-        suffix_names = {"": "非直播数据", "_all": "全部数据"}
-        current_source_name = suffix_names.get(st.session_state.table_suffix, "未知")
-        user_info = st.session_state.sub_users.get(st.session_state.username, {})
-        perms = user_info.get("permissions", {})
-        available = {}
-        for name, suf in [("非直播数据", ""), ("全部数据", "_all")]:
-            if suf in perms and perms[suf]:
-                available[name] = suf
-        if not available:
-            available = {"非直播数据": ""}
-        options = list(available.keys())
-        if current_source_name in options:
-            default_index = options.index(current_source_name)
-        else:
-            default_index = 0
-        selected_source = st.selectbox("选择数据源", options=options, index=default_index, key="source_selectbox_nonadmin")
-        if st.button("✅ 确认切换", key="confirm_switch_nonadmin"):
-            new_suffix = available[selected_source]
-            if new_suffix != st.session_state.table_suffix:
-                st.session_state.table_suffix = new_suffix
-                if new_suffix == "":
-                    st.session_state.view_mode = "normal"
-                elif new_suffix == "_all":
-                    st.session_state.view_mode = "all"
-                else:
-                    st.session_state.view_mode = "live"
-                st.session_state.last_suffix = None  # 触发缓存清除
-                st.cache_data.clear()
-                st.rerun()
+        # 非管理员：数据源已固定为"全部数据"，只显示退出登录
+        st.info("📌 当前数据源：全部数据")
         st.markdown("---")
         if st.button("🚪 退出登录", key="logout_final"):
             st.session_state.authenticated = False
@@ -787,50 +801,19 @@ with st.sidebar:
         st.sidebar.markdown("[🏠 主页](/)")
         st.sidebar.markdown("---")
         st.header("📂 数据加载")
-        st.subheader("🔄 数据源切换")
-        suffix_names = {"": "非直播数据", "_all": "全部数据"}
-        current_source_name = suffix_names.get(st.session_state.table_suffix, "未知")
-        st.info(f"📌 当前正在查看：**{current_source_name}**")
-
-        if st.session_state.role == "admin":
-            available_suffixes = {"非直播数据": "", "全部数据": "_all"}
-        else:
-            user_info = st.session_state.sub_users.get(st.session_state.username, {})
-            default_suffix = user_info.get("default_suffix", "")
-            perms = user_info.get("permissions", {})
-            available = {}
-            for name, suf in [("非直播数据", ""), ("全部数据", "_all")]:
-                if suf in perms and perms[suf]:
-                    available[name] = suf
-            if not available:
-                available = {"非直播数据": ""}
-            available_suffixes = available
-
-        options = list(available_suffixes.keys())
-        if current_source_name in options:
-            default_index = options.index(current_source_name)
-        else:
-            default_index = 0
-        selected_source = st.selectbox("选择数据源", options=options, index=default_index, key="source_selectbox_sidebar")
-        if st.button("✅ 确认切换", key="confirm_switch_sidebar"):
-            new_suffix = available_suffixes[selected_source]
-            if new_suffix != st.session_state.table_suffix:
-                st.session_state.table_suffix = new_suffix
-                if new_suffix == "":
-                    st.session_state.view_mode = "normal"
-                elif new_suffix == "_all":
-                    st.session_state.view_mode = "all"
-                else:
-                    st.session_state.view_mode = "live"
-                st.session_state.last_suffix = None  # 触发缓存清除
-                st.cache_data.clear()
-                st.rerun()
+        st.info("📌 当前数据源：全部数据")
         st.markdown("---")
 
         current_display_suffix = st.session_state.table_suffix
         current_view_mode = st.session_state.view_mode
 
-        def handle_multiple_upload(uploaded_files, suffix, file_type="order"):
+        # 上传成功后清除文件选择器：Streamlit 禁止在 widget 实例化后直接改其 session_state，
+        # 所以这里用标记记录，在下一轮 file_uploader 实例化之前统一清除。
+        _pending_clear = st.session_state.pop("_pending_clear_uploader", None)
+        if _pending_clear:
+            st.session_state.pop(_pending_clear, None)
+
+        def handle_multiple_upload(uploaded_files, suffix, file_type="order", uploader_key=None):
             if st.session_state.processing_upload:
                 st.warning("上一个文件正在处理中，请稍后...")
                 return
@@ -840,15 +823,16 @@ with st.sidebar:
             total_success = 0
             total_fail = 0
             results = []
-            progress_bar = st.progress(0, text="正在处理文件...")
+            progress_bar = st.progress(0, text="0%")
             status_text = st.empty()
+            total_files = len(uploaded_files)
             for i, uploaded_file in enumerate(uploaded_files):
-                status_text.text(f"正在处理: {uploaded_file.name} ({i+1}/{len(uploaded_files)})")
+                status_text.text(f"正在处理: {uploaded_file.name} ({i+1}/{total_files}) — {int(i/total_files*100)}%")
                 file_content = uploaded_file.getvalue()
                 file_hash = hashlib.md5(file_content).hexdigest()
                 if file_type == "order" and file_hash in st.session_state.uploaded_file_hashes:
                     results.append(f"⏭️ {uploaded_file.name}: 已上传过，跳过")
-                    progress_bar.progress((i + 1) / len(uploaded_files))
+                    progress_bar.progress((i + 1) / total_files, text=f"{int((i + 1) / total_files * 100)}%")
                     continue
                 try:
                     uploaded_file.seek(0)
@@ -873,7 +857,7 @@ with st.sidebar:
                 except Exception as e:
                     total_fail += 1
                     results.append(f"❌ {uploaded_file.name}: 处理异常 - {str(e)}")
-                progress_bar.progress((i + 1) / len(uploaded_files))
+                progress_bar.progress((i + 1) / total_files, text=f"{int((i + 1) / total_files * 100)}%")
             progress_bar.empty()
             status_text.empty()
             st.markdown("---")
@@ -884,39 +868,28 @@ with st.sidebar:
                 st.cache_data.clear()
                 rebuild_daily_data(suffix)
                 st.session_state.target_dict = load_targets(suffix)
+                # 上传成功后清空文件选择器（通过标记，在下一轮 file_uploader 实例化前清除）
+                if uploader_key:
+                    st.session_state["_pending_clear_uploader"] = uploader_key
                 time.sleep(0.3)
                 st.rerun()
             else:
                 st.warning("没有文件被成功处理，请检查文件格式和内容")
 
-        if current_view_mode == "normal":
-            st.subheader("📁 非直播数据上传")
-            uploaded_orders = st.file_uploader(
-                "选择订单文件 (Excel)，支持多选", type=["xlsx", "xls"],
-                key="order_uploader_normal_multi", accept_multiple_files=True
-            )
-            if uploaded_orders and st.button("📤 确认上传", key="confirm_upload_normal_multi"):
-                handle_multiple_upload(uploaded_orders, "", "order")
-            target_files = st.file_uploader(
-                "选择目标文件 (Excel)，支持多选", type=["xlsx", "xls"],
-                key="target_upload_normal_multi", accept_multiple_files=True
-            )
-            if target_files and st.button("📤 确认上传目标", key="confirm_target_normal_multi"):
-                handle_multiple_upload(target_files, "", "target")
-        elif current_view_mode == "shop":
+        if current_view_mode == "shop":
             st.subheader("🏪 小店运营数据上传")
             uploaded_orders = st.file_uploader(
                 "选择订单文件 (Excel)，支持多选", type=["xlsx", "xls"],
                 key="order_uploader_shop_multi", accept_multiple_files=True
             )
             if uploaded_orders and st.button("📤 确认上传", key="confirm_upload_shop_multi"):
-                handle_multiple_upload(uploaded_orders, "_all", "order")
+                handle_multiple_upload(uploaded_orders, "_all", "order", "order_uploader_shop_multi")
             target_files = st.file_uploader(
                 "选择目标文件 (Excel)，支持多选", type=["xlsx", "xls"],
                 key="target_upload_shop_multi", accept_multiple_files=True
             )
             if target_files and st.button("📤 确认上传目标", key="confirm_target_shop_multi"):
-                handle_multiple_upload(target_files, "_all", "target")
+                handle_multiple_upload(target_files, "_all", "target", "target_upload_shop_multi")
         else:
             st.subheader("📊 全部数据上传")
             uploaded_orders = st.file_uploader(
@@ -924,13 +897,13 @@ with st.sidebar:
                 key="order_uploader_all_multi", accept_multiple_files=True
             )
             if uploaded_orders and st.button("📤 确认上传", key="confirm_upload_all_multi"):
-                handle_multiple_upload(uploaded_orders, "_all", "order")
+                handle_multiple_upload(uploaded_orders, "_all", "order", "order_uploader_all_multi")
             target_files = st.file_uploader(
                 "选择目标文件 (Excel)，支持多选", type=["xlsx", "xls"],
                 key="target_upload_all_multi", accept_multiple_files=True
             )
             if target_files and st.button("📤 确认上传目标", key="confirm_target_all_multi"):
-                handle_multiple_upload(target_files, "_all", "target")
+                handle_multiple_upload(target_files, "_all", "target", "target_upload_all_multi")
             st.markdown("---")
             st.subheader("🏷️ 线下收入上传")
             uploaded_offline = st.file_uploader(
@@ -940,17 +913,29 @@ with st.sidebar:
             if uploaded_offline and st.button("📤 上传线下收入", key="upload_offline_multi"):
                 try:
                     total_offline = 0
-                    for off_file in uploaded_offline:
+                    off_progress = st.progress(0, text="0%")
+                    off_status = st.empty()
+                    off_total = len(uploaded_offline)
+                    for idx, off_file in enumerate(uploaded_offline):
+                        off_status.text(f"正在处理: {off_file.name} ({idx+1}/{off_total}) — {int(idx/off_total*100)}%")
                         df = pd.read_excel(off_file, header=1)
                         required_cols = ["日期", "金额/时间", "备注", "组织名称"]
                         if not all(col in df.columns for col in required_cols):
                             st.error(f"文件 {off_file.name} 缺少必要列：{', '.join(required_cols)}")
+                            off_progress.progress((idx + 1) / off_total, text=f"{int((idx + 1) / off_total * 100)}%")
                             continue
-                        save_offline_sales(df)
-                        total_offline += len(df)
-                        st.info(f"✅ {off_file.name}: 上传 {len(df)} 条记录")
+                        n = save_offline_sales(df)
+                        total_offline += n
+                        if n == 0:
+                            st.info(f"⏭️ {off_file.name}: 无数据（当天无业绩），已跳过")
+                        else:
+                            st.info(f"✅ {off_file.name}: 上传 {n} 条记录")
+                        off_progress.progress((idx + 1) / off_total, text=f"{int((idx + 1) / off_total * 100)}%")
+                    off_progress.empty()
+                    off_status.empty()
                     st.success(f"✅ 总共成功上传 {total_offline} 条线下收入记录")
                     st.cache_data.clear()
+                    st.session_state["_pending_clear_uploader"] = "offline_uploader_multi"
                     time.sleep(0.5)
                     st.rerun()
                 except Exception as e:
@@ -968,7 +953,11 @@ with st.sidebar:
             if uploaded_org_target and st.button("📤 上传组织目标", key="upload_org_target_btn_multi"):
                 try:
                     total_org = 0
-                    for org_file in uploaded_org_target:
+                    org_progress = st.progress(0, text="0%")
+                    org_status = st.empty()
+                    org_total = len(uploaded_org_target)
+                    for idx, org_file in enumerate(uploaded_org_target):
+                        org_status.text(f"正在处理: {org_file.name} ({idx+1}/{org_total}) — {int(idx/org_total*100)}%")
                         df_target = pd.read_excel(org_file, header=None)
                         org_names = df_target.iloc[:, 0].astype(str).str.strip()
                         target_vals = pd.to_numeric(df_target.iloc[:, 1], errors='coerce')
@@ -979,8 +968,12 @@ with st.sidebar:
                         save_org_targets(target_dict, "_all")
                         total_org += len(target_dict)
                         st.info(f"✅ {org_file.name}: 加载 {len(target_dict)} 个组织目标")
+                        org_progress.progress((idx + 1) / org_total, text=f"{int((idx + 1) / org_total * 100)}%")
+                    org_progress.empty()
+                    org_status.empty()
                     st.success(f"✅ 总共加载 {total_org} 个组织目标")
                     st.cache_data.clear()
+                    st.session_state["_pending_clear_uploader"] = "org_target_upload_multi"
                     st.rerun()
                 except Exception as e:
                     st.error(f"上传失败：{e}")
@@ -998,12 +991,6 @@ with st.sidebar:
         if st.button("🗑️ 清除当前用户的目标记忆", key="clear_targets_final"):
             clear_targets(st.session_state.table_suffix)
         if st.button("🔄 强制刷新所有数据", key="force_refresh_final"):
-            st.cache_data.clear()
-            st.rerun()
-        if st.button("🔁 重置为非直播数据", key="reset_to_normal_final"):
-            st.session_state.table_suffix = ""
-            st.session_state.view_mode = "normal"
-            st.session_state.last_suffix = None
             st.cache_data.clear()
             st.rerun()
         if st.button("🔄 从商品明细重建每日业绩", key="rebuild_daily_final"):
@@ -1031,14 +1018,13 @@ with st.sidebar:
 
 # ========== 主内容区（根路径欢迎信息） ==========
 if "page" not in st.query_params:
-    suffix_names = {"": "非直播数据", "_all": "全部数据"}
     st.markdown("""
     <div style="display: flex; justify-content: center; align-items: center; height: 50vh; flex-direction: column;">
         <h1 style="color: #1e293b;">📊 欢迎使用数据罗盘</h1>
         <p style="color: #475569; font-size: 18px;">请从左侧导航栏选择一个功能页面开始分析。</p>
-        <p style="color: #94a3b8; font-size: 14px;">当前数据源：<strong>{}</strong></p>
+        <p style="color: #94a3b8; font-size: 14px;">当前数据源：<strong>全部数据</strong></p>
     </div>
-    """.format(suffix_names.get(st.session_state.table_suffix, "未知")), unsafe_allow_html=True)
+    """, unsafe_allow_html=True)
 
 # ========== 保存组织目标（辅助函数） ==========
 def save_org_targets(target_dict, suffix=None):

@@ -6,8 +6,10 @@ from datetime import date
 import io
 
 from core.db import load_product_master
+from core.utils import clear_cache_on_page_change
 
 st.set_page_config(page_title="商品库导出", layout="wide")
+clear_cache_on_page_change("export")
 
 # 仅管理员可访问
 if st.session_state.get("role") != "admin":

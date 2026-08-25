@@ -8,8 +8,10 @@ import plotly.graph_objects as go
 
 from core.db import fetch_complete_sales_summary, get_sales_date_range
 from core.ai import get_ai_summary
+from core.utils import clear_cache_on_page_change
 
 st.set_page_config(page_title="经营驾驶舱", layout="wide")
+clear_cache_on_page_change("dashboard")
 
 # 确保全局变量存在
 if "table_suffix" not in st.session_state:
