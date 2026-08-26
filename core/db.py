@@ -454,7 +454,10 @@ def load_product_sales(
     return df
 
 
-@st.cache_data(ttl=600, show_spinner=False)
+PRODUCT_CUBE_CACHE_VERSION = 2
+
+
+@st.cache_data(ttl=60, show_spinner=False)
 def _load_product_sales_cube_rpc(start_date, end_date, data_version):
     """从数据库读取日级商品聚合；RPC 未部署时返回 None 触发兼容降级。"""
     if supabase is None:
@@ -465,17 +468,22 @@ def _load_product_sales_cube_rpc(start_date, end_date, data_version):
         rows = []
         page = 0
         while True:
-            response = (
-                supabase.rpc(
+            query = supabase.rpc(
                     "get_product_sales_cube",
                     {
                         "p_start_date": start_date.isoformat(),
                         "p_end_date": end_date.isoformat(),
                     },
                 )
-                .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1)
-                .execute()
-            )
+            # 显式指定完整且稳定的排序键，确保 PostgREST 对 RPC 结果分页时
+            # 不会因为同日期/同货号存在多条维度记录而跨页重复或遗漏。
+            for order_column in [
+                "sale_date", "style_code", "dept", "org_name", "shop_name", "anchor"
+            ]:
+                query = query.order(order_column)
+            response = query.range(
+                page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1
+            ).execute()
             page_rows = response.data or []
             rows.extend(page_rows)
             if len(page_rows) < PAGE_SIZE:
@@ -495,7 +503,12 @@ def _load_product_sales_cube_rpc(start_date, end_date, data_version):
 
 def load_product_sales_cube(start_date, end_date, apply_filter=True):
     """商品分析专用数据源：优先使用数据库日级聚合，未部署时自动使用旧明细聚合。"""
-    data_version = st.session_state.get("_data_version", 0)
+    # 常量参与缓存键。查询实现升级或线上残留旧缓存时递增该版本，
+    # 可强制所有 Streamlit Cloud 会话重新读取完整数据。
+    data_version = (
+        PRODUCT_CUBE_CACHE_VERSION,
+        st.session_state.get("_data_version", 0),
+    )
     try:
         cube = _load_product_sales_cube_rpc(start_date, end_date, data_version)
     except RuntimeError:
