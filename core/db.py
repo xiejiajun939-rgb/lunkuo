@@ -95,7 +95,7 @@ def _normalize_dimension_mapping(mapping_df):
 
 
 def _attach_dimensions(df, mapping_df):
-    """矢量化关联组织/部门，避免对销售明细逐行执行 Python lambda。"""
+    """关联组织/部门：主播精确匹配优先，店铺归属作为兜底。"""
     if df.empty:
         return df
 
@@ -110,6 +110,11 @@ def _attach_dimensions(df, mapping_df):
     if mapping.empty:
         result["org_name"] = "未分配组织"
         result["dept"] = "未分配部门"
+        missing_anchor = result["anchor"].isin(["", "NONE", "NAN", "<NA>"]) | result["anchor"].isna()
+        result["anchor_display"] = result["anchor"]
+        result.loc[missing_anchor, "anchor_display"] = (
+            "未识别主播｜" + result.loc[missing_anchor, "shop_name"].fillna("未知店铺")
+        )
         return result
 
     result = result.merge(
@@ -119,8 +124,26 @@ def _attach_dimensions(df, mapping_df):
         validate="many_to_one",
         sort=False,
     )
-    result["org_name"] = result["org_name"].fillna("未分配组织")
-    result["dept"] = result["dept"].fillna("未分配部门")
+
+    # 没有主播、主播名称尚未维护时，仍可按店铺确定组织和部门。
+    # 同一店铺存在多条主播映射时，只要组织/部门一致，就能安全兜底。
+    shop_fallback = (
+        mapping.groupby("shop_name", as_index=False)
+        .agg(
+            fallback_org=("org_name", lambda values: values.dropna().iloc[0] if values.dropna().nunique() == 1 else None),
+            fallback_dept=("dept", lambda values: values.dropna().iloc[0] if values.dropna().nunique() == 1 else None),
+        )
+    )
+    result = result.merge(shop_fallback, on="shop_name", how="left", sort=False)
+    result["org_name"] = result["org_name"].fillna(result["fallback_org"]).fillna("未分配组织")
+    result["dept"] = result["dept"].fillna(result["fallback_dept"]).fillna("未分配部门")
+    result = result.drop(columns=["fallback_org", "fallback_dept"])
+
+    missing_anchor = result["anchor"].isin(["", "NONE", "NAN", "<NA>"]) | result["anchor"].isna()
+    result["anchor_display"] = result["anchor"]
+    result.loc[missing_anchor, "anchor_display"] = (
+        "未识别主播｜" + result.loc[missing_anchor, "shop_name"].fillna("未知店铺")
+    )
     return result
 
 # ---------- 核心聚合函数（TTL=60s，跨页面共享缓存） ----------
@@ -429,6 +452,76 @@ def load_product_sales(
         df = apply_data_permission(df)
 
     return df
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _load_product_sales_cube_rpc(start_date, end_date, data_version):
+    """从数据库读取日级商品聚合；RPC 未部署时返回 None 触发兼容降级。"""
+    if supabase is None:
+        return None
+    try:
+        response = supabase.rpc(
+            "get_product_sales_cube",
+            {
+                "p_start_date": start_date.isoformat(),
+                "p_end_date": end_date.isoformat(),
+            },
+        ).execute()
+        rows = response.data or []
+        if not rows:
+            return pd.DataFrame()
+        cube = pd.DataFrame(rows)
+        cube["sale_date"] = pd.to_datetime(cube["sale_date"])
+        for column in ["ship_amount", "return_amount", "net_amount", "order_count"]:
+            cube[column] = pd.to_numeric(cube[column], errors="coerce").fillna(0)
+        return cube
+    except Exception as exc:
+        # 异常不进入 Streamlit 缓存，SQL 部署后无需等待失败缓存过期。
+        raise RuntimeError("商品聚合 RPC 尚不可用") from exc
+
+
+def load_product_sales_cube(start_date, end_date, apply_filter=True):
+    """商品分析专用数据源：优先使用数据库日级聚合，未部署时自动使用旧明细聚合。"""
+    data_version = st.session_state.get("_data_version", 0)
+    try:
+        cube = _load_product_sales_cube_rpc(start_date, end_date, data_version)
+    except RuntimeError:
+        cube = None
+
+    if cube is None:
+        raw = load_product_sales(
+            "_all",
+            apply_filter=False,
+            include_offline=False,
+            start_date=start_date,
+            end_date=end_date,
+        )
+        if raw.empty:
+            return raw
+        if "anchor_display" not in raw.columns:
+            anchor = raw.get("anchor", pd.Series("NONE", index=raw.index)).fillna("NONE").astype(str)
+            missing = anchor.str.upper().isin(["", "NONE", "NAN", "<NA>"])
+            raw["anchor_display"] = anchor
+            raw.loc[missing, "anchor_display"] = (
+                "未识别主播｜" + raw.loc[missing, "shop_name"].fillna("未知店铺").astype(str)
+            )
+        group_columns = [
+            "sale_date", "style_code", "brand", "dept", "org_name",
+            "shop_name", "anchor", "anchor_display",
+        ]
+        cube = raw.groupby(group_columns, dropna=False, as_index=False).agg(
+            ship_amount=("ship_amount", "sum"),
+            return_amount=("return_amount", "sum"),
+            net_amount=("net_amount", "sum"),
+            order_count=("remark", "nunique"),
+        )
+
+    if cube.empty:
+        return cube
+    if apply_filter:
+        from core.utils import apply_data_permission
+        cube = apply_data_permission(cube)
+    return cube
 
 
 @st.cache_data(ttl=600, show_spinner=False)

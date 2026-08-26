@@ -620,6 +620,7 @@ all_pages = {
     "📊 经营驾驶舱": "pages/dashboard.py",
     "📋 每日明细": "pages/daily_detail.py",
     "📦 商品分析": "pages/product_page.py",
+    "🔀 商品销售对比": "pages/product_comparison.py",
     "📊 商品分析助手": "pages/product_assistant.py",   # 新增
     "🎤 主播分析": "pages/anchor.py",
     "📈 销售分布与品牌": "pages/distribution.py",

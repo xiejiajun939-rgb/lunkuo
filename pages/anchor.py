@@ -20,7 +20,7 @@ if "table_suffix" not in st.session_state:
 page_header("主播分析", "对比主播销售贡献、退货表现与商品结构，发现增长抓手", "CREATOR PERFORMANCE", "本月默认")
 use_anchor = st.session_state.table_suffix == "_all"
 dimension_name = "主播" if use_anchor else "店铺"
-dimension_col = "anchor" if use_anchor else "shop_name"
+dimension_col = "anchor_display" if use_anchor else "shop_name"
 
 # 先获取轻量日期边界，默认仅加载数据最新月份
 min_date, max_date = get_sales_date_range("_all")
@@ -50,7 +50,12 @@ if prod_df.empty:
 
 if dimension_col not in prod_df.columns:
     if use_anchor:
-        prod_df["anchor"] = prod_df["remark"].astype(str).apply(extract_anchor)
+        prod_df["anchor"] = prod_df["remark"].astype(str).apply(extract_anchor).fillna("NONE")
+        prod_df["anchor_display"] = prod_df["anchor"]
+        missing_anchor = prod_df["anchor"].astype(str).str.upper().isin(["", "NONE", "NAN", "<NA>"])
+        prod_df.loc[missing_anchor, "anchor_display"] = (
+            "未识别主播｜" + prod_df.loc[missing_anchor, "shop_name"].fillna("未知店铺").astype(str)
+        )
     else:
         if "shop_name" not in prod_df.columns:
             st.error("数据中缺少店铺名称信息，无法进行店铺对比。")

@@ -218,6 +218,27 @@ def show_product_diagnosis(style_code, filtered_df, suffix, start_date, end_date
     category = product_info["categories"] if product_info is not None else "未知"
     coupon = product_info["has_newbie_coupon"] if product_info is not None else False
 
+    master_df = load_product_master()
+    image_url = None
+    if not master_df.empty and "style_code" in master_df.columns:
+        master_df = master_df.copy()
+        master_df["style_code"] = master_df["style_code"].astype(str).str.strip().str.upper()
+        master_row = master_df[master_df["style_code"] == str(style_code).strip().upper()]
+        if not master_row.empty and "image_url" in master_row.columns:
+            image_url = master_row.iloc[-1].get("image_url")
+
+    image_col, product_col = st.columns([1, 3])
+    with image_col:
+        if image_url and pd.notna(image_url):
+            st.image(image_url, use_container_width=True)
+        else:
+            st.info("暂无商品图片，请到商品信息管理补充")
+    with product_col:
+        st.markdown(f"### {style_code}")
+        st.write(f"**品牌：** {brand or '未维护'}")
+        st.write(f"**品类：** {category or '未维护'}")
+        st.write(f"**首单礼金：** {'是' if coupon else '否'}")
+
     col1, col2, col3, col4, col5 = st.columns(5)
     with col1:
         st.metric("净销售额", f"¥{total_net:,.0f}")

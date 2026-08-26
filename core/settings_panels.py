@@ -25,7 +25,7 @@ def render_account_management(supabase, all_pages):
                     supabase.table("sub_accounts").insert({
                         "username": username.strip(), "password": password, "role": "viewer",
                         "default_suffix": "_all", "permissions": {"_all": [
-                            "📊 经营驾驶舱", "📋 每日明细", "📦 商品分析", "📈 销售分布与品牌"
+                            "📊 经营驾驶舱", "📋 每日明细", "📦 商品分析", "🔀 商品销售对比", "📈 销售分布与品牌"
                         ]}, "filter_platform": "all", "filter_shop_names": [],
                     }).execute()
                     st.success("子账号创建成功。")

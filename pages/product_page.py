@@ -8,7 +8,7 @@ import io
 import re
 import numpy as np
 
-from core.db import load_product_sales, load_product_master, get_sales_date_range
+from core.db import load_product_sales_cube, load_product_master, get_sales_date_range
 from core.utils import date_quick_buttons, extract_anchor, clear_cache_on_page_change
 from core.ai import get_ai_summary
 from core.theme import page_header
@@ -391,12 +391,7 @@ end_date = st.session_state.get("prod_end_month", max_date)
 
 # ---------- 加载所选日期范围的数据 ----------
 with st.spinner("加载商品销售数据..."):
-    prod_df = load_product_sales(
-        "_all",
-        include_offline=False,
-        start_date=start_date,
-        end_date=end_date,
-    )
+    prod_df = load_product_sales_cube(start_date, end_date)
 
 if prod_df.empty:
     st.warning("暂无数据，请先上传订单文件。")
@@ -411,50 +406,108 @@ else:
 if st.session_state.table_suffix == "_all" and "anchor" not in prod_df.columns:
     prod_df["anchor"] = prod_df["remark"].astype(str).apply(extract_anchor)
 
+if "anchor_display" not in prod_df.columns:
+    raw_anchor = prod_df.get("anchor", pd.Series("NONE", index=prod_df.index)).fillna("NONE").astype(str)
+    prod_df["anchor_display"] = raw_anchor
+    missing_anchor = raw_anchor.str.upper().isin(["", "NONE", "NAN", "<NA>"])
+    prod_df.loc[missing_anchor, "anchor_display"] = (
+        "未识别主播｜" + prod_df.loc[missing_anchor, "shop_name"].fillna("未知店铺").astype(str)
+    )
+
+dimension_config = {
+    "全部": None,
+    "部门": "dept",
+    "组织": "org_name",
+    "店铺": "shop_name",
+    "主播": "anchor_display",
+}
+
+
+def _has_recognized_anchor(frame):
+    anchor = frame.get("anchor", pd.Series("NONE", index=frame.index)).fillna("NONE").astype(str).str.upper()
+    return ~anchor.isin(["", "NONE", "NAN", "<NA>"])
+
+
+def attach_dynamic_breakdown(frame, level, selected):
+    """生成当前分析条件对应的动态明细对象。"""
+    result = frame.copy()
+    level_field = dimension_config[level]
+
+    # 只选择分析层级、没有指定对象：明细就按当前层级展示。
+    if not selected:
+        if level == "全部":
+            result["_detail_type"] = "店铺"
+            result["_detail_value"] = result["shop_name"]
+        else:
+            result["_detail_type"] = level
+            result["_detail_value"] = result[level_field]
+        return result
+
+    recognized_anchor = _has_recognized_anchor(result)
+
+    if level == "部门":
+        # 常规部门先下探组织；小店运营直接下探店铺。
+        shop_department = result["dept"].astype(str).str.contains("小店运营", case=False, na=False)
+        result["_detail_type"] = np.where(shop_department, "店铺", "组织")
+        result["_detail_value"] = np.where(shop_department, result["shop_name"], result["org_name"])
+    elif level == "组织":
+        # 组织内存在明确主播时看主播，否则看店铺。
+        org_anchor_map = recognized_anchor.groupby(result["org_name"]).any().to_dict()
+        use_anchor = result["org_name"].map(org_anchor_map).fillna(False)
+        result["_detail_type"] = np.where(use_anchor, "主播", "店铺")
+        result["_detail_value"] = np.where(use_anchor, result["anchor_display"], result["shop_name"])
+    elif level == "店铺":
+        # 店铺内有明确主播则继续下探主播；没有则保持店铺明细。
+        shop_anchor_map = recognized_anchor.groupby(result["shop_name"]).any().to_dict()
+        use_anchor = result["shop_name"].map(shop_anchor_map).fillna(False)
+        result["_detail_type"] = np.where(use_anchor, "主播", "店铺")
+        result["_detail_value"] = np.where(use_anchor, result["anchor_display"], result["shop_name"])
+    elif level == "主播":
+        # 指定主播后，以其销售店铺作为下一层明细。
+        result["_detail_type"] = "店铺"
+        result["_detail_value"] = result["shop_name"]
+    else:
+        result["_detail_type"] = "店铺"
+        result["_detail_value"] = result["shop_name"]
+
+    return result
+
 # ---------- 筛选条件（一行4列） ----------
 st.subheader("🔍 筛选条件")
 
-# 第一行：平台、店铺、货号、品牌
+# 第一行：分析层级、分析对象、货号、品牌
 col1, col2, col3, col4 = st.columns(4)
 with col1:
-    platform_options = ["全部", "抖音", "视频号"]
-    selected_platform = st.selectbox("平台", platform_options, key="pf")
+    analysis_level = st.selectbox("分析层级", list(dimension_config), key="product_analysis_level")
 with col2:
-    all_shops = prod_df["shop_name"].unique()
-    if selected_platform == "抖音":
-        shop_opts = [s for s in all_shops if "抖音" in s]
-    elif selected_platform == "视频号":
-        shop_opts = [s for s in all_shops if "视频号" in s]
-    else:
-        shop_opts = list(all_shops)
-    selected_shops = st.multiselect("店铺", sorted(shop_opts), key="sf")
+    level_field = dimension_config[analysis_level]
+    level_options = sorted(prod_df[level_field].dropna().astype(str).unique()) if level_field else []
+    selected_objects = st.multiselect(
+        f"选择{analysis_level}", level_options, key="product_analysis_objects",
+        disabled=level_field is None,
+    )
 with col3:
     style_input = st.text_input("货号（逗号分隔）", placeholder="例如: L262Y050", key="sc")
 with col4:
     brands = ["全部"] + sorted(prod_df["brand"].dropna().unique())
     selected_brand = st.selectbox("品牌", brands, key="bf")
 
-# 第二行：是否首单礼金、主播（条件显示），其余两列留空
+# 第二行：平台、店铺、首单礼金、下钻说明
 col5, col6, col7, col8 = st.columns(4)
 with col5:
-    coupon_filter = st.selectbox("是否首单礼金", ["全部", "仅首单礼金", "非首单礼金"], key="cf")
+    platform_options = ["全部", "抖音", "视频号", "小红书", "天猫", "唯品会"]
+    selected_platform = st.selectbox("平台", platform_options, key="pf")
 with col6:
-    selected_anchors = []
-    if st.session_state.table_suffix == "_all":
-        if "anchor" in prod_df.columns:
-            anchors = sorted(prod_df["anchor"].dropna().unique())
-            if anchors:
-                selected_anchors = st.multiselect("主播", anchors, key="af")
-            else:
-                st.info("未识别到主播信息，请检查备注字段。")
+    all_shops = prod_df["shop_name"].dropna().unique()
+    shop_opts = [s for s in all_shops if selected_platform == "全部" or selected_platform.lower() in str(s).lower()]
+    selected_shops = st.multiselect("店铺", sorted(shop_opts), key="sf")
 with col7:
-    selected_orgs = []
-    if "org_name" in prod_df.columns:
-        orgs = sorted(prod_df["org_name"].dropna().unique())
-        if orgs:
-            selected_orgs = st.multiselect("组织", orgs, key="orgf")
+    coupon_filter = st.selectbox("是否首单礼金", ["全部", "仅首单礼金", "非首单礼金"], key="cf")
 with col8:
-    pass
+    if selected_objects:
+        st.info("已指定对象：明细将按业务归属自动下钻")
+    else:
+        st.info(f"未指定对象：明细按{analysis_level if analysis_level != '全部' else '店铺'}展示")
 
 # ---------- 应用筛选 ----------
 mask = (prod_df["sale_date"] >= pd.to_datetime(start_date)) & (prod_df["sale_date"] <= pd.to_datetime(end_date))
@@ -470,10 +523,8 @@ if style_input.strip():
         filtered = filtered[filtered["style_code"].isin(codes)]
 if selected_brand != "全部":
     filtered = filtered[filtered["brand"] == selected_brand]
-if selected_anchors:
-    filtered = filtered[filtered["anchor"].isin(selected_anchors)]
-if selected_orgs:
-    filtered = filtered[filtered["org_name"].isin(selected_orgs)]
+if level_field and selected_objects:
+    filtered = filtered[filtered[level_field].astype(str).isin(selected_objects)]
 
 # ---------- 过滤线下订单（remark 以 LA、PA、FA 开头） ----------
 if "remark" in filtered.columns:
@@ -494,6 +545,10 @@ elif coupon_filter == "非首单礼金":
 if filtered.empty:
     st.warning("无匹配数据")
     st.stop()
+
+filtered = attach_dynamic_breakdown(filtered, analysis_level, selected_objects)
+detail_types = sorted(filtered["_detail_type"].dropna().unique())
+detail_label = detail_types[0] if len(detail_types) == 1 else "动态归属"
 
 # ---------- 聚合 ----------
 grouped = filtered.groupby("style_code").agg(
@@ -577,9 +632,8 @@ with col_next:
             st.session_state.product_page_num += 1
             st.rerun()
 with col_export:
-    is_all = st.session_state.table_suffix == "_all"
-    detail_label = "明细（货号+主播）" if is_all else "明细（货号+店铺）"
-    export_type = st.radio("导出类型", ["汇总（货号级别）", detail_label], horizontal=True, key="export_type")
+    export_detail_label = f"明细（货号+{detail_label}）"
+    export_type = st.radio("导出类型", ["汇总（货号级别）", export_detail_label], horizontal=True, key="export_type")
     if st.button("📥 下载数据", key="exp"):
         if export_type == "汇总（货号级别）":
             export_df = grouped.copy()
@@ -596,20 +650,13 @@ with col_export:
             sheet_name = "货号汇总"
             file_suffix = "货号汇总"
         else:
-            if is_all:
-                group_col = "anchor"
-                group_name = "主播"
-            else:
-                group_col = "shop_name"
-                group_name = "店铺"
-            if group_col not in filtered.columns:
-                st.error(f"数据中缺少 {group_name} 信息，无法导出明细。")
-                st.stop()
-            detail_agg = filtered.groupby(["style_code", group_col]).agg(
+            group_col = "_detail_value"
+            group_name = "明细对象"
+            detail_agg = filtered.groupby(["style_code", "_detail_type", group_col], dropna=False).agg(
                 明细发货金额=("ship_amount", "sum"),
                 明细退货金额=("return_amount", "sum"),
                 明细净销售金额=("net_amount", "sum")
-            ).reset_index()
+            ).reset_index().rename(columns={"_detail_type": "明细类型"})
             detail_agg["明细退款率"] = np.where(
                 detail_agg["明细发货金额"] != 0,
                 (detail_agg["明细退货金额"] / detail_agg["明细发货金额"] * 100).map("{:.2f}%".format),
@@ -632,7 +679,7 @@ with col_export:
             export_df["是否新人礼金"] = export_df["是否新人礼金"].map({True: "是", False: "否"})
             final_cols = [
                 "货号", "商品分类", "发货金额", "退货金额", "净销售金额", "退款率", "是否新人礼金",
-                group_name, "明细发货金额", "明细退货金额", "明细净销售金额", "明细退款率"
+                "明细类型", group_name, "明细发货金额", "明细退货金额", "明细净销售金额", "明细退款率"
             ]
             export_df = export_df[final_cols]
             sheet_name = f"货号{group_name}明细"
@@ -672,37 +719,21 @@ for idx, row in page_df.iterrows():
         style_code = row["货号"]
         detail_df = filtered[filtered["style_code"] == style_code].copy()
         if not detail_df.empty:
-            suffix = st.session_state.table_suffix
-            def extract_anchor_fn(remark):
-                match = re.search(r'主播[：:]([^_]+)', remark)
-                return match.group(1).strip() if match else None
-            if suffix == "_all":
-                detail_df["anchor"] = detail_df["remark"].apply(extract_anchor_fn)
-                detail_df = detail_df[detail_df["anchor"].notna()]
-                if not detail_df.empty:
-                    shop_detail = detail_df.groupby("anchor").agg(
-                        发货金额=("ship_amount", "sum"),
-                        退货金额=("return_amount", "sum"),
-                        净销售金额=("net_amount", "sum")
-                    ).reset_index().rename(columns={"anchor": "主播"})
-                    shop_detail["退款率"] = shop_detail.apply(
-                        lambda r: f"{(r['退货金额']/r['发货金额']*100):.2f}%" if r['发货金额']!=0 else "-", axis=1
-                    )
-                    detail_type = "anchor"
-                else:
-                    shop_detail = pd.DataFrame()
-                    detail_type = "anchor"
-            else:
-                shop_detail = detail_df.groupby("shop_name").agg(
-                    发货金额=("ship_amount", "sum"),
-                    退货金额=("return_amount", "sum"),
-                    净销售金额=("net_amount", "sum")
-                ).reset_index()
-                shop_detail["退款率"] = shop_detail.apply(
-                    lambda r: f"{(r['退货金额']/r['发货金额']*100):.2f}%" if r['发货金额']!=0 else "-", axis=1
-                )
-                detail_type = "shop"
-            st.session_state.cached_detail_data = {"style_code": style_code, "shop_detail": shop_detail, "type": detail_type}
+            shop_detail = detail_df.groupby(["_detail_type", "_detail_value"], dropna=False).agg(
+                发货金额=("ship_amount", "sum"),
+                退货金额=("return_amount", "sum"),
+                净销售金额=("net_amount", "sum")
+            ).reset_index().rename(columns={"_detail_type": "明细类型", "_detail_value": "明细对象"})
+            shop_detail["退款率"] = shop_detail.apply(
+                lambda r: f"{(r['退货金额']/r['发货金额']*100):.2f}%" if r['发货金额'] != 0 else "-", axis=1
+            )
+            st.session_state.cached_detail_data = {
+                "style_code": style_code,
+                "shop_detail": shop_detail,
+                "detail_label": detail_label,
+                "image_url": row.get("image_url"),
+                "category": row.get("master_category"),
+            }
         else:
             st.session_state.cached_detail_data = None
         st.session_state.show_trend_dialog = False
@@ -717,12 +748,14 @@ for idx, row in page_df.iterrows():
         style_code = row["货号"]
         trend_data = filtered[filtered["style_code"] == style_code].copy()
         if not trend_data.empty:
-            daily = trend_data.groupby("sale_date").agg(
+            trend_data["_detail_series"] = trend_data["_detail_type"].astype(str) + "｜" + trend_data["_detail_value"].astype(str)
+            daily = trend_data.groupby(["sale_date", "_detail_series"], dropna=False).agg(
                 ship_amount=("ship_amount", "sum"),
                 return_amount=("return_amount", "sum"),
                 net_amount=("net_amount", "sum")
             ).reset_index().sort_values("sale_date")
             st.session_state.trend_data = daily
+            st.session_state.trend_dimension = {"field": "_detail_series", "label": detail_label}
         else:
             st.session_state.trend_data = None
         st.session_state.show_dialog = False
@@ -742,13 +775,20 @@ if st.session_state.show_dialog and st.session_state.dialog_style_code:
     def show_style_detail():
         if cached and cached.get("style_code") == style_code:
             shop_detail = cached["shop_detail"]
-            if cached.get("type") == "anchor":
-                st.markdown("#### 主播销售汇总")
-            else:
-                st.markdown("#### 店铺销售汇总")
+            image_col, info_col = st.columns([1, 3])
+            with image_col:
+                if cached.get("image_url") and pd.notna(cached.get("image_url")):
+                    st.image(cached["image_url"], use_container_width=True)
+                else:
+                    st.info("暂无商品图片")
+            with info_col:
+                st.markdown(f"### {style_code}")
+                st.caption(f"商品分类：{cached.get('category') or '未维护'}")
+                st.markdown(f"#### 按{cached.get('detail_label')}查看销售明细")
             if not shop_detail.empty:
                 st.dataframe(shop_detail, column_config={
-                    "主播" if cached.get("type") == "anchor" else "shop_name": st.column_config.TextColumn("主播" if cached.get("type") == "anchor" else "店铺"),
+                    "明细类型": st.column_config.TextColumn("明细类型"),
+                    "明细对象": st.column_config.TextColumn("明细对象"),
                     "发货金额": st.column_config.NumberColumn("发货金额(¥)", format="%.2f"),
                     "退货金额": st.column_config.NumberColumn("退货金额(¥)", format="%.2f"),
                     "净销售金额": st.column_config.NumberColumn("净销售金额(¥)", format="%.2f"),
@@ -779,13 +819,22 @@ if st.session_state.show_trend_dialog and st.session_state.trend_style_code:
             show_ship = st.checkbox("显示发货金额", value=True, key="trend_ship")
             show_return = st.checkbox("显示退货金额", value=True, key="trend_return")
             show_net = st.checkbox("显示净销售金额", value=True, key="trend_net")
+            trend_dimension = st.session_state.get("trend_dimension", {"field": None, "label": "明细"})
+            dimension_field = trend_dimension.get("field")
+            split_lines = st.checkbox(f"按{trend_dimension.get('label')}拆分趋势", value=True, key="trend_split")
             lines = []
-            if show_ship and "ship_amount" in daily.columns:
-                lines.append(go.Scatter(x=daily["sale_date"], y=daily["ship_amount"], name="发货金额", mode="lines+markers"))
-            if show_return and "return_amount" in daily.columns:
-                lines.append(go.Scatter(x=daily["sale_date"], y=daily["return_amount"], name="退货金额", mode="lines+markers"))
-            if show_net and "net_amount" in daily.columns:
-                lines.append(go.Scatter(x=daily["sale_date"], y=daily["net_amount"], name="净销售金额", mode="lines+markers"))
+            if split_lines and dimension_field in daily.columns:
+                for dimension_value, dimension_df in daily.groupby(dimension_field, dropna=False):
+                    if show_net:
+                        lines.append(go.Scatter(x=dimension_df["sale_date"], y=dimension_df["net_amount"], name=f"{dimension_value}·净销售", mode="lines+markers"))
+            else:
+                total_daily = daily.groupby("sale_date", as_index=False)[["ship_amount", "return_amount", "net_amount"]].sum()
+                if show_ship:
+                    lines.append(go.Scatter(x=total_daily["sale_date"], y=total_daily["ship_amount"], name="发货金额", mode="lines+markers"))
+                if show_return:
+                    lines.append(go.Scatter(x=total_daily["sale_date"], y=total_daily["return_amount"], name="退货金额", mode="lines+markers"))
+                if show_net:
+                    lines.append(go.Scatter(x=total_daily["sale_date"], y=total_daily["net_amount"], name="净销售金额", mode="lines+markers"))
             if not lines:
                 st.info("请至少勾选一项")
             else:
