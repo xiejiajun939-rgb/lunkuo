@@ -100,6 +100,13 @@ group by
     coalesce(exact_map.dept, fallback.dept, '未分配部门'),
     coalesce(exact_map.org_name, fallback.org_name, '未分配组织'),
     s.shop_name,
+    s.anchor
+order by
+    s.sale_date,
+    s.style_code,
+    coalesce(exact_map.dept, fallback.dept, '未分配部门'),
+    coalesce(exact_map.org_name, fallback.org_name, '未分配组织'),
+    s.shop_name,
     s.anchor;
 $$;
 

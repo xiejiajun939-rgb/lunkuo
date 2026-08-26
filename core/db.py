@@ -460,14 +460,27 @@ def _load_product_sales_cube_rpc(start_date, end_date, data_version):
     if supabase is None:
         return None
     try:
-        response = supabase.rpc(
-            "get_product_sales_cube",
-            {
-                "p_start_date": start_date.isoformat(),
-                "p_end_date": end_date.isoformat(),
-            },
-        ).execute()
-        rows = response.data or []
+        # PostgREST/Supabase 单次最多返回 1000 行，月份数据必须显式分页，
+        # 否则会出现“本月商品反而少于近 7 天”的截断现象。
+        rows = []
+        page = 0
+        while True:
+            response = (
+                supabase.rpc(
+                    "get_product_sales_cube",
+                    {
+                        "p_start_date": start_date.isoformat(),
+                        "p_end_date": end_date.isoformat(),
+                    },
+                )
+                .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1)
+                .execute()
+            )
+            page_rows = response.data or []
+            rows.extend(page_rows)
+            if len(page_rows) < PAGE_SIZE:
+                break
+            page += 1
         if not rows:
             return pd.DataFrame()
         cube = pd.DataFrame(rows)
