@@ -7,7 +7,16 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-from core.db import get_sales_date_range, load_product_master, load_product_sales_cube
+from core.db import get_sales_date_range, load_product_master, load_product_sales
+try:
+    from core.db import load_product_sales_cube
+except ImportError:
+    # 兼容 Streamlit Cloud 在滚动部署过程中短暂缓存旧版 core.db。
+    def load_product_sales_cube(start_date, end_date, apply_filter=True):
+        return load_product_sales(
+            "_all", apply_filter=apply_filter, include_offline=False,
+            start_date=start_date, end_date=end_date,
+        )
 from core.theme import page_header
 from core.utils import clear_cache_on_page_change, date_quick_buttons
 

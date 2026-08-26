@@ -8,7 +8,16 @@ import io
 import re
 import numpy as np
 
-from core.db import load_product_sales_cube, load_product_master, get_sales_date_range
+from core.db import load_product_sales, load_product_master, get_sales_date_range
+try:
+    from core.db import load_product_sales_cube
+except ImportError:
+    # Streamlit Cloud 热更新时可能暂时保留旧版 core.db 模块，兼容到下次进程重启。
+    def load_product_sales_cube(start_date, end_date, apply_filter=True):
+        return load_product_sales(
+            "_all", apply_filter=apply_filter, include_offline=False,
+            start_date=start_date, end_date=end_date,
+        )
 from core.utils import date_quick_buttons, extract_anchor, clear_cache_on_page_change
 from core.ai import get_ai_summary
 from core.theme import page_header
