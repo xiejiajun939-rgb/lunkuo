@@ -22,6 +22,7 @@ except ImportError:
 from core.utils import date_quick_buttons, extract_anchor, clear_cache_on_page_change
 from core.ai import get_ai_summary
 from core.theme import page_header
+from core.selection_cart import add_to_selection_cart, get_selection_cart
 
 st.markdown("""
 <style>
@@ -573,11 +574,16 @@ grouped = filtered.groupby("style_code").agg(
 
 # 补充图片、分类、礼金信息
 if not master_df.empty and "style_code" in master_df.columns:
-    master_df = master_df.drop_duplicates("style_code", keep="first")
+    # 商品管理/导出页以最后维护的档案为准；前台保持同一口径，避免重复货号
+    # 时读取到旧分类。货号和分类同时做纯文本清洗，防止空格/类型差异导致错配。
+    master_df["style_code"] = master_df["style_code"].fillna("").astype(str).str.strip().str.upper()
+    master_df["category"] = master_df["category"].fillna("").astype(str).str.strip()
+    master_df = master_df[master_df["style_code"] != ""].drop_duplicates("style_code", keep="last")
+    grouped["货号"] = grouped["货号"].fillna("").astype(str).str.strip().str.upper()
     img_map = master_df.set_index("style_code")["image_url"].to_dict()
     cat_map = master_df.set_index("style_code")["category"].to_dict()
     grouped["image_url"] = grouped["货号"].map(img_map)
-    grouped["master_category"] = grouped["货号"].map(cat_map)
+    grouped["master_category"] = grouped["货号"].map(cat_map).replace("", None)
     grouped["product_tags"] = grouped["货号"].map(tag_map).map(normalize_product_tags)
 else:
     grouped["image_url"] = None
@@ -711,19 +717,21 @@ with col_export:
         )
 
 # ---------- 显示表格 ----------
-cols = st.columns([2, 0.5, 1.5, 1.2, 1.2, 1.2, 1, 1, 0.8, 0.8])
-headers = ["货号", "图片", "商品分类", "发货金额(¥)", "退货金额(¥)", "净销售金额(¥)", "退款率", "商品标签", "详情", "趋势"]
+cols = st.columns([1.7, 0.5, 1.3, 1.1, 1.1, 1.1, 0.9, 0.7, 0.65, 0.65, 0.7])
+headers = ["货号", "图片", "商品分类", "发货金额(¥)", "退货金额(¥)", "净销售金额(¥)", "退款率", "商品标签", "详情", "趋势", "选品"]
 for c, h in zip(cols, headers):
     c.markdown(f"**{h}**")
 
 for idx, row in page_df.iterrows():
-    c1, c2, c3, c4, c5, c6, c7, c8, c9, c10 = st.columns([2, 0.5, 1.5, 1.2, 1.2, 1.2, 1, 1, 0.8, 0.8])
+    c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11 = st.columns([1.7, 0.5, 1.3, 1.1, 1.1, 1.1, 0.9, 0.7, 0.65, 0.65, 0.7])
     c1.write(row["货号"])
     if row.get("image_url") and pd.notna(row["image_url"]):
         c2.image(row["image_url"], width=50)
     else:
         c2.write("-")
-    c3.write(row["master_category"] if pd.notna(row["master_category"]) else "-")
+    # 分类是普通文本，不交给 st.write 做富文本类型推断，避免中文短文本异常渲染。
+    category_text = str(row["master_category"]).strip() if pd.notna(row["master_category"]) else "-"
+    c3.text(category_text or "-")
     c4.write(f"{row['发货金额']:,.2f}")
     c5.write(f"{row['退货金额']:,.2f}")
     c6.write(f"{row['净销售金额']:,.2f}")
@@ -780,6 +788,11 @@ for idx, row in page_df.iterrows():
         st.session_state.show_trend_dialog = True
         st.session_state.trend_clicked = True
         st.rerun()
+    in_cart = row["货号"] in get_selection_cart()
+    if c11.button("✓" if in_cart else "＋", key=f"selection_add_{row['货号']}_{idx}", disabled=in_cart):
+        if add_to_selection_cart(row["货号"], "商品分析"):
+            st.toast(f"已将 {row['货号']} 加入主播选品车")
+            st.rerun()
 
 # ---------- 详情对话框 ----------
 if st.session_state.show_dialog and st.session_state.dialog_style_code:
