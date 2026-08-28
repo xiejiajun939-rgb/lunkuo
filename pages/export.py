@@ -96,6 +96,13 @@ def _upsert_records(records):
 
 callbacks = st.session_state.get("_admin_callbacks", {})
 
+
+def _refresh_sales_style_audit():
+    """Only scan sold style codes after an explicit user action."""
+    with st.spinner("正在核对销售数据中的商品货号..."):
+        st.session_state.product_master_sold_styles = load_sold_style_codes("_all")
+
+
 page_header("商品信息管理", "维护商品档案、自定义标签与批量导入导出", "PRODUCT MASTER DATA", "管理员")
 tab_manage, tab_upload, tab_tags, tab_export = st.tabs([
     "🔎 查询与维护", "📤 批量上传", "🏷️ 商品标签", "📥 数据导出"
@@ -114,21 +121,39 @@ master_df["tags"] = [
     )
 ]
 
-with st.spinner("正在核对销售数据中的商品货号..."):
-    sold_styles_df = load_sold_style_codes("_all")
-
-# 以销售数据货号为完整性检查基准，同时保留尚未产生销售的人工商品档案。
-catalog_df = sold_styles_df.merge(master_df, on="style_code", how="outer")
+sold_styles_df = st.session_state.get("product_master_sold_styles")
+audit_loaded = isinstance(sold_styles_df, pd.DataFrame)
+if audit_loaded:
+    # 仅在用户主动核对后，才把销售货号与商品档案合并。
+    catalog_df = sold_styles_df.merge(master_df, on="style_code", how="outer")
+else:
+    sold_styles_df = pd.DataFrame(columns=["style_code"])
+    catalog_df = master_df.copy()
 catalog_df["tags"] = catalog_df["tags"].fillna("")
 
 with tab_manage:
+    audit_action, audit_note = st.columns([1, 3])
+    with audit_action:
+        if st.button(
+            "🔄 重新核对销售货号" if audit_loaded else "🔍 核对销售未建档商品",
+            key="refresh_product_sales_audit",
+            width="stretch",
+        ):
+            _refresh_sales_style_audit()
+            st.rerun()
+    with audit_note:
+        if audit_loaded:
+            st.caption(f"本次会话已核对 {len(sold_styles_df):,} 个销售货号；页面操作不会重复扫描。")
+        else:
+            st.caption("默认只加载商品库，不扫描历史销售。需要检查未建档商品时再点击左侧按钮。")
+
     total_count = len(catalog_df)
-    missing_record_count = int(catalog_df["id"].isna().sum()) if total_count else 0
+    missing_record_count = int(catalog_df["id"].isna().sum()) if total_count and audit_loaded else 0
     missing_image_count = int(_is_missing(catalog_df["image_url"]).sum()) if total_count else 0
     missing_category_count = int(_is_missing(catalog_df["category"]).sum()) if total_count else 0
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("销售出现货号", f"{len(sold_styles_df):,}")
-    c2.metric("尚未建立档案", f"{missing_record_count:,}")
+    c1.metric("商品库档案", f"{len(master_df):,}")
+    c2.metric("尚未建立档案", f"{missing_record_count:,}" if audit_loaded else "未核对")
     c3.metric("缺少图片", f"{missing_image_count:,}")
     c4.metric("缺少品类", f"{missing_category_count:,}")
 
@@ -146,8 +171,11 @@ with tab_manage:
             })
             selected_tags = st.multiselect("筛选标签", all_tags, key="master_tags")
         with col_missing:
+            missing_filter_options = ["缺少图片", "缺少品类", "任意资料缺失"]
+            if audit_loaded:
+                missing_filter_options.insert(0, "尚未建立商品档案")
             missing_filters = st.multiselect(
-                "缺失资料筛选", ["尚未建立商品档案", "缺少图片", "缺少品类", "任意资料缺失"],
+                "缺失资料筛选", missing_filter_options,
                 key="master_missing_filters",
             )
 
@@ -234,7 +262,10 @@ with tab_manage:
 with tab_upload:
     st.markdown("### 批量上传商品信息")
     st.caption("支持 Excel/CSV；同货号会更新，新货号会新增，并识别常用中英文列名。")
-    unregistered_template = catalog_df[catalog_df["id"].isna()][["style_code"]].copy()
+    if audit_loaded:
+        unregistered_template = catalog_df[catalog_df["id"].isna()][["style_code"]].copy()
+    else:
+        unregistered_template = pd.DataFrame(columns=["style_code"])
     unregistered_template["image_url"] = ""
     unregistered_template["category"] = ""
     unregistered_template["tags"] = ""
@@ -254,14 +285,18 @@ with tab_upload:
         template.to_excel(writer, index=False, sheet_name="商品信息")
     download_pending, download_blank = st.columns(2)
     with download_pending:
-        st.download_button(
-            f"📋 下载待维护商品模板（{len(unregistered_template):,} 条）",
-            pending_buffer.getvalue(),
-            file_name=f"待维护商品_{date.today().strftime('%Y%m%d')}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            type="primary",
-            width="stretch",
-        )
+        if audit_loaded:
+            st.download_button(
+                f"📋 下载待维护商品模板（{len(unregistered_template):,} 条）",
+                pending_buffer.getvalue(),
+                file_name=f"待维护商品_{date.today().strftime('%Y%m%d')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                type="primary",
+                width="stretch",
+            )
+        elif st.button("🔍 先核对并生成待维护模板", key="audit_for_template", width="stretch"):
+            _refresh_sales_style_audit()
+            st.rerun()
     with download_blank:
         st.download_button(
             "📄 下载空白上传模板", template_buffer.getvalue(), file_name="product_master_upload_template.xlsx",
