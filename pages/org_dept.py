@@ -28,6 +28,40 @@ if st.session_state.get("table_suffix") != "_all":
     st.warning("该页面仅支持“全部数据”源，请切换数据源后重试。")
     st.stop()
 
+# 默认聚焦小店运营组，仍可随时切换查看全部组织。
+st.markdown("#### 🎯 数据范围")
+analysis_scope = st.radio(
+    "选择分析范围",
+    options=["小店运营组", "全部组织"],
+    index=0,
+    horizontal=True,
+    key="org_dept_analysis_scope_v2",
+)
+st.caption(
+    "当前默认展示小店运营组；切换到“全部组织”可查看营销中心整体数据。"
+    if analysis_scope == "小店运营组"
+    else "当前展示全部组织数据。"
+)
+
+
+def filter_analysis_scope(df):
+    """将页面各模块统一限制到当前选择的数据范围。"""
+    if df is None or df.empty or analysis_scope == "全部组织":
+        return df
+
+    mask = pd.Series(False, index=df.index)
+    if "dept" in df.columns:
+        mask |= df["dept"].fillna("").astype(str).str.strip().eq("小店运营")
+    if "org_name" in df.columns:
+        mask |= df["org_name"].fillna("").astype(str).str.strip().eq("小店运营组")
+    return df.loc[mask].copy()
+
+
+def fetch_scoped_sales_summary(start_date, end_date, suffix="_all", view_mode="all"):
+    """统一的数据入口，避免指标、趋势和明细出现筛选口径不一致。"""
+    df = fetch_complete_sales_summary(start_date, end_date, suffix, view_mode=view_mode)
+    return filter_analysis_scope(df)
+
 # ---------- 辅助函数 ----------
 @st.cache_data(ttl=10)
 def get_date_range(suffix):
@@ -73,6 +107,9 @@ def get_date_range(suffix):
 # ---------- 加载所有部门（从mapping表） ----------
 def load_all_depts():
     """从mapping表中提取所有唯一的部门名称，并确保包含'未分配部门'"""
+    if analysis_scope == "小店运营组":
+        return ["小店运营"]
+
     mapping_df = load_dimension_mapping()
     if mapping_df.empty:
         return ['未分配部门']
@@ -90,7 +127,7 @@ def get_dept_summary_with_all(start_date, end_date, suffix="_all"):
     部门数据为该部门下所有组织的业绩汇总
     """
     all_depts = load_all_depts()
-    df_data = fetch_complete_sales_summary(start_date, end_date, suffix, view_mode="all")
+    df_data = fetch_scoped_sales_summary(start_date, end_date, suffix, view_mode="all")
     if not df_data.empty:
         dept_actual = df_data.groupby('dept').agg({
             'total_ship': 'sum',
@@ -131,11 +168,13 @@ month_start = latest_date.replace(day=1)
 
 suffix = "_all"
 org_targets = load_org_targets("_all")
+if analysis_scope == "小店运营组":
+    org_targets = {"小店运营组": org_targets.get("小店运营组", 0)}
 total_target = sum(org_targets.values()) if org_targets else 0
 
 with st.spinner("加载 KPI 数据..."):
-    df_today = fetch_complete_sales_summary(latest_date, latest_date, suffix, view_mode="all")
-    df_mtd = fetch_complete_sales_summary(month_start, latest_date, suffix, view_mode="all")
+    df_today = fetch_scoped_sales_summary(latest_date, latest_date, suffix, view_mode="all")
+    df_mtd = fetch_scoped_sales_summary(month_start, latest_date, suffix, view_mode="all")
 
 if df_today.empty:
     st.info(f"📌 提示：{latest_date} 无销售数据，显示月累计数据。")
@@ -198,8 +237,8 @@ prev_period_start = base_date - timedelta(days=13)
 prev_period_end = base_date - timedelta(days=7)
 
 with st.spinner("加载趋势数据..."):
-    df_7d = fetch_complete_sales_summary(period_start, base_date, suffix, view_mode="all")
-    df_prev = fetch_complete_sales_summary(prev_period_start, prev_period_end, suffix, view_mode="all")
+    df_7d = fetch_scoped_sales_summary(period_start, base_date, suffix, view_mode="all")
+    df_prev = fetch_scoped_sales_summary(prev_period_start, prev_period_end, suffix, view_mode="all")
 
 st.markdown("##### 汇总统计")
 if not df_7d.empty and 'total_net' in df_7d.columns:
@@ -278,7 +317,7 @@ else:
     period_label = f"月累计（{base_date.strftime('%Y-%m')}）"
 
 with st.spinner(f"加载 {period_label} 数据..."):
-    df_period_main = fetch_complete_sales_summary(start_date, end_date, suffix, view_mode="all")
+    df_period_main = fetch_scoped_sales_summary(start_date, end_date, suffix, view_mode="all")
 
 if not df_period_main.empty:
     # 数据概览（包含组织与部门映射）
@@ -423,7 +462,7 @@ else:
     period_label_r = f"月累计（{base_date.strftime('%Y-%m')}）"
 
 with st.spinner(f"加载退货率数据（{period_label_r}）..."):
-    df_return = fetch_complete_sales_summary(start_date_r, end_date_r, suffix, view_mode="all")
+    df_return = fetch_scoped_sales_summary(start_date_r, end_date_r, suffix, view_mode="all")
 
 if not df_return.empty:
     dept_summary_full = get_dept_summary_with_all(start_date_r, end_date_r, suffix)
@@ -480,7 +519,7 @@ else:
     period_label_p = f"月累计（{base_date.strftime('%Y-%m')}）"
 
 with st.spinner(f"加载透视数据（{period_label_p}）..."):
-    df_pivot = fetch_complete_sales_summary(start_date_p, end_date_p, suffix, view_mode="all")
+    df_pivot = fetch_scoped_sales_summary(start_date_p, end_date_p, suffix, view_mode="all")
 
 if not df_pivot.empty:
     def classify_platform(shop_name):
