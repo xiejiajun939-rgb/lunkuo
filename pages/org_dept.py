@@ -13,7 +13,7 @@ import plotly.graph_objects as go
 import io
 import time
 
-from core.db import init_supabase, get_table_name, fetch_sales_summary, load_org_targets, fetch_complete_sales_summary, load_dimension_mapping
+from core.db import init_supabase, get_table_name, fetch_sales_summary, load_org_targets, load_targets, fetch_complete_sales_summary, load_dimension_mapping
 from core.ai import get_ai_summary
 from core.utils import clear_cache_on_page_change
 from core.theme import page_header
@@ -40,11 +40,29 @@ analysis_scope = st.radio(
 is_small_shop_scope = analysis_scope == "小店运营组"
 breakdown_field = "shop_name" if is_small_shop_scope else "dept"
 breakdown_label = "店铺" if is_small_shop_scope else "部门"
+shop_targets = {}
+if is_small_shop_scope:
+    all_shop_targets = load_targets("_all")
+    scope_mapping = load_dimension_mapping()
+    if not scope_mapping.empty and "shop_name" in scope_mapping.columns:
+        scope_mask = pd.Series(False, index=scope_mapping.index)
+        if "dept" in scope_mapping.columns:
+            scope_mask |= scope_mapping["dept"].fillna("").astype(str).str.strip().eq("小店运营")
+        if "org_name" in scope_mapping.columns:
+            scope_mask |= scope_mapping["org_name"].fillna("").astype(str).str.strip().eq("小店运营组")
+        small_shop_names = set(scope_mapping.loc[scope_mask, "shop_name"].dropna().astype(str).str.strip())
+        shop_targets = {
+            str(shop_name).strip(): float(target or 0)
+            for shop_name, target in all_shop_targets.items()
+            if str(shop_name).strip() in small_shop_names
+        }
 st.caption(
     "当前默认展示小店运营组；切换到“全部组织”可查看营销中心整体数据。"
     if analysis_scope == "小店运营组"
     else "当前展示全部组织数据。"
 )
+if is_small_shop_scope:
+    st.caption("店铺目标读取自：系统设置 → 数据工具 → 目标文件 → 店铺目标。")
 
 
 def filter_analysis_scope(df):
@@ -76,6 +94,19 @@ def get_breakdown_summary(df):
         total_net=("total_net", "sum"),
     ).reset_index()
     result[breakdown_field] = result[breakdown_field].fillna(f"未分配{breakdown_label}")
+    if is_small_shop_scope:
+        # 保留已设置目标但本期没有销售的店铺，完成率应明确显示为 0%。
+        target_shops = pd.DataFrame({"shop_name": list(shop_targets.keys())})
+        if not target_shops.empty:
+            result = target_shops.merge(result, on="shop_name", how="outer")
+            for amount_col in ["total_ship", "total_return", "total_net"]:
+                result[amount_col] = result[amount_col].fillna(0)
+        result["target_amount"] = result["shop_name"].map(shop_targets).fillna(0)
+        result["completion_rate"] = result.apply(
+            lambda row: row["total_net"] / row["target_amount"] if row["target_amount"] > 0 else 0,
+            axis=1,
+        )
+        result["target_gap"] = result["total_net"] - result["target_amount"]
     return result.sort_values("total_net", ascending=False)
 
 # ---------- 辅助函数 ----------
@@ -184,9 +215,10 @@ month_start = latest_date.replace(day=1)
 
 suffix = "_all"
 org_targets = load_org_targets("_all")
-if analysis_scope == "小店运营组":
-    org_targets = {"小店运营组": org_targets.get("小店运营组", 0)}
-total_target = sum(org_targets.values()) if org_targets else 0
+if is_small_shop_scope:
+    total_target = sum(float(value or 0) for value in shop_targets.values())
+else:
+    total_target = sum(org_targets.values()) if org_targets else 0
 
 with st.spinner("加载 KPI 数据..."):
     df_today = fetch_scoped_sales_summary(latest_date, latest_date, suffix, view_mode="all")
@@ -343,9 +375,15 @@ if not df_period_main.empty:
             shop_summary["净额"] = shop_summary["total_net"].apply(lambda x: f"¥{x:,.2f}")
             shop_summary["发货额"] = shop_summary["total_ship"].apply(lambda x: f"¥{x:,.2f}")
             shop_summary["退货额"] = shop_summary["total_return"].apply(lambda x: f"¥{x:,.2f}")
+            shop_summary["店铺目标"] = shop_summary["target_amount"].apply(lambda x: f"¥{x:,.2f}" if x > 0 else "未设置")
+            shop_summary["目标差额"] = shop_summary["target_gap"].apply(lambda x: f"¥{x:,.2f}")
+            shop_summary["完成率"] = shop_summary.apply(
+                lambda row: f"{row['completion_rate']:.1%}" if row["target_amount"] > 0 else "—",
+                axis=1,
+            )
             st.write(f"共识别到 **{len(shop_summary)}** 个店铺")
             st.dataframe(
-                shop_summary[["shop_name", "净额", "发货额", "退货额"]],
+                shop_summary[["shop_name", "店铺目标", "净额", "完成率", "目标差额", "发货额", "退货额"]],
                 hide_index=True,
                 use_container_width=True,
                 column_config={"shop_name": "店铺"},
@@ -456,19 +494,49 @@ if not df_period_main.empty:
         dept_agg = dept_summary_full[dept_summary_full['total_net'] != 0].copy()
         if not dept_agg.empty:
             top10 = dept_agg.head(10)
-            fig_dept = px.bar(top10, x='total_net', y=breakdown_field, orientation='h',
-                              title=f'{breakdown_label}净销售额排行（TOP10，{period_label}）',
-                              labels={'total_net': '净销售额', breakdown_field: breakdown_label},
-                              color='total_net', color_continuous_scale='Blues')
-            fig_dept.update_layout(yaxis={'categoryorder': 'total ascending'})
-            st.plotly_chart(fig_dept, use_container_width=True)
+            if is_small_shop_scope:
+                target_top10 = dept_summary_full[dept_summary_full["target_amount"] > 0].sort_values(
+                    "completion_rate", ascending=False
+                ).head(10)
+                if target_top10.empty:
+                    fig_dept = None
+                    st.info("尚未设置小店运营组的店铺目标，请先到系统设置中维护店铺目标。")
+                else:
+                    fig_dept = px.bar(
+                        target_top10,
+                        x="completion_rate",
+                        y="shop_name",
+                        orientation="h",
+                        title=f"店铺目标完成率（TOP10，{period_label}）",
+                        labels={"completion_rate": "目标完成率", "shop_name": "店铺"},
+                        color="completion_rate",
+                        color_continuous_scale="Blues",
+                    )
+                    fig_dept.update_xaxes(tickformat=".0%")
+                    fig_dept.add_vline(x=1, line_dash="dash", line_color="#ef4444", annotation_text="目标线 100%")
+            else:
+                fig_dept = px.bar(top10, x='total_net', y=breakdown_field, orientation='h',
+                                  title=f'{breakdown_label}净销售额排行（TOP10，{period_label}）',
+                                  labels={'total_net': '净销售额', breakdown_field: breakdown_label},
+                                  color='total_net', color_continuous_scale='Blues')
+            if fig_dept is not None:
+                fig_dept.update_layout(yaxis={'categoryorder': 'total ascending'})
+                st.plotly_chart(fig_dept, use_container_width=True)
             
             st.markdown(f"**{breakdown_label}排行（完整）**" if is_small_shop_scope else "**部门排行（完整，含无数据部门）**")
             dept_display = dept_summary_full.copy()
             dept_display['净额'] = dept_display['total_net'].apply(lambda x: f"¥{x:,.2f}")
             dept_display['发货额'] = dept_display['total_ship'].apply(lambda x: f"¥{x:,.2f}")
             dept_display['退货额'] = dept_display['total_return'].apply(lambda x: f"¥{x:,.2f}")
-            st.dataframe(dept_display[[breakdown_field, '净额', '发货额', '退货额']],
+            display_fields = [breakdown_field, '净额', '发货额', '退货额']
+            if is_small_shop_scope:
+                dept_display['店铺目标'] = dept_display['target_amount'].apply(lambda x: f"¥{x:,.2f}" if x > 0 else "未设置")
+                dept_display['完成率'] = dept_display.apply(
+                    lambda row: f"{row['completion_rate']:.1%}" if row['target_amount'] > 0 else "—", axis=1
+                )
+                dept_display['目标差额'] = dept_display['target_gap'].apply(lambda x: f"¥{x:,.2f}")
+                display_fields = [breakdown_field, '店铺目标', '净额', '完成率', '目标差额', '发货额', '退货额']
+            st.dataframe(dept_display[display_fields],
                          hide_index=True, use_container_width=True,
                          column_config={breakdown_field: breakdown_label})
         else:
@@ -675,6 +743,10 @@ if not dept_summary_full.empty:
     dept_summary_full['退货额'] = dept_summary_full['total_return'].apply(lambda x: f"¥{x:,.2f}")
     dept_summary_full['净额'] = dept_summary_full['total_net'].apply(lambda x: f"¥{x:,.2f}")
     dept_summary_full['净额排名'] = dept_summary_full['total_net'].rank(ascending=False, method='min').astype(int)
+    if is_small_shop_scope:
+        dept_summary_full['店铺目标'] = dept_summary_full['target_amount']
+        dept_summary_full['完成率'] = dept_summary_full['completion_rate']
+        dept_summary_full['目标差额'] = dept_summary_full['target_gap']
     
     st.markdown(f"**📊 {breakdown_label}明细汇总表（{period_label_detail}）**")
     total_depts = len(dept_summary_full)
@@ -682,6 +754,8 @@ if not dept_summary_full.empty:
     st.caption(f"共 {total_depts} 个{breakdown_label}，其中 {depts_with_data} 个有销售数据，{total_depts - depts_with_data} 个无数据")
     
     display_cols = ['净额排名', breakdown_field, '净额', '发货额', '退货额', '退货率显示']
+    if is_small_shop_scope:
+        display_cols = ['净额排名', breakdown_field, '店铺目标', '净额', '完成率', '目标差额', '发货额', '退货额', '退货率显示']
     st.dataframe(
         dept_summary_full[display_cols].sort_values('净额排名'),
         hide_index=True,
@@ -689,6 +763,9 @@ if not dept_summary_full.empty:
         column_config={
             "净额排名": st.column_config.NumberColumn("排名", width="small"),
             breakdown_field: st.column_config.TextColumn(breakdown_label, width="medium"),
+            "店铺目标": st.column_config.NumberColumn("店铺目标", format="¥%.2f", width="medium"),
+            "完成率": st.column_config.ProgressColumn("完成率", min_value=0, max_value=1, format="percent"),
+            "目标差额": st.column_config.NumberColumn("目标差额", format="¥%.2f", width="medium"),
             "净额": st.column_config.TextColumn("净销售额", width="medium"),
             "发货额": st.column_config.TextColumn("发货额", width="medium"),
             "退货额": st.column_config.TextColumn("退货额", width="medium"),
@@ -705,6 +782,9 @@ if not dept_summary_full.empty:
     st.markdown(f"#### 📥 导出{breakdown_label}明细数据")
     
     col_export1, col_export2, col_export3 = st.columns(3)
+    export_field_options = [breakdown_field, 'total_ship', 'total_return', 'total_net', '退货率']
+    if is_small_shop_scope:
+        export_field_options = [breakdown_field, 'target_amount', 'total_ship', 'total_return', 'total_net', 'completion_rate', 'target_gap', '退货率']
     with col_export1:
         export_format = st.selectbox(
             "选择导出格式",
@@ -714,8 +794,8 @@ if not dept_summary_full.empty:
     with col_export2:
         export_cols = st.multiselect(
             "选择要导出的列",
-            options=[breakdown_field, 'total_ship', 'total_return', 'total_net', '退货率'],
-            default=[breakdown_field, 'total_ship', 'total_return', 'total_net', '退货率'],
+            options=export_field_options,
+            default=export_field_options,
             key="export_cols_select"
         )
     with col_export3:
@@ -730,6 +810,12 @@ if not dept_summary_full.empty:
             'total_net': '净销售额',
             '退货率': '退货率(%)'
         }
+        if is_small_shop_scope:
+            export_cols_mapping.update({
+                'target_amount': '店铺目标',
+                'completion_rate': '目标完成率',
+                'target_gap': '目标差额',
+            })
         selected_export_cols = [col for col in export_cols if col in export_cols_mapping]
         if not selected_export_cols:
             selected_export_cols = list(export_cols_mapping.keys())
@@ -740,8 +826,12 @@ if not dept_summary_full.empty:
         if include_summary:
             summary_row = {}
             for col in export_df.columns:
-                if col in ['发货额', '退货额', '净销售额']:
+                if col in ['店铺目标', '发货额', '退货额', '净销售额', '目标差额']:
                     summary_row[col] = export_df[col].sum()
+                elif col == '目标完成率':
+                    target_amount = export_df['店铺目标'].sum() if '店铺目标' in export_df.columns else 0
+                    net_amount = export_df['净销售额'].sum() if '净销售额' in export_df.columns else 0
+                    summary_row[col] = net_amount / target_amount if target_amount > 0 else 0
                 elif col == '退货率(%)':
                     total_ship = export_df['发货额'].sum() if '发货额' in export_df.columns else 0
                     total_return = export_df['退货额'].sum() if '退货额' in export_df.columns else 0
