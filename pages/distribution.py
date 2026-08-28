@@ -46,37 +46,50 @@ date_quick_buttons("dist_start_v2", "dist_end_v2",
 start_date = st.session_state.get("dist_start_v2", min_date)
 end_date = st.session_state.get("dist_end_v2", max_date)
 
-col_platform, col_shop = st.columns(2)
+scope_mask = pd.Series(False, index=prod_df.index)
+if "dept" in prod_df.columns:
+    scope_mask |= prod_df["dept"].fillna("").astype(str).str.contains("小店运营", case=False, na=False)
+if "org_name" in prod_df.columns:
+    scope_mask |= prod_df["org_name"].fillna("").astype(str).str.contains("小店运营", case=False, na=False)
+has_small_shop_data = bool(scope_mask.any())
+
+col_scope, col_platform, col_shop = st.columns(3)
+with col_scope:
+    scope_options = ["全部销售"] + (["小店运营组"] if has_small_shop_data else [])
+    selected_scope = st.selectbox("数据范围", scope_options, key="dist_scope_v1")
+
+scope_df = prod_df[scope_mask].copy() if selected_scope == "小店运营组" else prod_df
+
 with col_platform:
     platform_options = ["全部", "抖音", "视频号"]
     selected_platform = st.selectbox("平台", platform_options, key="dist_platform_v2")
 with col_shop:
-    all_shops_all = prod_df["shop_name"].unique()
+    all_shops_all = scope_df["shop_name"].dropna().unique()
     if selected_platform == "抖音":
         shop_options = [shop for shop in all_shops_all if "抖音" in shop]
     elif selected_platform == "视频号":
         shop_options = [shop for shop in all_shops_all if "视频号" in shop]
     else:
         shop_options = list(all_shops_all)
-    selected_shops = st.multiselect("店铺（可多选）", options=sorted(shop_options), default=[], key="dist_shop_v2")
+    selected_shops = st.multiselect("店铺（可多选）", options=sorted(shop_options), default=[], key="dist_shop_v3")
 
 col_brand, col_anchor = st.columns(2)
 with col_brand:
-    brands_all = ["全部"] + sorted(prod_df["brand"].dropna().unique())
+    brands_all = ["全部"] + sorted(scope_df["brand"].dropna().unique())
     selected_brand = st.selectbox("品牌", brands_all, key="dist_brand_v2")
 with col_anchor:
     selected_anchors = []
     if st.session_state.table_suffix == "_all":
         if "anchor" not in prod_df.columns:
             prod_df["anchor"] = prod_df["remark"].astype(str).apply(extract_anchor)
-        all_anchors = prod_df["anchor"].dropna().unique().tolist()
+        all_anchors = scope_df["anchor"].dropna().unique().tolist()
         if all_anchors:
             selected_anchors = st.multiselect("主播（可多选）", options=sorted(all_anchors), default=[], key="dist_anchor_v2")
         else:
             st.info("当前数据中未识别到任何主播信息，请检查备注字段是否包含“主播：xxx”格式。")
 
 mask_date = (prod_df["sale_date"] >= pd.to_datetime(start_date)) & (prod_df["sale_date"] <= pd.to_datetime(end_date))
-filtered = prod_df[mask_date].copy()
+filtered = prod_df[mask_date & (scope_mask if selected_scope == "小店运营组" else True)].copy()
 if selected_platform == "抖音":
     filtered = filtered[filtered["shop_name"].str.contains("抖音", case=False, na=False)]
 elif selected_platform == "视频号":
