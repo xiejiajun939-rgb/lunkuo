@@ -22,7 +22,6 @@ except ImportError:
 from core.utils import date_quick_buttons, extract_anchor, clear_cache_on_page_change
 from core.ai import get_ai_summary
 from core.theme import page_header
-from core.selection_cart import add_to_selection_cart, get_selection_cart
 
 st.markdown("""
 <style>
@@ -717,13 +716,13 @@ with col_export:
         )
 
 # ---------- 显示表格 ----------
-cols = st.columns([1.7, 0.5, 1.3, 1.1, 1.1, 1.1, 0.9, 0.7, 0.65, 0.65, 0.7])
-headers = ["货号", "图片", "商品分类", "发货金额(¥)", "退货金额(¥)", "净销售金额(¥)", "退款率", "商品标签", "详情", "趋势", "选品"]
+cols = st.columns([1.7, 0.5, 1.3, 1.1, 1.1, 1.1, 0.9, 0.7, 0.65, 0.65])
+headers = ["货号", "图片", "商品分类", "发货金额(¥)", "退货金额(¥)", "净销售金额(¥)", "退款率", "商品标签", "详情", "趋势"]
 for c, h in zip(cols, headers):
     c.markdown(f"**{h}**")
 
 for idx, row in page_df.iterrows():
-    c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11 = st.columns([1.7, 0.5, 1.3, 1.1, 1.1, 1.1, 0.9, 0.7, 0.65, 0.65, 0.7])
+    c1, c2, c3, c4, c5, c6, c7, c8, c9, c10 = st.columns([1.7, 0.5, 1.3, 1.1, 1.1, 1.1, 0.9, 0.7, 0.65, 0.65])
     c1.write(row["货号"])
     if row.get("image_url") and pd.notna(row["image_url"]):
         c2.image(row["image_url"], width=50)
@@ -788,12 +787,6 @@ for idx, row in page_df.iterrows():
         st.session_state.show_trend_dialog = True
         st.session_state.trend_clicked = True
         st.rerun()
-    in_cart = row["货号"] in get_selection_cart()
-    if c11.button("✓" if in_cart else "＋", key=f"selection_add_{row['货号']}_{idx}", disabled=in_cart):
-        if add_to_selection_cart(row["货号"], "商品分析"):
-            st.toast(f"已将 {row['货号']} 加入主播选品车")
-            st.rerun()
-
 # ---------- 详情对话框 ----------
 if st.session_state.show_dialog and st.session_state.dialog_style_code:
     style_code = st.session_state.dialog_style_code
