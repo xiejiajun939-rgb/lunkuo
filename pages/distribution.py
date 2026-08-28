@@ -238,7 +238,8 @@ if not coupon_filtered.empty:
     if not master_df.empty and "style_code" in master_df.columns:
         master_df["style_code"] = master_df["style_code"].astype(str).str.strip().str.upper()
         img_map = master_df.set_index("style_code")["image_url"].to_dict()
-        coupon_detail["图片"] = coupon_detail["货号"].map(img_map).fillna(None)
+        image_values = coupon_detail["货号"].map(img_map).astype(object)
+        coupon_detail["图片"] = image_values.where(image_values.notna(), None)
     else:
         coupon_detail["图片"] = None
     coupon_detail["退款率"] = coupon_detail.apply(
