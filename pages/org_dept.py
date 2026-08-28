@@ -37,6 +37,9 @@ analysis_scope = st.radio(
     horizontal=True,
     key="org_dept_analysis_scope_v2",
 )
+is_small_shop_scope = analysis_scope == "小店运营组"
+breakdown_field = "shop_name" if is_small_shop_scope else "dept"
+breakdown_label = "店铺" if is_small_shop_scope else "部门"
 st.caption(
     "当前默认展示小店运营组；切换到“全部组织”可查看营销中心整体数据。"
     if analysis_scope == "小店运营组"
@@ -61,6 +64,19 @@ def fetch_scoped_sales_summary(start_date, end_date, suffix="_all", view_mode="a
     """统一的数据入口，避免指标、趋势和明细出现筛选口径不一致。"""
     df = fetch_complete_sales_summary(start_date, end_date, suffix, view_mode=view_mode)
     return filter_analysis_scope(df)
+
+
+def get_breakdown_summary(df):
+    """按当前经营层级汇总：小店运营看店铺，全部组织看部门。"""
+    if df is None or df.empty or breakdown_field not in df.columns:
+        return pd.DataFrame(columns=[breakdown_field, "total_ship", "total_return", "total_net"])
+    result = df.groupby(breakdown_field, dropna=False).agg(
+        total_ship=("total_ship", "sum"),
+        total_return=("total_return", "sum"),
+        total_net=("total_net", "sum"),
+    ).reset_index()
+    result[breakdown_field] = result[breakdown_field].fillna(f"未分配{breakdown_label}")
+    return result.sort_values("total_net", ascending=False)
 
 # ---------- 辅助函数 ----------
 @st.cache_data(ttl=10)
@@ -162,7 +178,7 @@ st.caption(f"当前数据日期范围：{min_date} ~ {max_date}，您可以选�
 
 # ======================== 1. 核心大盘 KPI ========================
 st.markdown("---")
-st.markdown("#### 📊 营销中心整体销售")
+st.markdown("#### 📊 小店运营组销售" if is_small_shop_scope else "#### 📊 营销中心整体销售")
 latest_date = base_date
 month_start = latest_date.replace(day=1)
 
@@ -294,12 +310,12 @@ if (not df_7d.empty and 'sale_date' in df_7d.columns and
 else:
     st.info("无足够数据绘制趋势图（需同时拥有近7天和前7天数据）。")
 
-# ======================== 3. 组织与部门拆解 ========================
+# ======================== 3. 经营单元拆解 ========================
 st.markdown("---")
-st.markdown("#### 🏆 阿米巴组织与部门业绩拆解")
+st.markdown("#### 🏆 小店运营组店铺业绩拆解" if is_small_shop_scope else "#### 🏆 阿米巴组织与部门业绩拆解")
 
 # ---------- 3.1 组织饼图 + 部门排行 ----------
-st.markdown("##### 组织与部门分布")
+st.markdown("##### 店铺销售分布" if is_small_shop_scope else "##### 组织与部门分布")
 time_mode_main = st.radio(
     "查看周期",
     options=["近7天", "月累计"],
@@ -321,11 +337,24 @@ with st.spinner(f"加载 {period_label} 数据..."):
 
 if not df_period_main.empty:
     # 数据概览（包含组织与部门映射）
-    with st.expander("📋 数据概览（查看所有组织/部门映射情况）"):
-        org_list = df_period_main['org_name'].unique().tolist()
-        dept_list = df_period_main['dept'].unique().tolist()
-        st.write(f"共识别到 **{len(org_list)}** 个组织：{', '.join(org_list)}")
-        st.write(f"共识别到 **{len(dept_list)}** 个部门：{', '.join(dept_list[:20])}{'...' if len(dept_list) > 20 else ''}")
+    with st.expander("📋 店铺数据概览" if is_small_shop_scope else "📋 数据概览（查看所有组织/部门映射情况）"):
+        if is_small_shop_scope:
+            shop_summary = get_breakdown_summary(df_period_main)
+            shop_summary["净额"] = shop_summary["total_net"].apply(lambda x: f"¥{x:,.2f}")
+            shop_summary["发货额"] = shop_summary["total_ship"].apply(lambda x: f"¥{x:,.2f}")
+            shop_summary["退货额"] = shop_summary["total_return"].apply(lambda x: f"¥{x:,.2f}")
+            st.write(f"共识别到 **{len(shop_summary)}** 个店铺")
+            st.dataframe(
+                shop_summary[["shop_name", "净额", "发货额", "退货额"]],
+                hide_index=True,
+                use_container_width=True,
+                column_config={"shop_name": "店铺"},
+            )
+        else:
+            org_list = df_period_main['org_name'].unique().tolist()
+            dept_list = df_period_main['dept'].unique().tolist()
+            st.write(f"共识别到 **{len(org_list)}** 个组织：{', '.join(org_list)}")
+            st.write(f"共识别到 **{len(dept_list)}** 个部门：{', '.join(dept_list[:20])}{'...' if len(dept_list) > 20 else ''}")
         
         org_summary = df_period_main.groupby('org_name').agg({
             'total_net': 'sum',
@@ -334,8 +363,9 @@ if not df_period_main.empty:
         }).reset_index()
         org_summary['净额'] = org_summary['total_net'].apply(lambda x: f"¥{x:,.2f}")
         org_summary = org_summary.sort_values('total_net', ascending=False)
-        st.dataframe(org_summary[['org_name', '净额', 'total_ship', 'total_return']], 
-                     hide_index=True, use_container_width=True)
+        if not is_small_shop_scope:
+            st.dataframe(org_summary[['org_name', '净额', 'total_ship', 'total_return']],
+                         hide_index=True, use_container_width=True)
         
         # 显示所有部门（包含无数据）
         all_depts = load_all_depts()
@@ -351,8 +381,9 @@ if not df_period_main.empty:
         dept_summary_full['total_return'] = dept_summary_full['total_return'].fillna(0)
         dept_summary_full['净额'] = dept_summary_full['total_net'].apply(lambda x: f"¥{x:,.2f}")
         dept_summary_full = dept_summary_full.sort_values('total_net', ascending=False)
-        st.dataframe(dept_summary_full[['dept', '净额', 'total_ship', 'total_return']], 
-                     hide_index=True, use_container_width=True)
+        if not is_small_shop_scope:
+            st.dataframe(dept_summary_full[['dept', '净额', 'total_ship', 'total_return']],
+                         hide_index=True, use_container_width=True)
         
         # 未分配组织明细（如果有）
         unassigned = df_period_main[df_period_main['org_name'] == '未分配组织']
@@ -374,33 +405,35 @@ if not df_period_main.empty:
     col_org, col_dept = st.columns(2)
     with col_org:
         # 组织排行（正确）
-        org_agg = df_period_main.groupby('org_name')['total_net'].sum().reset_index()
+        pie_field = "shop_name" if is_small_shop_scope else "org_name"
+        org_agg = df_period_main.groupby(pie_field)['total_net'].sum().reset_index()
         org_agg = org_agg.sort_values('total_net', ascending=False)
         
         org_agg_positive = org_agg[org_agg['total_net'] > 0].copy()
         org_agg_negative = org_agg[org_agg['total_net'] < 0].copy()
         
         if not org_agg_positive.empty:
-            fig_org = px.pie(org_agg_positive, names='org_name', values='total_net',
-                             title=f'各阿米巴净销售额占比（{period_label}）',
+            fig_org = px.pie(org_agg_positive, names=pie_field, values='total_net',
+                             title=f'{breakdown_label}净销售额占比（{period_label}）' if is_small_shop_scope else f'各阿米巴净销售额占比（{period_label}）',
                              hole=0.4, color_discrete_sequence=px.colors.qualitative.Pastel)
             fig_org.update_traces(textposition='inside', textinfo='percent+label')
             st.plotly_chart(fig_org, use_container_width=True)
         else:
-            st.info("无盈利阿米巴")
+            st.info(f"无净销售额为正的{breakdown_label}" if is_small_shop_scope else "无盈利阿米巴")
         
         if not org_agg_negative.empty:
-            neg_text = ", ".join([f"{row['org_name']} (¥{row['total_net']:,.2f})" 
+            neg_text = ", ".join([f"{row[pie_field]} (¥{row['total_net']:,.2f})"
                                  for _, row in org_agg_negative.iterrows()])
-            st.warning(f"⚠️ 以下组织净销售额为负：{neg_text}")
+            st.warning(f"⚠️ 以下{breakdown_label}净销售额为负：{neg_text}")
         
-        st.markdown("**组织排行（完整）**")
+        st.markdown(f"**{breakdown_label}排行（完整）**" if is_small_shop_scope else "**组织排行（完整）**")
         org_display = org_agg.copy()
         org_display['净额'] = org_display['total_net'].apply(lambda x: f"¥{x:,.2f}")
-        st.dataframe(org_display[['org_name', '净额']], hide_index=True, use_container_width=True)
+        st.dataframe(org_display[[pie_field, '净额']], hide_index=True, use_container_width=True,
+                     column_config={pie_field: breakdown_label})
         
         # 未分配组织明细（如果存在）
-        unassigned_org = org_agg[org_agg['org_name'] == '未分配组织']
+        unassigned_org = org_agg[org_agg[pie_field] == '未分配组织'] if not is_small_shop_scope else pd.DataFrame()
         if not unassigned_org.empty and unassigned_org.iloc[0]['total_net'] != 0:
             with st.expander("🔍 查看“未分配组织”明细"):
                 unassigned = df_period_main[df_period_main['org_name'] == '未分配组织']
@@ -418,29 +451,30 @@ if not df_period_main.empty:
                     st.caption(f"以上 {len(detail)} 条记录因 (shop_name, anchor) 无匹配，被归为'未分配组织'，请检查 mapping 表。")
             
     with col_dept:
-        # 部门汇总（所有组织汇总，显示所有部门）
-        dept_summary_full = get_dept_summary_with_all(start_date, end_date, suffix)
+        # 当前经营层级汇总：小店运营按店铺，其余按部门
+        dept_summary_full = get_breakdown_summary(df_period_main) if is_small_shop_scope else get_dept_summary_with_all(start_date, end_date, suffix)
         dept_agg = dept_summary_full[dept_summary_full['total_net'] != 0].copy()
         if not dept_agg.empty:
             top10 = dept_agg.head(10)
-            fig_dept = px.bar(top10, x='total_net', y='dept', orientation='h',
-                              title=f'部门净销售额排行（TOP10，{period_label}）',
-                              labels={'total_net': '净销售额', 'dept': '部门'},
+            fig_dept = px.bar(top10, x='total_net', y=breakdown_field, orientation='h',
+                              title=f'{breakdown_label}净销售额排行（TOP10，{period_label}）',
+                              labels={'total_net': '净销售额', breakdown_field: breakdown_label},
                               color='total_net', color_continuous_scale='Blues')
             fig_dept.update_layout(yaxis={'categoryorder': 'total ascending'})
             st.plotly_chart(fig_dept, use_container_width=True)
             
-            st.markdown("**部门排行（完整，含无数据部门）**")
+            st.markdown(f"**{breakdown_label}排行（完整）**" if is_small_shop_scope else "**部门排行（完整，含无数据部门）**")
             dept_display = dept_summary_full.copy()
             dept_display['净额'] = dept_display['total_net'].apply(lambda x: f"¥{x:,.2f}")
             dept_display['发货额'] = dept_display['total_ship'].apply(lambda x: f"¥{x:,.2f}")
             dept_display['退货额'] = dept_display['total_return'].apply(lambda x: f"¥{x:,.2f}")
-            st.dataframe(dept_display[['dept', '净额', '发货额', '退货额']], 
-                         hide_index=True, use_container_width=True)
+            st.dataframe(dept_display[[breakdown_field, '净额', '发货额', '退货额']],
+                         hide_index=True, use_container_width=True,
+                         column_config={breakdown_field: breakdown_label})
         else:
-            st.info("无部门数据")
+            st.info(f"无{breakdown_label}数据")
 else:
-    st.warning(f"{period_label} 无数据，无法显示阿米巴/部门分布。")
+    st.warning(f"{period_label} 无数据，无法显示{breakdown_label}分布。")
 
 # ---------- 3.2 退货率警告线 ----------
 st.markdown("#### 退货率警告线")
@@ -465,7 +499,7 @@ with st.spinner(f"加载退货率数据（{period_label_r}）..."):
     df_return = fetch_scoped_sales_summary(start_date_r, end_date_r, suffix, view_mode="all")
 
 if not df_return.empty:
-    dept_summary_full = get_dept_summary_with_all(start_date_r, end_date_r, suffix)
+    dept_summary_full = get_breakdown_summary(df_return) if is_small_shop_scope else get_dept_summary_with_all(start_date_r, end_date_r, suffix)
     dept_return = dept_summary_full.copy()
     dept_return['退货率'] = (dept_return['total_return'] / (dept_return['total_ship'] + 1e-5) * 100).round(2)
     dept_return_sorted = dept_return.sort_values('退货率', ascending=False)
@@ -474,33 +508,34 @@ if not df_return.empty:
         dept_return_with_ship = dept_return_sorted[dept_return_sorted['total_ship'] > 0]
         top_return = dept_return_with_ship.head(10)
         if not top_return.empty:
-            fig_return = px.bar(top_return, x='dept', y='退货率',
-                                title=f'退货率 TOP10 部门（{period_label_r}）',
-                                labels={'dept': '部门', '退货率': '退货率 (%)'},
+            fig_return = px.bar(top_return, x=breakdown_field, y='退货率',
+                                title=f'退货率 TOP10 {breakdown_label}（{period_label_r}）',
+                                labels={breakdown_field: breakdown_label, '退货率': '退货率 (%)'},
                                 color=top_return['退货率'], color_continuous_scale='RdYlGn_r')
             fig_return.add_hline(y=50, line_dash="dash", line_color="red", annotation_text="警戒线 50%")
             fig_return.add_hline(y=30, line_dash="dash", line_color="orange", annotation_text="注意线 30%")
             st.plotly_chart(fig_return, use_container_width=True)
         
-        with st.expander("📋 所有部门退货率明细"):
+        with st.expander(f"📋 所有{breakdown_label}退货率明细"):
             dept_display = dept_return_sorted.copy()
             dept_display['退货率'] = dept_display['退货率'].apply(lambda x: f"{x:.2f}%")
             dept_display['净额'] = dept_display['total_net'].apply(lambda x: f"¥{x:,.2f}")
             dept_display['发货额'] = dept_display['total_ship'].apply(lambda x: f"¥{x:,.2f}")
             dept_display['退货额'] = dept_display['total_return'].apply(lambda x: f"¥{x:,.2f}")
-            st.dataframe(dept_display[['dept', '净额', '发货额', '退货额', '退货率']], 
-                         hide_index=True, use_container_width=True)
+            st.dataframe(dept_display[[breakdown_field, '净额', '发货额', '退货额', '退货率']],
+                         hide_index=True, use_container_width=True,
+                         column_config={breakdown_field: breakdown_label})
         
         zero_ship_returns = dept_return[(dept_return['total_ship'] == 0) & (dept_return['total_return'] > 0)]
         if not zero_ship_returns.empty:
-            st.warning(f"⚠️ 以下部门有退货但无发货记录：{', '.join(zero_ship_returns['dept'].tolist())}")
+            st.warning(f"⚠️ 以下{breakdown_label}有退货但无发货记录：{', '.join(zero_ship_returns[breakdown_field].tolist())}")
     else:
-        st.info("无有效部门数据")
+        st.info(f"无有效{breakdown_label}数据")
 else:
     st.warning(f"{period_label_r} 无数据，无法显示退货率。")
 
 # ---------- 3.3 多维透视 ----------
-st.markdown("#### 🔍 多维透视（组织 → 部门 → 店铺）")
+st.markdown("#### 🔍 店铺经营明细（平台 → 店铺）" if is_small_shop_scope else "#### 🔍 多维透视（组织 → 部门 → 店铺）")
 time_mode_pivot = st.radio(
     "查看周期",
     options=["近7天", "月累计"],
@@ -557,47 +592,59 @@ if not df_pivot.empty:
     grouped['退货率'] = (grouped['return_amt'] / (grouped['ship'] + 1e-5) * 100).round(2)
     grouped['退货率显示'] = grouped['退货率'].apply(lambda x: f"{x:.2f}%")
 
-    org_order = grouped.groupby('org_name')['net'].sum().sort_values(ascending=False).index
-    
-    for org in org_order:
-        org_data = grouped[grouped['org_name'] == org]
-        org_net = org_data['net'].sum()
-        org_ship = org_data['ship'].sum()
-        org_return = org_data['return_amt'].sum()
-        
-        color_icon = "🔴" if org_net < 0 else "🟢"
-        with st.expander(f"{color_icon} 🏢 {org}  | 净额 ¥{org_net:,.2f} | 发货 ¥{org_ship:,.2f} | 退货 ¥{org_return:,.2f}"):
-            
-            dept_order = org_data.groupby('dept')['net'].sum().sort_values(ascending=False).index
-            for dept in dept_order:
-                dept_data = org_data[org_data['dept'] == dept]
-                dept_net = dept_data['net'].sum()
-                dept_ship = dept_data['ship'].sum()
-                dept_return = dept_data['return_amt'].sum()
-                dept_return_rate = (dept_return / (dept_ship + 1e-5) * 100)
-                dept_color = "🔴" if dept_net < 0 else "🟢"
-                
-                with st.expander(f"{dept_color} 📊 {dept}  | 净额 ¥{dept_net:,.2f} | 退货率 {dept_return_rate:.1f}%"):
-                    
-                    platform_order = dept_data.groupby('platform')['net'].sum().sort_values(ascending=False).index
-                    for plat in platform_order:
-                        plat_data = dept_data[dept_data['platform'] == plat]
-                        plat_net = plat_data['net'].sum()
-                        plat_ship = plat_data['ship'].sum()
-                        plat_return = plat_data['return_amt'].sum()
-                        plat_return_rate = (plat_return / (plat_ship + 1e-5) * 100)
-                        
-                        with st.expander(f"📱 {plat}  净额 ¥{plat_net:,.2f} | 退货率 {plat_return_rate:.1f}%"):
-                            display_df = plat_data[['shop_name', 'ship', 'return_amt', 'net', '退货率显示']]
-                            display_df.columns = ['店铺', '发货额', '退货额', '净销售额', '退货率']
-                            display_df = display_df.sort_values('净销售额', ascending=False)
-                            st.dataframe(display_df, hide_index=True, use_container_width=True)
+    if is_small_shop_scope:
+        platform_order = grouped.groupby('platform')['net'].sum().sort_values(ascending=False).index
+        for plat in platform_order:
+            plat_data = grouped[grouped['platform'] == plat]
+            plat_net = plat_data['net'].sum()
+            plat_ship = plat_data['ship'].sum()
+            plat_return = plat_data['return_amt'].sum()
+            plat_return_rate = plat_return / (plat_ship + 1e-5) * 100
+            with st.expander(f"📱 {plat} | 净额 ¥{plat_net:,.2f} | 退货率 {plat_return_rate:.1f}%", expanded=True):
+                display_df = plat_data.groupby('shop_name').agg(
+                    发货额=('ship', 'sum'),
+                    退货额=('return_amt', 'sum'),
+                    净销售额=('net', 'sum'),
+                ).reset_index().rename(columns={'shop_name': '店铺'})
+                display_df['退货率'] = (
+                    display_df['退货额'] / (display_df['发货额'] + 1e-5) * 100
+                ).map(lambda x: f"{x:.2f}%")
+                st.dataframe(display_df.sort_values('净销售额', ascending=False), hide_index=True, use_container_width=True)
+    else:
+        org_order = grouped.groupby('org_name')['net'].sum().sort_values(ascending=False).index
+        for org in org_order:
+            org_data = grouped[grouped['org_name'] == org]
+            org_net = org_data['net'].sum()
+            org_ship = org_data['ship'].sum()
+            org_return = org_data['return_amt'].sum()
+            color_icon = "🔴" if org_net < 0 else "🟢"
+            with st.expander(f"{color_icon} 🏢 {org}  | 净额 ¥{org_net:,.2f} | 发货 ¥{org_ship:,.2f} | 退货 ¥{org_return:,.2f}"):
+                dept_order = org_data.groupby('dept')['net'].sum().sort_values(ascending=False).index
+                for dept in dept_order:
+                    dept_data = org_data[org_data['dept'] == dept]
+                    dept_net = dept_data['net'].sum()
+                    dept_ship = dept_data['ship'].sum()
+                    dept_return = dept_data['return_amt'].sum()
+                    dept_return_rate = dept_return / (dept_ship + 1e-5) * 100
+                    dept_color = "🔴" if dept_net < 0 else "🟢"
+                    with st.expander(f"{dept_color} 📊 {dept}  | 净额 ¥{dept_net:,.2f} | 退货率 {dept_return_rate:.1f}%"):
+                        platform_order = dept_data.groupby('platform')['net'].sum().sort_values(ascending=False).index
+                        for plat in platform_order:
+                            plat_data = dept_data[dept_data['platform'] == plat]
+                            plat_net = plat_data['net'].sum()
+                            plat_ship = plat_data['ship'].sum()
+                            plat_return = plat_data['return_amt'].sum()
+                            plat_return_rate = plat_return / (plat_ship + 1e-5) * 100
+                            with st.expander(f"📱 {plat}  净额 ¥{plat_net:,.2f} | 退货率 {plat_return_rate:.1f}%"):
+                                display_df = plat_data[['shop_name', 'ship', 'return_amt', 'net', '退货率显示']]
+                                display_df.columns = ['店铺', '发货额', '退货额', '净销售额', '退货率']
+                                st.dataframe(display_df.sort_values('净销售额', ascending=False), hide_index=True, use_container_width=True)
 else:
     st.warning(f"{period_label_p} 无数据，无法显示透视表。")
 
-# ---------- 3.4 部门明细汇总表（包含所有部门） ----------
+# ---------- 3.4 经营层级明细汇总表 ----------
 st.markdown("---")
-st.markdown("#### 📋 部门明细汇总表（所有部门）")
+st.markdown("#### 📋 店铺明细汇总表" if is_small_shop_scope else "#### 📋 部门明细汇总表（所有部门）")
 
 time_mode_detail = st.radio(
     "选择查看周期",
@@ -616,8 +663,9 @@ else:
     end_date_detail = base_date
     period_label_detail = f"月累计（{base_date.strftime('%Y-%m')}）"
 
-with st.spinner(f"加载部门明细数据（{period_label_detail}）..."):
-    dept_summary_full = get_dept_summary_with_all(start_date_detail, end_date_detail, suffix)
+with st.spinner(f"加载{breakdown_label}明细数据（{period_label_detail}）..."):
+    df_detail = fetch_scoped_sales_summary(start_date_detail, end_date_detail, suffix, view_mode="all")
+    dept_summary_full = get_breakdown_summary(df_detail) if is_small_shop_scope else get_dept_summary_with_all(start_date_detail, end_date_detail, suffix)
 
 if not dept_summary_full.empty:
     dept_summary_full['退货率'] = (dept_summary_full['total_return'] / (dept_summary_full['total_ship'] + 1e-5) * 100).round(2)
@@ -628,19 +676,19 @@ if not dept_summary_full.empty:
     dept_summary_full['净额'] = dept_summary_full['total_net'].apply(lambda x: f"¥{x:,.2f}")
     dept_summary_full['净额排名'] = dept_summary_full['total_net'].rank(ascending=False, method='min').astype(int)
     
-    st.markdown(f"**📊 部门明细汇总表（{period_label_detail}）**")
+    st.markdown(f"**📊 {breakdown_label}明细汇总表（{period_label_detail}）**")
     total_depts = len(dept_summary_full)
     depts_with_data = dept_summary_full[dept_summary_full['total_net'] != 0].shape[0]
-    st.caption(f"共 {total_depts} 个部门，其中 {depts_with_data} 个有销售数据，{total_depts - depts_with_data} 个无数据（显示为0）")
+    st.caption(f"共 {total_depts} 个{breakdown_label}，其中 {depts_with_data} 个有销售数据，{total_depts - depts_with_data} 个无数据")
     
-    display_cols = ['净额排名', 'dept', '净额', '发货额', '退货额', '退货率显示']
+    display_cols = ['净额排名', breakdown_field, '净额', '发货额', '退货额', '退货率显示']
     st.dataframe(
         dept_summary_full[display_cols].sort_values('净额排名'),
         hide_index=True,
         use_container_width=True,
         column_config={
             "净额排名": st.column_config.NumberColumn("排名", width="small"),
-            "dept": st.column_config.TextColumn("部门", width="medium"),
+            breakdown_field: st.column_config.TextColumn(breakdown_label, width="medium"),
             "净额": st.column_config.TextColumn("净销售额", width="medium"),
             "发货额": st.column_config.TextColumn("发货额", width="medium"),
             "退货额": st.column_config.TextColumn("退货额", width="medium"),
@@ -648,13 +696,13 @@ if not dept_summary_full.empty:
         }
     )
     
-    zero_depts = dept_summary_full[dept_summary_full['total_net'] == 0]['dept'].tolist()
+    zero_depts = dept_summary_full[dept_summary_full['total_net'] == 0][breakdown_field].tolist()
     if zero_depts:
-        st.info(f"📌 以下部门无销售数据：{', '.join(zero_depts)}")
+        st.info(f"📌 以下{breakdown_label}无销售数据：{', '.join(zero_depts)}")
     
     # 导出功能
     st.markdown("---")
-    st.markdown("#### 📥 导出部门明细数据")
+    st.markdown(f"#### 📥 导出{breakdown_label}明细数据")
     
     col_export1, col_export2, col_export3 = st.columns(3)
     with col_export1:
@@ -666,8 +714,8 @@ if not dept_summary_full.empty:
     with col_export2:
         export_cols = st.multiselect(
             "选择要导出的列",
-            options=['dept', 'total_ship', 'total_return', 'total_net', '退货率'],
-            default=['dept', 'total_ship', 'total_return', 'total_net', '退货率'],
+            options=[breakdown_field, 'total_ship', 'total_return', 'total_net', '退货率'],
+            default=[breakdown_field, 'total_ship', 'total_return', 'total_net', '退货率'],
             key="export_cols_select"
         )
     with col_export3:
@@ -676,7 +724,7 @@ if not dept_summary_full.empty:
     def prepare_export_data():
         export_df = dept_summary_full.copy()
         export_cols_mapping = {
-            'dept': '部门',
+            breakdown_field: breakdown_label,
             'total_ship': '发货额',
             'total_return': '退货额',
             'total_net': '净销售额',
@@ -703,18 +751,18 @@ if not dept_summary_full.empty:
             export_df = pd.concat([export_df, pd.DataFrame([summary_row])], ignore_index=True)
         return export_df
     
-    if st.button("📥 下载部门明细数据", key="export_dept_detail"):
+    if st.button(f"📥 下载{breakdown_label}明细数据", key="export_dept_detail"):
         try:
             export_df = prepare_export_data()
             if export_format == "Excel (.xlsx)":
                 output = io.BytesIO()
                 with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                    export_df.to_excel(writer, sheet_name='部门明细', index=False)
+                    export_df.to_excel(writer, sheet_name=f'{breakdown_label}明细', index=False)
                 output.seek(0)
                 st.download_button(
                     label="✅ 点击下载 Excel 文件",
                     data=output,
-                    file_name=f"部门明细_{period_label_detail}_{base_date.strftime('%Y%m%d')}.xlsx",
+                    file_name=f"{breakdown_label}明细_{period_label_detail}_{base_date.strftime('%Y%m%d')}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     key="download_excel_btn"
                 )
@@ -723,7 +771,7 @@ if not dept_summary_full.empty:
                 st.download_button(
                     label="✅ 点击下载 CSV 文件",
                     data=csv_data,
-                    file_name=f"部门明细_{period_label_detail}_{base_date.strftime('%Y%m%d')}.csv",
+                    file_name=f"{breakdown_label}明细_{period_label_detail}_{base_date.strftime('%Y%m%d')}.csv",
                     mime="text/csv",
                     key="download_csv_btn"
                 )
@@ -736,14 +784,17 @@ if not dept_summary_full.empty:
         st.dataframe(preview_df, hide_index=True, use_container_width=True)
         st.caption(f"📊 共 {len(preview_df)} 行数据（包含汇总行）")
 else:
-    st.warning(f"{period_label_detail} 无数据，无法显示部门明细。")
+    st.warning(f"{period_label_detail} 无数据，无法显示{breakdown_label}明细。")
 
 # ---------- 3.5 线下部门业绩明细（按组织） ----------
 st.markdown("---")
-st.markdown("#### 🏬 线下部门业绩明细（按组织）")
+if not is_small_shop_scope:
+    st.markdown("#### 🏬 线下部门业绩明细（按组织）")
 
 # 直接使用已加载的 df_period_main（周期与主视图一致）
-if 'df_period_main' in locals() and not df_period_main.empty:
+if is_small_shop_scope:
+    pass
+elif 'df_period_main' in locals() and not df_period_main.empty:
     # 筛选线下数据
     df_offline_only = df_period_main[df_period_main['source'] == 'offline']
     
@@ -850,21 +901,23 @@ if st.button("🚀 生成智能总结", key="org_generate_ai_summary"):
         net_prev = 0
         change_7d = 0
     
+    ai_dimension = "shop_name" if is_small_shop_scope else "org_name"
+    ai_dimension_label = "店铺" if is_small_shop_scope else "组织"
     if not df_period_main.empty:
-        org_net = df_period_main.groupby('org_name')['total_net'].sum().sort_values(ascending=False).head(5)
+        org_net = df_period_main.groupby(ai_dimension)['total_net'].sum().sort_values(ascending=False).head(5)
         org_text = "\n".join([f"{i+1}. {org}: ¥{amt:,.0f}" for i, (org, amt) in enumerate(org_net.items())]) if not org_net.empty else "暂无"
-        org_negative = df_period_main.groupby('org_name')['total_net'].sum()
+        org_negative = df_period_main.groupby(ai_dimension)['total_net'].sum()
         org_negative = org_negative[org_negative < 0]
         neg_org_text = "\n".join([f"{org}: ¥{amt:,.0f}" for org, amt in org_negative.items()]) if not org_negative.empty else "无"
     else:
         org_text = "暂无"
         neg_org_text = "无"
     
-    dept_summary_full = get_dept_summary_with_all(month_start, latest_date, suffix)
+    dept_summary_full = get_breakdown_summary(df_mtd) if is_small_shop_scope else get_dept_summary_with_all(month_start, latest_date, suffix)
     if not dept_summary_full.empty:
         dept_summary_full['退货率'] = (dept_summary_full['total_return'] / (dept_summary_full['total_ship'] + 1e-5) * 100)
         dept_return_ai = dept_summary_full.sort_values('退货率', ascending=False).head(5)
-        dept_text = "\n".join([f"{row['dept']}: {row['退货率']:.1f}%" for _, row in dept_return_ai.iterrows()]) if not dept_return_ai.empty else "暂无"
+        dept_text = "\n".join([f"{row[breakdown_field]}: {row['退货率']:.1f}%" for _, row in dept_return_ai.iterrows()]) if not dept_return_ai.empty else "暂无"
     else:
         dept_text = "暂无"
     
@@ -879,13 +932,13 @@ if st.button("🚀 生成智能总结", key="org_generate_ai_summary"):
     近7天净销售额：¥{net_7d:,.2f}（前7天：¥{net_prev:,.2f}，变化 {change_7d:+.1f}%）
     共有 {total_depts_all} 个部门，其中 {depts_with_data} 个有销售数据，{total_depts_all - depts_with_data} 个无数据。
     
-    净销售额 TOP5 组织：
+    净销售额 TOP5 {ai_dimension_label}：
     {org_text}
     
-    净销售额为负的组织：
+    净销售额为负的{ai_dimension_label}：
     {neg_org_text}
     
-    退货率 TOP5 部门：
+    退货率 TOP5 {breakdown_label}：
     {dept_text}
     """
 
