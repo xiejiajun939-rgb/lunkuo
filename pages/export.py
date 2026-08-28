@@ -320,6 +320,9 @@ with tab_upload:
 with tab_tags:
     st.markdown("### 🏷️ 自定义商品标签")
     st.caption("标签名称可自由创建；一个商品可同时拥有多个标签，例如：秋季新品、主推品、渠道专属款。")
+    tag_flash = st.session_state.pop("product_tag_flash", None)
+    if tag_flash:
+        st.success(tag_flash)
     current_tags = sorted({
         tag for value in master_df["tags"]
         for tag in normalize_product_tags(value)
@@ -358,7 +361,9 @@ with tab_tags:
                         records[offset:offset + 500], on_conflict="style_code"
                     ).execute()
                 st.cache_data.clear()
-                st.success(f"已为 {len(records)} 个商品{operation}“{tag_name}”。")
+                st.session_state.product_tag_flash = (
+                    f"操作成功：已为 {len(records)} 个商品{operation}“{tag_name}”。"
+                )
                 st.rerun()
             except Exception as exc:
                 st.error(f"标签更新失败：{exc}")
