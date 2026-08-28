@@ -458,7 +458,7 @@ PRODUCT_CUBE_CACHE_VERSION = 2
 
 
 @st.cache_data(ttl=60, show_spinner=False)
-def _load_product_sales_cube_rpc(start_date, end_date, data_version):
+def _load_product_sales_cube_rpc(start_date, end_date, data_version, department=None):
     """从数据库读取日级商品聚合；RPC 未部署时返回 None 触发兼容降级。"""
     if supabase is None:
         return None
@@ -481,6 +481,8 @@ def _load_product_sales_cube_rpc(start_date, end_date, data_version):
                 "sale_date", "style_code", "dept", "org_name", "shop_name", "anchor"
             ]:
                 query = query.order(order_column)
+            if department:
+                query = query.eq("dept", department)
             response = query.range(
                 page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1
             ).execute()
@@ -501,7 +503,7 @@ def _load_product_sales_cube_rpc(start_date, end_date, data_version):
         raise RuntimeError("商品聚合 RPC 尚不可用") from exc
 
 
-def load_product_sales_cube(start_date, end_date, apply_filter=True):
+def load_product_sales_cube(start_date, end_date, apply_filter=True, department=None):
     """商品分析专用数据源：优先使用数据库日级聚合，未部署时自动使用旧明细聚合。"""
     # 常量参与缓存键。查询实现升级或线上残留旧缓存时递增该版本，
     # 可强制所有 Streamlit Cloud 会话重新读取完整数据。
@@ -510,7 +512,7 @@ def load_product_sales_cube(start_date, end_date, apply_filter=True):
         st.session_state.get("_data_version", 0),
     )
     try:
-        cube = _load_product_sales_cube_rpc(start_date, end_date, data_version)
+        cube = _load_product_sales_cube_rpc(start_date, end_date, data_version, department)
     except RuntimeError:
         cube = None
 
@@ -541,6 +543,9 @@ def load_product_sales_cube(start_date, end_date, apply_filter=True):
             net_amount=("net_amount", "sum"),
             order_count=("remark", "nunique"),
         )
+
+    if department and "dept" in cube.columns:
+        cube = cube[cube["dept"].fillna("").astype(str).str.strip() == department]
 
     if cube.empty:
         return cube

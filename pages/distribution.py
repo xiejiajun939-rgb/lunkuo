@@ -5,9 +5,9 @@ import pandas as pd
 import io
 import plotly.express as px
 
-from core.db import load_product_sales, load_product_master
+from core.db import get_sales_date_range, load_product_master, load_product_sales_cube
 from core.product_tags import normalize_product_tags, product_tags_text
-from core.utils import extract_anchor, date_quick_buttons, clear_cache_on_page_change
+from core.utils import date_quick_buttons, clear_cache_on_page_change
 from core.theme import page_header
 
 st.set_page_config(page_title="销售分布与品牌", layout="wide")
@@ -19,8 +19,31 @@ if "table_suffix" not in st.session_state:
 
 page_header("销售分布与品牌", "从品牌、年份、季节和款式结构洞察销售分布", "PORTFOLIO ANALYTICS", "结构洞察")
 
-with st.spinner("正在加载数据，请稍候..."):
-    prod_df = load_product_sales(st.session_state.table_suffix, view_mode=st.session_state.get("view_mode"))
+min_date, max_date = get_sales_date_range("_all")
+if min_date is None or max_date is None:
+    st.warning("暂无商品销售数据，请先上传订单文件。")
+    st.stop()
+
+default_start = max(min_date, max_date.replace(day=1))
+date_quick_buttons(
+    "dist_start_v3", "dist_end_v3",
+    default_start=default_start,
+    default_end=max_date,
+    min_date=min_date,
+    max_date=max_date,
+)
+start_date = st.session_state.get("dist_start_v3", default_start)
+end_date = st.session_state.get("dist_end_v3", max_date)
+
+selected_scope = st.selectbox(
+    "数据范围", ["小店运营组", "全部销售"], key="dist_scope_v2"
+)
+selected_department = "小店运营" if selected_scope == "小店运营组" else None
+
+with st.spinner("正在加载所选日期的销售分布..."):
+    prod_df = load_product_sales_cube(
+        start_date, end_date, department=selected_department
+    )
 
 if prod_df.empty:
     st.warning("暂无商品销售数据，请先上传订单文件。")
@@ -31,36 +54,16 @@ if "style_code" in prod_df.columns:
 else:
     prod_df["style_code"] = prod_df["product_code"].str[:8].str.strip().str.upper()
 
-if st.session_state.table_suffix == "_all":
-    if "anchor" not in prod_df.columns:
-        prod_df["anchor"] = prod_df["remark"].astype(str).apply(extract_anchor)
+if "year" not in prod_df.columns:
+    prod_df["year"] = prod_df["style_code"].str.slice(1, 3).replace("", pd.NA)
+if "season" not in prod_df.columns:
+    season_map = {"1": "春", "2": "夏", "3": "秋", "4": "冬"}
+    prod_df["season"] = prod_df["style_code"].str.slice(3, 4).map(season_map).fillna("未知")
 
 st.markdown("#### 筛选条件")
-min_date = prod_df["sale_date"].min().date()
-max_date = prod_df["sale_date"].max().date()
 
-date_quick_buttons("dist_start_v2", "dist_end_v2",
-                   default_start=min_date,
-                   default_end=max_date,
-                   min_date=min_date,
-                   max_date=max_date)
-start_date = st.session_state.get("dist_start_v2", min_date)
-end_date = st.session_state.get("dist_end_v2", max_date)
-
-scope_mask = pd.Series(False, index=prod_df.index)
-if "dept" in prod_df.columns:
-    scope_mask |= prod_df["dept"].fillna("").astype(str).str.contains("小店运营", case=False, na=False)
-if "org_name" in prod_df.columns:
-    scope_mask |= prod_df["org_name"].fillna("").astype(str).str.contains("小店运营", case=False, na=False)
-has_small_shop_data = bool(scope_mask.any())
-
-col_scope, col_platform, col_shop = st.columns(3)
-with col_scope:
-    scope_options = ["全部销售"] + (["小店运营组"] if has_small_shop_data else [])
-    selected_scope = st.selectbox("数据范围", scope_options, key="dist_scope_v1")
-
-scope_df = prod_df[scope_mask].copy() if selected_scope == "小店运营组" else prod_df
-
+scope_df = prod_df
+col_platform, col_shop = st.columns(2)
 with col_platform:
     platform_options = ["全部", "抖音", "视频号"]
     selected_platform = st.selectbox("平台", platform_options, key="dist_platform_v2")
@@ -81,8 +84,6 @@ with col_brand:
 with col_anchor:
     selected_anchors = []
     if st.session_state.table_suffix == "_all":
-        if "anchor" not in prod_df.columns:
-            prod_df["anchor"] = prod_df["remark"].astype(str).apply(extract_anchor)
         all_anchors = scope_df["anchor"].dropna().unique().tolist()
         if all_anchors:
             selected_anchors = st.multiselect("主播（可多选）", options=sorted(all_anchors), default=[], key="dist_anchor_v2")
@@ -90,7 +91,7 @@ with col_anchor:
             st.info("当前数据中未识别到任何主播信息，请检查备注字段是否包含“主播：xxx”格式。")
 
 mask_date = (prod_df["sale_date"] >= pd.to_datetime(start_date)) & (prod_df["sale_date"] <= pd.to_datetime(end_date))
-filtered = prod_df[mask_date & (scope_mask if selected_scope == "小店运营组" else True)].copy()
+filtered = prod_df[mask_date].copy()
 if selected_platform == "抖音":
     filtered = filtered[filtered["shop_name"].str.contains("抖音", case=False, na=False)]
 elif selected_platform == "视频号":
