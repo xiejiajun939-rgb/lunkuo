@@ -6,6 +6,7 @@ import io
 import plotly.express as px
 
 from core.db import load_product_sales, load_product_master
+from core.product_tags import normalize_product_tags, product_tags_text
 from core.utils import extract_anchor, date_quick_buttons, clear_cache_on_page_change
 from core.theme import page_header
 
@@ -169,39 +170,41 @@ with col3:
     else:
         st.info("无季节数据")
 
-# 首单礼金分析
+# 商品标签分析
 master_df = load_product_master()
-if "has_newbie_coupon" not in filtered.columns:
-    if not master_df.empty and "style_code" in master_df.columns:
-        master_df["style_code"] = master_df["style_code"].astype(str).str.strip().str.upper()
-        coupon_map = master_df.set_index("style_code")["has_newbie_coupon"].to_dict()
-        filtered["has_newbie_coupon"] = filtered["style_code"].map(coupon_map).fillna(False)
-    else:
-        filtered["has_newbie_coupon"] = False
-else:
-    filtered["has_newbie_coupon"] = filtered["has_newbie_coupon"].fillna(False)
+tag_map = {}
+all_product_tags = []
+if not master_df.empty and "style_code" in master_df.columns:
+    master_df["style_code"] = master_df["style_code"].astype(str).str.strip().str.upper()
+    tag_map = master_df.set_index("style_code")["tags"].to_dict()
+    all_product_tags = sorted({tag for value in master_df["tags"] for tag in normalize_product_tags(value)})
+filtered["product_tags"] = filtered["style_code"].map(tag_map).map(normalize_product_tags)
 
-coupon_filtered = filtered[filtered["has_newbie_coupon"] == True].copy()
-non_coupon_filtered = filtered[filtered["has_newbie_coupon"] == False].copy()
+st.markdown("#### 商品标签销售分析")
+if not all_product_tags:
+    st.info("暂无商品标签，请先在“商品信息管理 → 商品标签”中创建。")
+    st.stop()
+selected_product_tag = st.selectbox("选择商品标签", all_product_tags, key="dist_product_tag")
+coupon_filtered = filtered[filtered["product_tags"].map(lambda tags: selected_product_tag in tags)].copy()
+non_coupon_filtered = filtered[~filtered["product_tags"].map(lambda tags: selected_product_tag in tags)].copy()
 
-st.markdown(f"#### 首单礼金销售分析")
 col_left, col_right = st.columns(2)
 with col_left:
     coupon_total = coupon_filtered[metric_col].sum()
     non_coupon_total = non_coupon_filtered[metric_col].sum()
     if coupon_total > 0 or non_coupon_total > 0:
         coupon_pie_data = pd.DataFrame({
-            "类型": ["参与首单礼金", "未参与首单礼金"],
+            "类型": [f"含标签：{selected_product_tag}", "其他商品"],
             metric_name: [coupon_total, non_coupon_total]
         })
         coupon_pie_data = coupon_pie_data[coupon_pie_data[metric_name] > 0]
         fig_coupon_total = px.pie(coupon_pie_data, names="类型", values=metric_name,
-                                  title=f"首单礼金商品{metric_name}占比", hole=0.3,
+                                  title=f"“{selected_product_tag}”商品{metric_name}占比", hole=0.3,
                                   color_discrete_sequence=["#FF6B6B", "#4ECDC4"])
         fig_coupon_total.update_traces(textposition='inside', textinfo='percent+label')
         st.plotly_chart(fig_coupon_total, use_container_width=True, key="pie_coupon_total_v2")
     else:
-        st.info("无首单礼金数据")
+        st.info(f"无“{selected_product_tag}”标签数据")
 with col_right:
     if not coupon_filtered.empty:
         coupon_brand_data = coupon_filtered.groupby("brand")[metric_col].sum().reset_index()
@@ -213,18 +216,18 @@ with col_right:
                 other_row = pd.DataFrame({"brand": ["其他"], metric_col: [other_sum]})
                 coupon_brand_data = pd.concat([top8, other_row], ignore_index=True)
             fig_coupon_brand = px.pie(coupon_brand_data, names="brand", values=metric_col,
-                                      title=f"首单礼金商品{metric_name}品牌占比", hole=0.3,
+                                      title=f"“{selected_product_tag}”商品{metric_name}品牌占比", hole=0.3,
                                       color_discrete_sequence=px.colors.qualitative.Set2)
             fig_coupon_brand.update_traces(textposition='inside', textinfo='percent+label')
             st.plotly_chart(fig_coupon_brand, use_container_width=True, key="pie_coupon_brand_v2")
         else:
-            st.info("无礼金品牌数据")
+            st.info("该标签暂无品牌数据")
     else:
-        st.info("无礼金商品数据")
+        st.info(f"当前条件下无“{selected_product_tag}”商品数据")
 
-# 首单礼金商品明细
+# 标签商品明细
 if not coupon_filtered.empty:
-    st.markdown(f"#### 首单礼金商品销售明细（按货号汇总）")
+    st.markdown(f"#### “{selected_product_tag}”商品销售明细（按货号汇总）")
     coupon_detail = coupon_filtered.groupby("style_code").agg(
         发货金额=("ship_amount", "sum"),
         退货金额=("return_amount", "sum"),
@@ -261,10 +264,10 @@ if not coupon_filtered.empty:
         export_df = coupon_detail.drop(columns=["图片"], errors='ignore')
         export_df.to_excel(writer, index=False)
     st.download_button(
-        "💾 导出首单礼金商品明细",
+        f"💾 导出“{selected_product_tag}”商品明细",
         data=output.getvalue(),
-        file_name=f"首单礼金明细_{start_date}_{end_date}.xlsx",
+        file_name=f"商品标签_{selected_product_tag}_{start_date}_{end_date}.xlsx",
         key="export_coupon_detail_v2"
     )
 else:
-    st.info("当前筛选条件下无首单礼金商品")
+    st.info(f"当前筛选条件下无“{selected_product_tag}”商品")

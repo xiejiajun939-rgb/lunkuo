@@ -9,6 +9,7 @@ import re
 import numpy as np
 
 from core.db import load_product_sales, load_product_master, get_sales_date_range
+from core.product_tags import normalize_product_tags, product_tags_text
 try:
     from core.db import load_product_sales_cube
 except ImportError:
@@ -501,7 +502,7 @@ with col4:
     brands = ["全部"] + sorted(prod_df["brand"].dropna().unique())
     selected_brand = st.selectbox("品牌", brands, key="bf")
 
-# 第二行：平台、店铺、首单礼金、下钻说明
+# 第二行：平台、店铺、商品标签、下钻说明
 col5, col6, col7, col8 = st.columns(4)
 with col5:
     platform_options = ["全部", "抖音", "视频号", "小红书", "天猫", "唯品会"]
@@ -511,7 +512,11 @@ with col6:
     shop_opts = [s for s in all_shops if selected_platform == "全部" or selected_platform.lower() in str(s).lower()]
     selected_shops = st.multiselect("店铺", sorted(shop_opts), key="sf")
 with col7:
-    coupon_filter = st.selectbox("是否首单礼金", ["全部", "仅首单礼金", "非首单礼金"], key="cf")
+    tag_options = sorted({
+        tag for value in load_product_master().get("tags", pd.Series(dtype=object))
+        for tag in normalize_product_tags(value)
+    })
+    selected_tags = st.multiselect("商品标签", tag_options, key="product_tag_filter")
 with col8:
     if selected_objects:
         st.info("已指定对象：明细将按业务归属自动下钻")
@@ -541,15 +546,15 @@ if "remark" in filtered.columns:
 
 # 礼金标记
 master_df = load_product_master()
-coupon_map = {}
+tag_map = {}
 if not master_df.empty and "style_code" in master_df.columns:
     master_df["style_code"] = master_df["style_code"].astype(str).str.strip().str.upper()
-    coupon_map = master_df.set_index("style_code")["has_newbie_coupon"].to_dict()
-filtered["has_newbie_coupon"] = filtered["style_code"].map(coupon_map).fillna(False)
-if coupon_filter == "仅首单礼金":
-    filtered = filtered[filtered["has_newbie_coupon"]]
-elif coupon_filter == "非首单礼金":
-    filtered = filtered[~filtered["has_newbie_coupon"]]
+    tag_map = master_df.set_index("style_code")["tags"].to_dict()
+filtered["product_tags"] = filtered["style_code"].map(tag_map).map(normalize_product_tags)
+if selected_tags:
+    filtered = filtered[filtered["product_tags"].map(
+        lambda tags: all(tag in tags for tag in selected_tags)
+    )]
 
 if filtered.empty:
     st.warning("无匹配数据")
@@ -573,11 +578,11 @@ if not master_df.empty and "style_code" in master_df.columns:
     cat_map = master_df.set_index("style_code")["category"].to_dict()
     grouped["image_url"] = grouped["货号"].map(img_map)
     grouped["master_category"] = grouped["货号"].map(cat_map)
-    grouped["has_newbie_coupon"] = grouped["货号"].map(coupon_map).fillna(False)
+    grouped["product_tags"] = grouped["货号"].map(tag_map).map(normalize_product_tags)
 else:
     grouped["image_url"] = None
     grouped["master_category"] = None
-    grouped["has_newbie_coupon"] = False
+    grouped["product_tags"] = [[] for _ in range(len(grouped))]
 
 grouped["退款率"] = np.where(
     grouped["发货金额"] != 0,
@@ -648,14 +653,14 @@ with col_export:
             export_df = grouped.copy()
             if "image_url" in export_df.columns:
                 export_df = export_df.drop(columns=["image_url"])
-            cols_order = ["货号", "master_category", "发货金额", "退货金额", "净销售金额", "退款率", "has_newbie_coupon"]
+            cols_order = ["货号", "master_category", "发货金额", "退货金额", "净销售金额", "退款率", "product_tags"]
             export_cols = [c for c in cols_order if c in export_df.columns]
             export_df = export_df[export_cols]
             export_df.rename(columns={
                 "master_category": "商品分类",
-                "has_newbie_coupon": "是否新人礼金"
+                "product_tags": "商品标签"
             }, inplace=True)
-            export_df["是否新人礼金"] = export_df["是否新人礼金"].map({True: "是", False: "否"})
+            export_df["商品标签"] = export_df["商品标签"].map(product_tags_text)
             sheet_name = "货号汇总"
             file_suffix = "货号汇总"
         else:
@@ -671,7 +676,7 @@ with col_export:
                 (detail_agg["明细退货金额"] / detail_agg["明细发货金额"] * 100).map("{:.2f}%".format),
                 "-"
             )
-            master_cols = grouped[["货号", "master_category", "发货金额", "退货金额", "净销售金额", "退款率", "has_newbie_coupon"]].copy()
+            master_cols = grouped[["货号", "master_category", "发货金额", "退货金额", "净销售金额", "退款率", "product_tags"]].copy()
             export_df = pd.merge(
                 detail_agg,
                 master_cols,
@@ -683,11 +688,11 @@ with col_export:
             export_df.rename(columns={
                 group_col: group_name,
                 "master_category": "商品分类",
-                "has_newbie_coupon": "是否新人礼金"
+                "product_tags": "商品标签"
             }, inplace=True)
-            export_df["是否新人礼金"] = export_df["是否新人礼金"].map({True: "是", False: "否"})
+            export_df["商品标签"] = export_df["商品标签"].map(product_tags_text)
             final_cols = [
-                "货号", "商品分类", "发货金额", "退货金额", "净销售金额", "退款率", "是否新人礼金",
+                "货号", "商品分类", "发货金额", "退货金额", "净销售金额", "退款率", "商品标签",
                 "明细类型", group_name, "明细发货金额", "明细退货金额", "明细净销售金额", "明细退款率"
             ]
             export_df = export_df[final_cols]
@@ -706,13 +711,13 @@ with col_export:
         )
 
 # ---------- 显示表格 ----------
-cols = st.columns([2, 0.5, 1.5, 1.2, 1.2, 1.2, 1, 0.8, 0.8, 0.8])
-headers = ["货号", "图片", "商品分类", "发货金额(¥)", "退货金额(¥)", "净销售金额(¥)", "退款率", "新人礼金", "详情", "趋势"]
+cols = st.columns([2, 0.5, 1.5, 1.2, 1.2, 1.2, 1, 1, 0.8, 0.8])
+headers = ["货号", "图片", "商品分类", "发货金额(¥)", "退货金额(¥)", "净销售金额(¥)", "退款率", "商品标签", "详情", "趋势"]
 for c, h in zip(cols, headers):
     c.markdown(f"**{h}**")
 
 for idx, row in page_df.iterrows():
-    c1, c2, c3, c4, c5, c6, c7, c8, c9, c10 = st.columns([2, 0.5, 1.5, 1.2, 1.2, 1.2, 1, 0.8, 0.8, 0.8])
+    c1, c2, c3, c4, c5, c6, c7, c8, c9, c10 = st.columns([2, 0.5, 1.5, 1.2, 1.2, 1.2, 1, 1, 0.8, 0.8])
     c1.write(row["货号"])
     if row.get("image_url") and pd.notna(row["image_url"]):
         c2.image(row["image_url"], width=50)
@@ -723,7 +728,7 @@ for idx, row in page_df.iterrows():
     c5.write(f"{row['退货金额']:,.2f}")
     c6.write(f"{row['净销售金额']:,.2f}")
     c7.write(row["退款率"])
-    c8.write("✅" if row.get("has_newbie_coupon") else "❌")
+    c8.caption(product_tags_text(row.get("product_tags")) or "—")
     if c9.button("📊", key=f"detail_btn_{row['货号']}_{idx}"):
         style_code = row["货号"]
         detail_df = filtered[filtered["style_code"] == style_code].copy()

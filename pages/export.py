@@ -7,6 +7,7 @@ import pandas as pd
 import streamlit as st
 
 from core.db import init_supabase, load_product_master, load_sold_style_codes
+from core.product_tags import normalize_product_tags, product_tags_text
 from core.utils import clear_cache_on_page_change
 from core.theme import page_header
 
@@ -18,7 +19,7 @@ if st.session_state.get("role") != "admin":
     st.stop()
 
 supabase = init_supabase()
-EDIT_COLUMNS = ["id", "style_code", "image_url", "category", "has_newbie_coupon"]
+EDIT_COLUMNS = ["id", "style_code", "image_url", "category", "tags"]
 
 
 def _is_missing(series):
@@ -37,6 +38,7 @@ def _normalize_upload(df):
         "货号": "style_code", "商品货号": "style_code", "款号": "style_code",
         "图片": "image_url", "图片地址": "image_url", "商品图片": "image_url",
         "品类": "category", "商品品类": "category",
+        "商品标签": "tags", "标签": "tags", "tags": "tags",
         "新人礼金": "has_newbie_coupon", "是否新人礼金": "has_newbie_coupon",
     }
     result = df.rename(columns={c: aliases.get(str(c).strip(), str(c).strip()) for c in df.columns}).copy()
@@ -45,14 +47,19 @@ def _normalize_upload(df):
     for col in ["image_url", "category"]:
         if col not in result.columns:
             result[col] = ""
+    if "tags" not in result.columns:
+        result["tags"] = ""
     if "has_newbie_coupon" not in result.columns:
         result["has_newbie_coupon"] = False
-    result = result[["style_code", "image_url", "category", "has_newbie_coupon"]]
+    result["tags"] = [
+        product_tags_text(tags, _to_bool(coupon))
+        for tags, coupon in zip(result["tags"], result["has_newbie_coupon"])
+    ]
+    result = result[["style_code", "image_url", "category", "tags"]]
     result["style_code"] = result["style_code"].astype("string").str.strip().str.upper()
     result = result[~_is_missing(result["style_code"])].drop_duplicates("style_code", keep="last")
     result["image_url"] = result["image_url"].fillna("").astype(str).str.strip()
     result["category"] = result["category"].fillna("").astype(str).str.strip()
-    result["has_newbie_coupon"] = result["has_newbie_coupon"].map(_to_bool)
     return result
 
 
@@ -68,7 +75,7 @@ def _upsert_records(records):
             "style_code": style_code,
             "image_url": str(record.get("image_url") or "").strip() or None,
             "category": str(record.get("category") or "").strip() or None,
-            "has_newbie_coupon": bool(record.get("has_newbie_coupon", False)),
+            "tags": normalize_product_tags(record.get("tags")),
             "updated_at": now,
         }
         if pd.notna(record.get("id")):
@@ -89,23 +96,30 @@ def _upsert_records(records):
 
 callbacks = st.session_state.get("_admin_callbacks", {})
 
-page_header("商品信息管理", "维护商品档案、缺失资料、首单礼金与批量导入导出", "PRODUCT MASTER DATA", "管理员")
-tab_manage, tab_upload, tab_coupon, tab_export = st.tabs([
-    "🔎 查询与维护", "📤 批量上传", "🏷️ 首单礼金", "📥 数据导出"
+page_header("商品信息管理", "维护商品档案、自定义标签与批量导入导出", "PRODUCT MASTER DATA", "管理员")
+tab_manage, tab_upload, tab_tags, tab_export = st.tabs([
+    "🔎 查询与维护", "📤 批量上传", "🏷️ 商品标签", "📥 数据导出"
 ])
 
 with st.spinner("正在加载商品库..."):
     master_df = load_product_master()
 for col in EDIT_COLUMNS:
     if col not in master_df.columns:
-        master_df[col] = False if col == "has_newbie_coupon" else None
+        master_df[col] = [] if col == "tags" else None
+master_df["tags"] = [
+    product_tags_text(tags, bool(coupon))
+    for tags, coupon in zip(
+        master_df["tags"],
+        master_df.get("has_newbie_coupon", pd.Series(False, index=master_df.index)),
+    )
+]
 
 with st.spinner("正在核对销售数据中的商品货号..."):
     sold_styles_df = load_sold_style_codes("_all")
 
 # 以销售数据货号为完整性检查基准，同时保留尚未产生销售的人工商品档案。
 catalog_df = sold_styles_df.merge(master_df, on="style_code", how="outer")
-catalog_df["has_newbie_coupon"] = catalog_df["has_newbie_coupon"].fillna(False).astype(bool)
+catalog_df["tags"] = catalog_df["tags"].fillna("")
 
 with tab_manage:
     total_count = len(catalog_df)
@@ -119,12 +133,18 @@ with tab_manage:
     c4.metric("缺少品类", f"{missing_category_count:,}")
 
     with st.container(border=True):
-        col_search, col_category, col_missing = st.columns([1.3, 1, 1.3])
+        col_search, col_category, col_tags, col_missing = st.columns([1.2, 1, 1, 1.3])
         with col_search:
             keyword = st.text_input("搜索货号", placeholder="支持部分货号", key="master_keyword")
         with col_category:
             categories = sorted(v for v in catalog_df["category"].dropna().astype(str).str.strip().unique() if v)
             selected_categories = st.multiselect("筛选品类", categories, key="master_categories")
+        with col_tags:
+            all_tags = sorted({
+                tag for value in catalog_df["tags"]
+                for tag in normalize_product_tags(value)
+            })
+            selected_tags = st.multiselect("筛选标签", all_tags, key="master_tags")
         with col_missing:
             missing_filters = st.multiselect(
                 "缺失资料筛选", ["尚未建立商品档案", "缺少图片", "缺少品类", "任意资料缺失"],
@@ -138,6 +158,10 @@ with tab_manage:
         )]
     if selected_categories:
         filtered = filtered[filtered["category"].astype(str).isin(selected_categories)]
+    if selected_tags:
+        filtered = filtered[filtered["tags"].map(
+            lambda value: all(tag in normalize_product_tags(value) for tag in selected_tags)
+        )]
     missing_image = _is_missing(filtered["image_url"])
     missing_category = _is_missing(filtered["category"])
     missing_record = filtered["id"].isna()
@@ -174,7 +198,7 @@ with tab_manage:
             "style_code": st.column_config.TextColumn("商品货号", required=True),
             "image_url": st.column_config.LinkColumn("图片地址", display_text="查看图片"),
             "category": st.column_config.TextColumn("品类"),
-            "has_newbie_coupon": st.column_config.CheckboxColumn("新人礼金", default=False),
+            "tags": st.column_config.TextColumn("商品标签", help="多个标签用逗号分隔，例如：秋季新品，主推品"),
         }, key="product_master_editor",
     )
 
@@ -213,18 +237,18 @@ with tab_upload:
     unregistered_template = catalog_df[catalog_df["id"].isna()][["style_code"]].copy()
     unregistered_template["image_url"] = ""
     unregistered_template["category"] = ""
-    unregistered_template["has_newbie_coupon"] = False
+    unregistered_template["tags"] = ""
     unregistered_template = unregistered_template.rename(columns={
         "style_code": "货号",
         "image_url": "图片地址",
         "category": "品类",
-        "has_newbie_coupon": "新人礼金",
+        "tags": "商品标签",
     })
     pending_buffer = io.BytesIO()
     with pd.ExcelWriter(pending_buffer, engine="openpyxl") as writer:
         unregistered_template.to_excel(writer, index=False, sheet_name="待维护商品")
 
-    template = pd.DataFrame(columns=["style_code", "image_url", "category", "has_newbie_coupon"])
+    template = pd.DataFrame(columns=["style_code", "image_url", "category", "tags"])
     template_buffer = io.BytesIO()
     with pd.ExcelWriter(template_buffer, engine="openpyxl") as writer:
         template.to_excel(writer, index=False, sheet_name="商品信息")
@@ -258,16 +282,51 @@ with tab_upload:
         except Exception as exc:
             st.error(f"文件处理失败：{exc}")
 
-with tab_coupon:
-    st.markdown("### 🏷️ 首单礼金管理")
-    st.caption("维护单个商品或批量商品的首单礼金标签。")
-    if not callbacks:
-        st.warning("管理工具尚未初始化，请刷新页面后重试。")
-    else:
-        with st.expander("单商品礼金标签", expanded=True):
-            callbacks["manage_newbie_coupon"]()
-        with st.expander("批量礼金标签管理"):
-            callbacks["batch_manage_newbie_coupon"]()
+with tab_tags:
+    st.markdown("### 🏷️ 自定义商品标签")
+    st.caption("标签名称可自由创建；一个商品可同时拥有多个标签，例如：秋季新品、主推品、渠道专属款。")
+    current_tags = sorted({
+        tag for value in master_df["tags"]
+        for tag in normalize_product_tags(value)
+    })
+    if current_tags:
+        st.write("当前标签：" + "　".join(f"`{tag}`" for tag in current_tags))
+    tag_name = st.text_input("标签名称", placeholder="例如：秋季新品", key="custom_tag_name").strip()
+    operation = st.radio("批量操作", ["添加标签", "移除标签"], horizontal=True, key="custom_tag_operation")
+    style_text = st.text_area(
+        "商品货号",
+        placeholder="每行一个货号，也支持逗号分隔",
+        height=180,
+        key="custom_tag_styles",
+    )
+    if st.button("应用标签", type="primary", key="apply_custom_tag"):
+        style_codes = sorted({
+            code.strip().upper()
+            for code in style_text.replace("，", ",").replace("\n", ",").split(",")
+            if code.strip()
+        })
+        if not tag_name or not style_codes:
+            st.warning("请输入标签名称和至少一个商品货号。")
+        else:
+            try:
+                lookup = master_df.set_index("style_code")["tags"].to_dict()
+                records = []
+                for style_code in style_codes:
+                    tags = normalize_product_tags(lookup.get(style_code))
+                    if operation == "添加标签" and tag_name not in tags:
+                        tags.append(tag_name)
+                    elif operation == "移除标签":
+                        tags = [tag for tag in tags if tag != tag_name]
+                    records.append({"style_code": style_code, "tags": tags})
+                for offset in range(0, len(records), 500):
+                    supabase.table("product_master").upsert(
+                        records[offset:offset + 500], on_conflict="style_code"
+                    ).execute()
+                st.cache_data.clear()
+                st.success(f"已为 {len(records)} 个商品{operation}“{tag_name}”。")
+                st.rerun()
+            except Exception as exc:
+                st.error(f"标签更新失败：{exc}")
 
 with tab_export:
     st.markdown("### 导出商品库")

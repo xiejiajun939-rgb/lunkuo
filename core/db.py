@@ -644,6 +644,10 @@ def load_product_master():
             df = pd.DataFrame(all_data)
             if "has_newbie_coupon" not in df.columns:
                 df["has_newbie_coupon"] = False
+            if "tags" not in df.columns:
+                df["tags"] = df["has_newbie_coupon"].map(
+                    lambda flag: ["首单礼金"] if bool(flag) else []
+                )
             return df
         else:
             return pd.DataFrame()

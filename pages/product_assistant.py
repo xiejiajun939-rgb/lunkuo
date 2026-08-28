@@ -17,6 +17,7 @@ import io
 import re
 
 from core.db import load_product_sales, load_product_master, get_sales_date_range
+from core.product_tags import normalize_product_tags, product_tags_text
 from core.utils import extract_anchor, clear_cache_on_page_change
 from core.ai import get_ai_summary
 from core.theme import page_header
@@ -148,10 +149,10 @@ def load_assistant_data(suffix, start_date, end_date, platform=None, view_mode=N
     master_df = load_product_master()
     if not master_df.empty and "style_code" in master_df.columns:
         master_df["style_code"] = master_df["style_code"].astype(str).str.strip().str.upper()
-        coupon_map = master_df.set_index("style_code")["has_newbie_coupon"].to_dict()
-        grouped["has_newbie_coupon"] = grouped["style_code"].map(coupon_map).fillna(False)
+        tag_map = master_df.set_index("style_code")["tags"].to_dict()
+        grouped["product_tags"] = grouped["style_code"].map(tag_map).map(normalize_product_tags)
     else:
-        grouped["has_newbie_coupon"] = False
+        grouped["product_tags"] = [[] for _ in range(len(grouped))]
     
     return grouped
 
@@ -216,7 +217,7 @@ def show_product_diagnosis(style_code, filtered_df, suffix, start_date, end_date
     product_info = filtered_df[filtered_df["style_code"] == style_code].iloc[0] if style_code in filtered_df["style_code"].values else None
     brand = product_info["brands"] if product_info is not None else "未知"
     category = product_info["categories"] if product_info is not None else "未知"
-    coupon = product_info["has_newbie_coupon"] if product_info is not None else False
+    product_tags = product_info["product_tags"] if product_info is not None else []
 
     master_df = load_product_master()
     image_url = None
@@ -237,7 +238,7 @@ def show_product_diagnosis(style_code, filtered_df, suffix, start_date, end_date
         st.markdown(f"### {style_code}")
         st.write(f"**品牌：** {brand or '未维护'}")
         st.write(f"**品类：** {category or '未维护'}")
-        st.write(f"**首单礼金：** {'是' if coupon else '否'}")
+        st.write(f"**商品标签：** {product_tags_text(product_tags) or '无'}")
 
     col1, col2, col3, col4, col5 = st.columns(5)
     with col1:
@@ -299,7 +300,7 @@ def show_product_diagnosis(style_code, filtered_df, suffix, start_date, end_date
             订单数: {order_count}
             覆盖店铺数: {unique_shops}
             覆盖主播数: {anchor_count}
-            首单礼金: {"是" if coupon else "否"}
+            商品标签: {product_tags_text(product_tags) or "无"}
             {trend_desc}
             同类商品平均退货率: {filtered_df[filtered_df['categories']==category]['退货率'].mean() if category!='未知' else filtered_df['退货率'].mean():.1f}%
             """
@@ -353,10 +354,15 @@ if df_products.empty:
 
 all_brands = sorted(df_products["brands"].dropna().unique()) if "brands" in df_products.columns else []
 all_categories = sorted(df_products["categories"].dropna().unique()) if "categories" in df_products.columns else []
+all_tags = sorted({
+    tag for value in df_products.get("product_tags", pd.Series(dtype=object))
+    for tag in normalize_product_tags(value)
+})
 
 st.sidebar.markdown("**商品属性**")
 selected_brands = st.sidebar.multiselect("品牌", all_brands, default=[])
 selected_categories = st.sidebar.multiselect("品类", all_categories, default=[])
+selected_tags = st.sidebar.multiselect("商品标签", all_tags, default=[])
 min_net = st.sidebar.number_input("最小净销售额", value=0, step=100)
 max_net = st.sidebar.number_input("最大净销售额", value=100000000, step=1000, format="%d")
 max_return_rate = st.sidebar.slider("最大退货率 (%)", 0, 100, 100)
@@ -366,6 +372,10 @@ if selected_brands:
     filtered = filtered[filtered["brands"].isin(selected_brands)]
 if selected_categories:
     filtered = filtered[filtered["categories"].isin(selected_categories)]
+if selected_tags:
+    filtered = filtered[filtered["product_tags"].map(
+        lambda tags: all(tag in tags for tag in selected_tags)
+    )]
 filtered = filtered[(filtered["净销售额"] >= min_net) & (filtered["净销售额"] <= max_net)]
 filtered = filtered[filtered["退货率"] <= max_return_rate]
 
@@ -386,7 +396,7 @@ active_products = len(filtered[filtered["最近销售日期"] >= (date.today() -
 total_net = filtered["净销售额"].sum()
 total_return_rate = (filtered["退货额"].sum() / filtered["发货额"].sum() * 100) if filtered["发货额"].sum() > 0 else 0
 avg_return_rate = filtered["退货率"].mean()
-coupon_products = filtered[filtered["has_newbie_coupon"]].shape[0]
+tagged_products = filtered[filtered["product_tags"].map(bool)].shape[0]
 
 col1, col2, col3, col4, col5 = st.columns(5)
 with col1:
@@ -416,9 +426,9 @@ with col3:
 with col4:
     st.markdown(f"""
     <div class="kpi-card">
-        <div class="kpi-label">首单礼金商品</div>
-        <div class="kpi-number">{coupon_products}</div>
-        <div style="font-size:13px; color:#64748b;">占比 {coupon_products/total_products*100:.1f}%</div>
+        <div class="kpi-label">已标记商品</div>
+        <div class="kpi-number">{tagged_products}</div>
+        <div style="font-size:13px; color:#64748b;">占比 {tagged_products/total_products*100:.1f}%</div>
     </div>
     """, unsafe_allow_html=True)
 with col5:
@@ -448,7 +458,7 @@ if len(filtered) > 1:
     filtered.loc[(filtered["净销售额"] < y_threshold) & (filtered["退货率"] > x_threshold), "象限"] = "🐶 瘦狗品"
 
     fig = px.scatter(filtered, x="退货率", y="净销售额", color="象限", 
-                     hover_data={"style_code": True, "brands": True, "categories": True, "has_newbie_coupon": True},
+                     hover_data={"style_code": True, "brands": True, "categories": True, "product_tags": True},
                      custom_data=["style_code"],
                      title="商品四象限矩阵", labels={"退货率": "退货率 (%)", "净销售额": "净销售额 (¥)"},
                      color_discrete_map={
@@ -582,12 +592,12 @@ if len(filtered) > 0:
         for _, row in underperform.head(3).iterrows():
             alerts.append(("warning", f"🆕 新品 {row['style_code']} 表现低于同类中位数，净销售额仅 {row['净销售额']:,.0f}（同类中位数 {median_net:,.0f}）"))
 
-coupon_products_df = filtered[filtered["has_newbie_coupon"]]
-if not coupon_products_df.empty:
+tagged_products_df = filtered[filtered["product_tags"].map(bool)]
+if not tagged_products_df.empty:
     median_return = filtered["退货率"].median()
-    high_return_coupon = coupon_products_df[coupon_products_df["退货率"] > median_return * 1.5]
-    for _, row in high_return_coupon.head(3).iterrows():
-        alerts.append(("warning", f"🎁 首单礼金商品 {row['style_code']} 退货率 {row['退货率']:.1f}% 高于整体水平（{median_return:.1f}%），建议检查活动设置"))
+    high_return_tagged = tagged_products_df[tagged_products_df["退货率"] > median_return * 1.5]
+    for _, row in high_return_tagged.head(3).iterrows():
+        alerts.append(("warning", f"🏷️ 标签商品 {row['style_code']}（{product_tags_text(row['product_tags'])}）退货率 {row['退货率']:.1f}% 高于整体水平（{median_return:.1f}%）"))
 
 if not alerts:
     st.success("✅ 当前无重大异常预警，继续保持！")
@@ -712,15 +722,15 @@ if st.button("🚀 生成当前筛选条件下的智能报告", key="pa_generate
     avg_return = filtered["退货率"].mean()
     top_products = filtered.nlargest(5, "净销售额")[["style_code", "净销售额", "退货率"]]
     top_return = filtered.nlargest(5, "退货率")[["style_code", "退货率"]]
-    coupon_perf = filtered.groupby("has_newbie_coupon")["净销售额"].sum()
-    coupon_ratio = coupon_perf.get(True, 0) / total_net * 100 if total_net > 0 else 0
+    tagged_net = filtered.loc[filtered["product_tags"].map(bool), "净销售额"].sum()
+    tagged_ratio = tagged_net / total_net * 100 if total_net > 0 else 0
     
     context = f"""
     分析期间: {start_date} 至 {end_date}
     商品总数: {total_products}
     总净销售额: ¥{total_net:,.2f}
     平均退货率: {avg_return:.1f}%
-    首单礼金商品贡献: {coupon_ratio:.1f}%
+    已标记商品贡献: {tagged_ratio:.1f}%
     销售额TOP5商品: {', '.join([f"{r['style_code']}(¥{r['净销售额']:,.0f})" for _, r in top_products.iterrows()])}
     退货率TOP5商品: {', '.join([f"{r['style_code']}({r['退货率']:.1f}%)" for _, r in top_return.iterrows()])}
     """
@@ -750,7 +760,7 @@ st.markdown("---")
 # ---------- 导出 ----------
 st.markdown("#### 💾 导出数据")
 if st.button("📥 导出当前筛选的商品列表（Excel）", key="pa_export_new"):
-    export_df = filtered[["style_code", "brands", "categories", "净销售额", "发货额", "退货额", "退货率", "order_count", "最近销售日期", "has_newbie_coupon"]].copy()
+    export_df = filtered[["style_code", "brands", "categories", "净销售额", "发货额", "退货额", "退货率", "order_count", "最近销售日期", "product_tags"]].copy()
     export_df.rename(columns={
         "style_code": "货号",
         "brands": "品牌",
@@ -761,9 +771,9 @@ if st.button("📥 导出当前筛选的商品列表（Excel）", key="pa_export
         "退货率": "退货率(%)",
         "order_count": "订单数",
         "最近销售日期": "最近销售日期",
-        "has_newbie_coupon": "首单礼金"
+        "product_tags": "商品标签"
     }, inplace=True)
-    export_df["首单礼金"] = export_df["首单礼金"].map({True: "是", False: "否"})
+    export_df["商品标签"] = export_df["商品标签"].map(product_tags_text)
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         export_df.to_excel(writer, index=False, sheet_name="商品分析")
