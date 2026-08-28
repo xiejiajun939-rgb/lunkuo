@@ -185,6 +185,36 @@ st.markdown("#### 商品标签销售分析")
 if not all_product_tags:
     st.info("暂无商品标签，请先在“商品信息管理 → 商品标签”中创建。")
     st.stop()
+
+# 标签总览饼图：首单礼金不单独展示，无其他自定义标签时统一归入“其他”。
+# 多标签商品按标签数量均分金额，确保饼图合计仍等于当前筛选条件下的实际金额。
+tag_distribution = filtered[["product_tags", metric_col]].copy()
+tag_distribution["对比标签"] = tag_distribution["product_tags"].map(
+    lambda tags: [tag for tag in normalize_product_tags(tags) if tag != "首单礼金"] or ["其他"]
+)
+tag_distribution["标签数量"] = tag_distribution["对比标签"].map(len)
+tag_distribution["标签分摊金额"] = (
+    tag_distribution[metric_col] / tag_distribution["标签数量"]
+)
+tag_distribution = tag_distribution.explode("对比标签")
+tag_distribution = tag_distribution.groupby("对比标签", as_index=False)["标签分摊金额"].sum()
+tag_distribution = tag_distribution[tag_distribution["标签分摊金额"] > 0]
+
+if not tag_distribution.empty:
+    fig_tag_overview = px.pie(
+        tag_distribution,
+        names="对比标签",
+        values="标签分摊金额",
+        title=f"商品标签{metric_name}占比（首单礼金归入其他）",
+        hole=0.35,
+        color_discrete_sequence=px.colors.qualitative.Set3,
+    )
+    fig_tag_overview.update_traces(textposition="inside", textinfo="percent+label")
+    st.plotly_chart(fig_tag_overview, use_container_width=True, key="pie_product_tags_overview")
+    st.caption("多标签商品按自定义标签数量均分金额；仅有“首单礼金”或无标签的商品计入“其他”。")
+else:
+    st.info("当前筛选条件下暂无可展示的标签销售额。")
+
 selected_product_tag = st.selectbox("选择商品标签", all_product_tags, key="dist_product_tag")
 coupon_filtered = filtered[filtered["product_tags"].map(lambda tags: selected_product_tag in tags)].copy()
 non_coupon_filtered = filtered[~filtered["product_tags"].map(lambda tags: selected_product_tag in tags)].copy()
