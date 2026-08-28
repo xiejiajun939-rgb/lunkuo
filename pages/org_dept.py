@@ -42,20 +42,11 @@ breakdown_field = "shop_name" if is_small_shop_scope else "dept"
 breakdown_label = "店铺" if is_small_shop_scope else "部门"
 shop_targets = {}
 if is_small_shop_scope:
-    all_shop_targets = load_targets("_all")
-    scope_mapping = load_dimension_mapping()
-    if not scope_mapping.empty and "shop_name" in scope_mapping.columns:
-        scope_mask = pd.Series(False, index=scope_mapping.index)
-        if "dept" in scope_mapping.columns:
-            scope_mask |= scope_mapping["dept"].fillna("").astype(str).str.strip().eq("小店运营")
-        if "org_name" in scope_mapping.columns:
-            scope_mask |= scope_mapping["org_name"].fillna("").astype(str).str.strip().eq("小店运营组")
-        small_shop_names = set(scope_mapping.loc[scope_mask, "shop_name"].dropna().astype(str).str.strip())
-        shop_targets = {
-            str(shop_name).strip(): float(target or 0)
-            for shop_name, target in all_shop_targets.items()
-            if str(shop_name).strip() in small_shop_names
-        }
+    # 与“每日明细 → 小店运营组”完全使用同一目标表和后缀口径。
+    shop_targets = {
+        str(shop_name).strip(): float(target or 0)
+        for shop_name, target in load_targets("").items()
+    }
 st.caption(
     "当前默认展示小店运营组；切换到“全部组织”可查看营销中心整体数据。"
     if analysis_scope == "小店运营组"
