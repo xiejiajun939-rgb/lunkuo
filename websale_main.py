@@ -650,6 +650,7 @@ all_pages = {
     "📈 销售分布与品牌": "pages/distribution.py",
     "🏢 组织与部门分析": "pages/org_dept.py",
     "📚 商品信息管理": "pages/export.py",
+    "📣 推广参考": "pages/promotion_reference.py",
     "⚙️ 系统设置": "pages/settings.py",
 }
 

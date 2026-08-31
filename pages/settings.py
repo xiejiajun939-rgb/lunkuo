@@ -11,6 +11,7 @@ from core.utils import clear_cache_on_page_change
 from core.app_config import load_carousel_config, save_carousel_config, upload_carousel_image
 from core.settings_panels import render_account_management, render_mapping_management
 from core.theme import page_header
+from core.promotion import completed_week_starts, parse_promotion_file, save_promotion_rows, week_label
 
 st.set_page_config(page_title="系统设置", layout="wide")
 clear_cache_on_page_change("settings")
@@ -31,6 +32,7 @@ all_pages = {
     "📈 销售分布与品牌": "pages/distribution.py",
     "🏢 组织与部门分析": "pages/org_dept.py",
     "📚 商品信息管理": "pages/export.py",
+    "📣 推广参考": "pages/promotion_reference.py",
     "⚙️ 系统设置": "pages/settings.py",
 }
 
@@ -172,6 +174,44 @@ with tab_upload:
                 if total:
                     callbacks["mark_data_changed"]()
                     st.success(f"已保存 {total} 个组织目标。")
+
+    st.markdown("### 推广参考数据")
+    st.caption("每个文件对应一个抖音店铺和一个完整自然周；周期固定为周日—周六。")
+    with st.container(border=True):
+        promotion_mapping = load_dimension_mapping()
+        promotion_shop_options = (
+            sorted(promotion_mapping["shop_name"].dropna().astype(str).str.strip().unique())
+            if not promotion_mapping.empty and "shop_name" in promotion_mapping.columns else []
+        )
+        promo_col1, promo_col2 = st.columns(2)
+        with promo_col1:
+            promo_shop = st.selectbox(
+                "抖音店铺名称", promotion_shop_options,
+                index=None, placeholder="选择数据罗盘中的店铺",
+            )
+        with promo_col2:
+            promo_week = st.selectbox(
+                "推广数据周期", completed_week_starts(), format_func=week_label,
+                key="settings_promotion_week",
+            )
+        promo_file = st.file_uploader(
+            "店铺推广商品数据", type=["xlsx", "xls"], key="settings_promotion_file"
+        )
+        if st.button("上传推广数据", type="primary", key="settings_upload_promotion"):
+            if not promo_file:
+                st.warning("请先选择推广文件。")
+            elif not promo_shop:
+                st.warning("请选择抖音店铺名称。")
+            else:
+                try:
+                    rows = parse_promotion_file(
+                        io.BytesIO(promo_file.getvalue()), promo_shop, promo_week, promo_file.name
+                    )
+                    count = save_promotion_rows(rows)
+                    callbacks["mark_data_changed"]()
+                    st.success(f"已保存 {count} 条推广商品数据：{promo_shop}，{week_label(promo_week)}")
+                except Exception as exc:
+                    st.error(f"推广数据上传失败：{exc}")
 
 with tab_tools:
     st.markdown("### 缓存与数据维护")
