@@ -43,9 +43,21 @@ if promotion.empty:
     st.stop()
 
 shop_options = sorted(promotion["shop_name"].dropna().astype(str).unique())
+# 多个管理员会陆续上传新店铺。Streamlit 会保留旧的 multiselect 状态，
+# 因此仅在可选店铺集合发生变化时，把新出现的店铺补入已选列表；
+# 平时用户手动取消某店后，不会在页面重跑时被强制选回。
+previous_shop_options = st.session_state.get("_promotion_reference_shop_options", [])
+if previous_shop_options != shop_options:
+    current_selected = st.session_state.get("promotion_reference_shops", previous_shop_options)
+    retained = [shop for shop in current_selected if shop in shop_options]
+    newly_available = [shop for shop in shop_options if shop not in previous_shop_options]
+    st.session_state["promotion_reference_shops"] = retained + newly_available
+    st.session_state["_promotion_reference_shop_options"] = shop_options
 filter_col1, filter_col2 = st.columns([2, 3])
 with filter_col1:
-    selected_shops = st.multiselect("抖音店铺", shop_options, default=shop_options)
+    selected_shops = st.multiselect(
+        "抖音店铺", shop_options, default=shop_options, key="promotion_reference_shops"
+    )
 with filter_col2:
     style_search = st.text_input("货号", placeholder="支持多个货号，用逗号分隔")
 if not selected_shops:
