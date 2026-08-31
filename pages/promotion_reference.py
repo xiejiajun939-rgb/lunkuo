@@ -198,15 +198,73 @@ style_summary["spend_to_small_shop_actual"] = np.where(
     style_summary["spend"] / style_summary["small_shop_actual"],
     0.0,
 )
+
+# 按当前周次和当前所选店铺的真实分布动态生成建议，避免用一套固定阈值套所有店铺。
+positive_spend = style_summary.loc[style_summary["spend"] > 0, "spend"]
+positive_roi = style_summary.loc[
+    (style_summary["spend"] > 0) & (style_summary["net_gmv"] > 0), "net_roi"
+]
+positive_small_ship = style_summary.loc[style_summary["small_shop_ship"] > 0, "small_shop_ship"]
+positive_overall_ship = style_summary.loc[style_summary["overall_ship"] > 0, "overall_ship"]
+active_ctr = style_summary.loc[style_summary["impressions"] > 0, "ctr"]
+active_clicks = style_summary.loc[style_summary["clicks"] > 0, "clicks"]
+
+median_spend = float(positive_spend.median()) if not positive_spend.empty else 0.0
+low_roi = float(positive_roi.quantile(0.25)) if not positive_roi.empty else 0.0
+median_roi = float(positive_roi.median()) if not positive_roi.empty else 0.0
+high_roi = float(positive_roi.quantile(0.75)) if not positive_roi.empty else 0.0
+high_small_ship = float(positive_small_ship.quantile(0.75)) if not positive_small_ship.empty else 0.0
+high_overall_ship = float(positive_overall_ship.quantile(0.75)) if not positive_overall_ship.empty else 0.0
+high_ctr = float(active_ctr.quantile(0.75)) if not active_ctr.empty else 0.0
+median_clicks = float(active_clicks.median()) if not active_clicks.empty else 0.0
+
+
+def promotion_advice(row):
+    spend_value = float(row["spend"])
+    net_value = float(row["net_gmv"])
+    roi_value = float(row["net_roi"])
+    clicks_value = float(row["clicks"])
+    ctr_value = float(row["ctr"])
+    small_ship_value = float(row["small_shop_ship"])
+    overall_ship_value = float(row["overall_ship"])
+    share = small_ship_value / overall_ship_value if overall_ship_value else 0.0
+
+    if spend_value > 0 and net_value <= 0:
+        if clicks_value >= max(median_clicks, 10):
+            return f"暂停/换素材｜消耗¥{spend_value:,.0f}、点击{clicks_value:,.0f}，推广净成交为0"
+        return f"控制消耗｜已花¥{spend_value:,.0f}但尚无推广净成交"
+    if spend_value >= median_spend > 0 and roi_value <= low_roi:
+        return f"降预算并优化｜消耗较高，净ROI {roi_value:.2f}处于本周后25%"
+    if roi_value >= high_roi > 0 and small_ship_value >= high_small_ship > 0:
+        return f"优先放量｜净ROI {roi_value:.2f}，小店发货¥{small_ship_value:,.0f}"
+    if roi_value >= high_roi > 0 and 0 < spend_value < median_spend:
+        return f"增加预算测试｜净ROI {roi_value:.2f}，当前消耗仅¥{spend_value:,.0f}"
+    if ctr_value >= high_ctr > 0 and 0 < roi_value < median_roi:
+        return f"优化转化承接｜CTR {ctr_value:.1%}较好，但净ROI仅{roi_value:.2f}"
+    if spend_value == 0 and small_ship_value >= high_small_ship > 0:
+        return f"建议小额测投｜无推广消耗，小店发货已有¥{small_ship_value:,.0f}"
+    if overall_ship_value >= high_overall_ship > 0 and share < 0.20:
+        return f"小店重点测试｜整体发货¥{overall_ship_value:,.0f}，小店发货占比仅{share:.1%}"
+    if spend_value > 0 and roi_value >= median_roi > 0:
+        return f"保持投放观察｜净ROI {roi_value:.2f}，表现高于本周中位数"
+    if spend_value > 0:
+        return f"小预算观察｜消耗¥{spend_value:,.0f}，净ROI {roi_value:.2f}"
+    if small_ship_value > 0:
+        return f"暂未推广｜小店发货¥{small_ship_value:,.0f}，可结合库存决定是否测试"
+    return "暂不投放｜本周暂无小店发货和推广表现"
+
+
+style_summary["promotion_advice"] = style_summary.apply(promotion_advice, axis=1)
 style_display = style_summary.rename(columns={
-    "style_code": "货号", "product_name": "商品名称", "shop_count": "覆盖店铺数",
+    "style_code": "货号", "promotion_advice": "推广建议",
+    "product_name": "商品名称", "shop_count": "覆盖店铺数",
     "overall_ship": "整体发货", "small_shop_ship": "小店发货", "live_ship": "直播发货",
     "overall_actual": "整体实销", "small_shop_actual": "小店实销", "live_actual": "直播实销",
     "small_shop_share": "小店贡献率", "impressions": "推广展示", "clicks": "推广点击",
     "ctr": "推广CTR", "spend": "推广消耗", "net_gmv": "推广净成交",
     "net_roi": "推广净ROI", "spend_to_small_shop_actual": "消耗/小店实销",
 })[[
-    "货号", "商品名称", "覆盖店铺数",
+    "货号", "推广建议", "商品名称", "覆盖店铺数",
     "整体发货", "小店发货", "直播发货", "整体实销", "小店实销", "直播实销", "小店贡献率",
     "推广消耗", "推广展示", "推广点击", "推广CTR", "推广净成交", "推广净ROI", "消耗/小店实销",
 ]].sort_values(["小店实销", "整体实销"], ascending=False)
@@ -225,6 +283,7 @@ common_column_config = {
     "推广展示": st.column_config.NumberColumn("推广展示", format="%d"),
     "推广点击": st.column_config.NumberColumn("推广点击", format="%d"),
     "覆盖店铺数": st.column_config.NumberColumn("覆盖店铺数", format="%d"),
+    "推广建议": st.column_config.TextColumn("推广建议", width="large"),
 }
 
 st.markdown("### 货号汇总（所选店铺合计）")
