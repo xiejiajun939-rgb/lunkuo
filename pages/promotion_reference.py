@@ -50,7 +50,10 @@ previous_shop_options = st.session_state.get("_promotion_reference_shop_options"
 if previous_shop_options != shop_options:
     current_selected = st.session_state.get("promotion_reference_shops", previous_shop_options)
     retained = [shop for shop in current_selected if shop in shop_options]
-    newly_available = [shop for shop in shop_options if shop not in previous_shop_options]
+    newly_available = [
+        shop for shop in shop_options
+        if shop not in previous_shop_options and shop not in retained
+    ]
     st.session_state["promotion_reference_shops"] = retained + newly_available
     st.session_state["_promotion_reference_shop_options"] = shop_options
 filter_col1, filter_col2 = st.columns([2, 3])
