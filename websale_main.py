@@ -10,6 +10,7 @@ import pandas as pd
 from datetime import date, timedelta
 import io
 import hashlib
+import math
 import time
 import re
 import numpy as np
@@ -346,7 +347,28 @@ def save_product_sales(df_orders, suffix=None):
             if use_anchor and existing.get("anchor_name") in [None, "", "NONE"] and anchor_name not in [None, "", "NONE"]:
                 existing["anchor_name"] = anchor_name
 
-    records = list(temp_records.values())
+    def json_safe_value(value):
+        """将 pandas/numpy 空值转成 JSON null，同时保留 0、False 等有效值。"""
+        if value is None:
+            return None
+        try:
+            if pd.isna(value):
+                return None
+        except (TypeError, ValueError):
+            pass
+        if hasattr(value, "item"):
+            try:
+                value = value.item()
+            except (ValueError, AttributeError):
+                pass
+        if isinstance(value, float) and not math.isfinite(value):
+            return None
+        return value
+
+    records = [
+        {key: json_safe_value(value) for key, value in record.items()}
+        for record in temp_records.values()
+    ]
     if records:
         batch_size = 500
         for i in range(0, len(records), batch_size):
@@ -448,6 +470,8 @@ def validate_order_data(df):
         df_valid["金额/时间"] = pd.to_numeric(df_valid["金额/时间"], errors='coerce')
         if df_valid["金额/时间"].isnull().any():
             return False, "金额/时间列包含非数值内容，请检查。", None
+        if not np.isfinite(df_valid["金额/时间"]).all():
+            return False, "金额/时间列包含无穷大等非法数值，请检查。", None
         return True, "验证通过", df_valid
     except Exception as e:
         return False, f"验证过程发生异常: {str(e)}", None
