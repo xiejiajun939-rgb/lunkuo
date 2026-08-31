@@ -123,6 +123,7 @@ numeric_columns = [
 for column in numeric_columns:
     detail[column] = pd.to_numeric(detail.get(column), errors="coerce").fillna(0.0)
 detail["live_actual"] = detail["overall_actual"] - detail["small_shop_actual"]
+detail["live_ship"] = detail["overall_ship"] - detail["small_shop_ship"]
 detail["small_shop_share"] = np.where(
     detail["overall_actual"] != 0, detail["small_shop_actual"] / detail["overall_actual"], 0.0
 )
@@ -134,27 +135,31 @@ detail["spend_to_small_shop_actual"] = np.where(
 
 overall_actual = detail["overall_actual"].sum()
 small_actual = detail["small_shop_actual"].sum()
+overall_ship = detail["overall_ship"].sum()
+small_ship = detail["small_shop_ship"].sum()
 spend = detail["spend"].sum()
 net_gmv = detail["net_gmv"].sum()
-k1, k2, k3, k4, k5 = st.columns(5)
-k1.metric("抖音整体实销", f"¥{overall_actual:,.0f}")
-k2.metric("小店运营实销", f"¥{small_actual:,.0f}")
-k3.metric("小店贡献率", f"{small_actual / overall_actual:.1%}" if overall_actual else "-")
-k4.metric("推广消耗", f"¥{spend:,.0f}")
-k5.metric("推广净ROI", f"{net_gmv / spend:.2f}" if spend else "-")
+k1, k2, k3, k4, k5, k6 = st.columns(6)
+k1.metric("抖音整体发货", f"¥{overall_ship:,.0f}")
+k2.metric("小店运营发货", f"¥{small_ship:,.0f}")
+k3.metric("抖音整体实销", f"¥{overall_actual:,.0f}")
+k4.metric("小店运营实销", f"¥{small_actual:,.0f}")
+k5.metric("推广消耗", f"¥{spend:,.0f}")
+k6.metric("推广净ROI", f"{net_gmv / spend:.2f}" if spend else "-")
 st.caption("实销口径：发货金额 − 退货金额；推广成交及ROI为平台归因数据，仅作推广参考，不参与实销拆分。")
 
 display = detail.rename(columns={
     "shop_name": "抖音店铺", "style_code": "货号", "product_name": "商品名称",
     "overall_ship": "整体发货", "overall_return": "整体退货", "overall_actual": "整体实销",
     "small_shop_ship": "小店发货", "small_shop_return": "小店退货", "small_shop_actual": "小店实销",
-    "live_actual": "直播实销", "small_shop_share": "小店贡献率",
+    "live_ship": "直播发货", "live_actual": "直播实销", "small_shop_share": "小店贡献率",
     "impressions": "推广展示", "clicks": "推广点击", "ctr": "推广CTR", "spend": "推广消耗",
     "gross_gmv": "推广整体成交", "net_gmv": "推广净成交", "net_roi": "推广净ROI",
     "spend_to_small_shop_actual": "消耗/小店实销",
 })
 display_columns = [
-    "抖音店铺", "货号", "商品名称", "整体实销", "小店实销", "直播实销", "小店贡献率",
+    "抖音店铺", "货号", "商品名称",
+    "整体发货", "小店发货", "直播发货", "整体实销", "小店实销", "直播实销", "小店贡献率",
     "推广消耗", "推广展示", "推广点击", "推广CTR", "推广净成交", "推广净ROI", "消耗/小店实销",
 ]
 display = display[display_columns].sort_values(["小店实销", "整体实销"], ascending=False)
@@ -162,6 +167,9 @@ display = display[display_columns].sort_values(["小店实销", "整体实销"],
 style_summary = detail.groupby("style_code", as_index=False).agg(
     product_name=("product_name", lambda values: next((str(v) for v in values if pd.notna(v) and str(v).strip()), "")),
     shop_count=("shop_name", "nunique"),
+    overall_ship=("overall_ship", "sum"),
+    small_shop_ship=("small_shop_ship", "sum"),
+    live_ship=("live_ship", "sum"),
     overall_actual=("overall_actual", "sum"),
     small_shop_actual=("small_shop_actual", "sum"),
     live_actual=("live_actual", "sum"),
@@ -192,18 +200,23 @@ style_summary["spend_to_small_shop_actual"] = np.where(
 )
 style_display = style_summary.rename(columns={
     "style_code": "货号", "product_name": "商品名称", "shop_count": "覆盖店铺数",
+    "overall_ship": "整体发货", "small_shop_ship": "小店发货", "live_ship": "直播发货",
     "overall_actual": "整体实销", "small_shop_actual": "小店实销", "live_actual": "直播实销",
     "small_shop_share": "小店贡献率", "impressions": "推广展示", "clicks": "推广点击",
     "ctr": "推广CTR", "spend": "推广消耗", "net_gmv": "推广净成交",
     "net_roi": "推广净ROI", "spend_to_small_shop_actual": "消耗/小店实销",
 })[[
-    "货号", "商品名称", "覆盖店铺数", "整体实销", "小店实销", "直播实销", "小店贡献率",
+    "货号", "商品名称", "覆盖店铺数",
+    "整体发货", "小店发货", "直播发货", "整体实销", "小店实销", "直播实销", "小店贡献率",
     "推广消耗", "推广展示", "推广点击", "推广CTR", "推广净成交", "推广净ROI", "消耗/小店实销",
 ]].sort_values(["小店实销", "整体实销"], ascending=False)
 
 common_column_config = {
     column: st.column_config.NumberColumn(column, format="¥%.2f")
-    for column in ["整体实销", "小店实销", "直播实销", "推广消耗", "推广净成交"]
+    for column in [
+        "整体发货", "小店发货", "直播发货",
+        "整体实销", "小店实销", "直播实销", "推广消耗", "推广净成交",
+    ]
 } | {
     "小店贡献率": st.column_config.NumberColumn("小店贡献率", format="percent"),
     "推广CTR": st.column_config.NumberColumn("推广CTR", format="percent"),
