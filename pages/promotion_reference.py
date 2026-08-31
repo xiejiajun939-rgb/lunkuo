@@ -236,14 +236,17 @@ if selected_rows:
         selected_style = str(style_display.iloc[selected_position]["货号"])
         product_value = style_display.iloc[selected_position]["商品名称"]
         selected_product = "" if pd.isna(product_value) else str(product_value)
-        st.markdown(f"#### {selected_style} · 各抖音店铺明细")
-        if selected_product and selected_product.lower() not in {"nan", "none"}:
-            st.caption(selected_product)
         detail_display = display[display["货号"].astype(str) == selected_style].copy()
-        st.dataframe(
-            detail_display, use_container_width=True, hide_index=True,
-            column_config=common_column_config,
-        )
+        with st.expander(
+            f"📂 {selected_style} · 各抖音店铺明细（{len(detail_display)} 家）",
+            expanded=True,
+        ):
+            if selected_product and selected_product.lower() not in {"nan", "none"}:
+                st.caption(selected_product)
+            st.dataframe(
+                detail_display, use_container_width=True, hide_index=True,
+                column_config=common_column_config,
+            )
 else:
     st.info("请点击上方货号汇总表中的一行，查看该货号在各抖音店铺的明细。")
 
