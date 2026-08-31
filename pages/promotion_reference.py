@@ -159,20 +159,72 @@ display_columns = [
 ]
 display = display[display_columns].sort_values(["小店实销", "整体实销"], ascending=False)
 
+style_summary = detail.groupby("style_code", as_index=False).agg(
+    product_name=("product_name", lambda values: next((str(v) for v in values if pd.notna(v) and str(v).strip()), "")),
+    shop_count=("shop_name", "nunique"),
+    overall_actual=("overall_actual", "sum"),
+    small_shop_actual=("small_shop_actual", "sum"),
+    live_actual=("live_actual", "sum"),
+    impressions=("impressions", "sum"),
+    clicks=("clicks", "sum"),
+    spend=("spend", "sum"),
+    net_gmv=("net_gmv", "sum"),
+)
+style_summary["small_shop_share"] = np.where(
+    style_summary["overall_actual"] != 0,
+    style_summary["small_shop_actual"] / style_summary["overall_actual"],
+    0.0,
+)
+style_summary["ctr"] = np.where(
+    style_summary["impressions"] > 0,
+    style_summary["clicks"] / style_summary["impressions"],
+    0.0,
+)
+style_summary["net_roi"] = np.where(
+    style_summary["spend"] > 0,
+    style_summary["net_gmv"] / style_summary["spend"],
+    0.0,
+)
+style_summary["spend_to_small_shop_actual"] = np.where(
+    style_summary["small_shop_actual"] > 0,
+    style_summary["spend"] / style_summary["small_shop_actual"],
+    0.0,
+)
+style_display = style_summary.rename(columns={
+    "style_code": "货号", "product_name": "商品名称", "shop_count": "覆盖店铺数",
+    "overall_actual": "整体实销", "small_shop_actual": "小店实销", "live_actual": "直播实销",
+    "small_shop_share": "小店贡献率", "impressions": "推广展示", "clicks": "推广点击",
+    "ctr": "推广CTR", "spend": "推广消耗", "net_gmv": "推广净成交",
+    "net_roi": "推广净ROI", "spend_to_small_shop_actual": "消耗/小店实销",
+})[[
+    "货号", "商品名称", "覆盖店铺数", "整体实销", "小店实销", "直播实销", "小店贡献率",
+    "推广消耗", "推广展示", "推广点击", "推广CTR", "推广净成交", "推广净ROI", "消耗/小店实销",
+]].sort_values(["小店实销", "整体实销"], ascending=False)
+
+common_column_config = {
+    column: st.column_config.NumberColumn(column, format="¥%.2f")
+    for column in ["整体实销", "小店实销", "直播实销", "推广消耗", "推广净成交"]
+} | {
+    "小店贡献率": st.column_config.NumberColumn("小店贡献率", format="percent"),
+    "推广CTR": st.column_config.NumberColumn("推广CTR", format="percent"),
+    "推广净ROI": st.column_config.NumberColumn("推广净ROI", format="%.2f"),
+    "消耗/小店实销": st.column_config.NumberColumn("消耗/小店实销", format="percent"),
+    "推广展示": st.column_config.NumberColumn("推广展示", format="%d"),
+    "推广点击": st.column_config.NumberColumn("推广点击", format="%d"),
+    "覆盖店铺数": st.column_config.NumberColumn("覆盖店铺数", format="%d"),
+}
+
+st.markdown("### 货号汇总（所选店铺合计）")
+st.caption("同一货号在所选抖音店铺中的实销与推广数据合并展示；比例和ROI按合计金额重新计算。")
+st.dataframe(
+    style_display, use_container_width=True, hide_index=True,
+    column_config=common_column_config,
+)
+
 st.markdown("### 货号 × 抖音店铺")
 st.dataframe(
     display, use_container_width=True, hide_index=True,
-    column_config={
-        column: st.column_config.NumberColumn(column, format="¥%.2f")
-        for column in ["整体实销", "小店实销", "直播实销", "推广消耗", "推广净成交"]
-    } | {
-        "小店贡献率": st.column_config.NumberColumn("小店贡献率", format="percent"),
-        "推广CTR": st.column_config.NumberColumn("推广CTR", format="percent"),
-        "推广净ROI": st.column_config.NumberColumn("推广净ROI", format="%.2f"),
-        "消耗/小店实销": st.column_config.NumberColumn("消耗/小店实销", format="percent"),
-        "推广展示": st.column_config.NumberColumn("推广展示", format="%d"),
-        "推广点击": st.column_config.NumberColumn("推广点击", format="%d"),
-    },
+    column_config=common_column_config,
 )
 
 shop_summary = detail.groupby("shop_name", as_index=False).agg(
@@ -189,6 +241,7 @@ st.plotly_chart(chart, use_container_width=True)
 
 output = io.BytesIO()
 with pd.ExcelWriter(output, engine="openpyxl") as writer:
+    style_display.to_excel(writer, index=False, sheet_name="货号汇总")
     display.to_excel(writer, index=False, sheet_name="推广参考")
     shop_summary.rename(columns={"shop_name": "抖音店铺"}).to_excel(writer, index=False, sheet_name="店铺汇总")
 st.download_button(
