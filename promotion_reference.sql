@@ -34,6 +34,18 @@ create index if not exists promotion_product_weekly_style_idx
     on public.promotion_product_weekly (style_code);
 
 alter table public.promotion_product_weekly enable row level security;
-revoke all on table public.promotion_product_weekly from anon, authenticated;
+revoke delete, truncate, references, trigger on table public.promotion_product_weekly from anon, authenticated;
+grant select, insert, update on table public.promotion_product_weekly to anon, authenticated;
 grant all on table public.promotion_product_weekly to service_role;
+grant usage, select on sequence public.promotion_product_weekly_id_seq to anon, authenticated;
 grant usage, select on sequence public.promotion_product_weekly_id_seq to service_role;
+
+drop policy if exists "promotion weekly read" on public.promotion_product_weekly;
+create policy "promotion weekly read" on public.promotion_product_weekly
+    for select to anon, authenticated using (true);
+drop policy if exists "promotion weekly insert" on public.promotion_product_weekly;
+create policy "promotion weekly insert" on public.promotion_product_weekly
+    for insert to anon, authenticated with check (true);
+drop policy if exists "promotion weekly update" on public.promotion_product_weekly;
+create policy "promotion weekly update" on public.promotion_product_weekly
+    for update to anon, authenticated using (true) with check (true);
