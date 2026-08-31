@@ -9,6 +9,7 @@ from core.db import init_supabase
 
 
 TABLE_NAME = "promotion_product_weekly"
+PAGE_SIZE = 1000
 
 COLUMN_MAP = {
     "商品ID": "product_id",
@@ -137,11 +138,23 @@ def load_promotion_rows(week_start, shops=None):
     client = init_supabase()
     if client is None:
         return pd.DataFrame()
-    query = client.table(TABLE_NAME).select("*").eq("week_start", week_start.isoformat())
-    if shops:
-        query = query.in_("shop_name", list(shops))
-    response = query.order("shop_name").order("style_code").execute()
-    return pd.DataFrame(response.data or [])
+    rows = []
+    page = 0
+    while True:
+        query = client.table(TABLE_NAME).select("*").eq("week_start", week_start.isoformat())
+        if shops:
+            query = query.in_("shop_name", list(shops))
+        page_rows = (
+            query.order("id")
+            .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1)
+            .execute()
+            .data or []
+        )
+        rows.extend(page_rows)
+        if len(page_rows) < PAGE_SIZE:
+            break
+        page += 1
+    return pd.DataFrame(rows)
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -149,5 +162,17 @@ def load_promotion_shops():
     client = init_supabase()
     if client is None:
         return []
-    response = client.table(TABLE_NAME).select("shop_name").execute()
-    return sorted({row.get("shop_name") for row in (response.data or []) if row.get("shop_name")})
+    rows = []
+    page = 0
+    while True:
+        page_rows = (
+            client.table(TABLE_NAME).select("id,shop_name").order("id")
+            .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1)
+            .execute()
+            .data or []
+        )
+        rows.extend(page_rows)
+        if len(page_rows) < PAGE_SIZE:
+            break
+        page += 1
+    return sorted({row.get("shop_name") for row in rows if row.get("shop_name")})
