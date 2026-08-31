@@ -201,7 +201,7 @@ style_display = style_summary.rename(columns={
     "货号", "商品名称", "覆盖店铺数",
     "整体发货", "小店发货", "直播发货", "整体实销", "小店实销", "直播实销", "小店贡献率",
     "推广消耗", "推广展示", "推广点击", "推广CTR", "推广净成交", "推广净ROI", "消耗/小店实销",
-]].sort_values(["小店实销", "整体实销"], ascending=False)
+]].sort_values(["小店实销", "整体实销"], ascending=False).reset_index(drop=True)
 
 common_column_config = {
     column: st.column_config.NumberColumn(column, format="¥%.2f")
@@ -220,28 +220,32 @@ common_column_config = {
 }
 
 st.markdown("### 货号汇总（所选店铺合计）")
-st.caption("同一货号在所选抖音店铺中的实销与推广数据合并展示；比例和ROI按合计金额重新计算。")
-st.dataframe(
+st.caption("同一货号在所选抖音店铺中合并展示；点击一行，即可在下方查看该货号的各店铺明细。")
+summary_event = st.dataframe(
     style_display, use_container_width=True, hide_index=True,
     column_config=common_column_config,
+    on_select="rerun",
+    selection_mode="single-row",
+    key="promotion_reference_style_summary",
 )
 
-st.markdown("### 货号 × 抖音店铺")
-detail_style_options = style_display["货号"].dropna().astype(str).tolist()
-detail_style = st.selectbox(
-    "查找货号并查看各店铺明细",
-    detail_style_options,
-    index=None,
-    placeholder="输入或选择货号；不选择时显示全部货号",
-    key="promotion_reference_detail_style",
-)
-detail_display = display
-if detail_style:
-    detail_display = display[display["货号"].astype(str) == detail_style]
-st.dataframe(
-    detail_display, use_container_width=True, hide_index=True,
-    column_config=common_column_config,
-)
+selected_rows = list(summary_event.selection.rows)
+if selected_rows:
+    selected_position = selected_rows[0]
+    if 0 <= selected_position < len(style_display):
+        selected_style = str(style_display.iloc[selected_position]["货号"])
+        product_value = style_display.iloc[selected_position]["商品名称"]
+        selected_product = "" if pd.isna(product_value) else str(product_value)
+        st.markdown(f"#### {selected_style} · 各抖音店铺明细")
+        if selected_product and selected_product.lower() not in {"nan", "none"}:
+            st.caption(selected_product)
+        detail_display = display[display["货号"].astype(str) == selected_style].copy()
+        st.dataframe(
+            detail_display, use_container_width=True, hide_index=True,
+            column_config=common_column_config,
+        )
+else:
+    st.info("请点击上方货号汇总表中的一行，查看该货号在各抖音店铺的明细。")
 
 shop_summary = detail.groupby("shop_name", as_index=False).agg(
     整体实销=("overall_actual", "sum"), 小店实销=("small_shop_actual", "sum"),
