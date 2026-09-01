@@ -149,18 +149,18 @@ with tab_upload:
 
     st.markdown("### 退差价归属")
     with st.container(border=True):
-        st.caption("每月 1 日上传上月退差价匹配表。必需列：订单号、金额、阿米巴组织；原始业务日期仍保留在上月 31 日。")
+        st.caption("每月 1 日上传上月退差价表。必需列：订单号、金额（负数）；系统自动匹配平台、店铺、主播、部门和阿米巴组织，并归入上月最后一天。")
         template_output = io.BytesIO()
         template_df = pd.DataFrame({
-            "订单号": ["CWTKRWD2026083100006"],
+            "订单号": ["16083112505226"],
             "金额": [-100.00],
-            "阿米巴组织": ["示例阿米巴组织"],
         })
         instruction_df = pd.DataFrame({
             "填写说明": [
-                "订单号必须填写完整的 C 开头单号",
-                "金额可填写正数或负数，系统按绝对值与原始退差价核对",
-                "阿米巴组织必须与系统映射关系中的组织名称完全一致",
+                "订单号填写平台业务订单号，不是 C 开头的财务单据号",
+                "金额必须填写负数",
+                "系统会从数据库自动匹配平台、店铺、主播、部门和阿米巴组织",
+                "只有各平台上传金额与上月自媒体综合 C 单完全平账时才会替换",
                 "请删除示例行后再上传",
             ]
         })
@@ -192,7 +192,7 @@ with tab_upload:
                 result = callbacks["apply_adjustment_mapping"](mapping_df)
                 if result["updated"]:
                     callbacks["mark_data_changed"]()
-                    st.success(f"已匹配 {result['updated']} 条退差价")
+                    st.success(f"已按订单归属 {result['updated']} 条退差价，并替换 {result.get('deleted', 0)} 条自媒体综合 C 单")
                 for error in result["errors"]:
                     st.warning(error)
 

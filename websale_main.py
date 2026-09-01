@@ -24,7 +24,7 @@ from core.db import init_supabase, get_table_name, load_product_sales, load_prod
 from core.utils import extract_anchor, parse_product_code, date_quick_buttons, apply_data_permission
 from core.ai import get_siliconflow_client, get_ai_summary
 from core.theme import apply_global_theme
-from core.price_adjustments import infer_platform, save_adjustments, apply_adjustment_mapping
+from core.price_adjustments import infer_platform, save_adjustments, apply_order_adjustments
 
 # 防抖
 if "last_rerun" not in st.session_state:
@@ -709,7 +709,7 @@ if not pages_to_show:
 # 页面执行前注册管理员工具回调，供系统设置页复用
 st.session_state["_admin_callbacks"] = {
     "process_uploaded_file": process_uploaded_file,
-    "apply_adjustment_mapping": lambda df: apply_adjustment_mapping(supabase, df),
+    "apply_adjustment_mapping": lambda df: apply_order_adjustments(supabase, df),
     "load_target_file": load_target_file,
     "save_offline_sales": save_offline_sales,
     "save_org_targets": save_org_targets,

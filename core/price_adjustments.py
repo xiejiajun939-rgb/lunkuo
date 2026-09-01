@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 import math
 import re
 
@@ -148,6 +148,126 @@ def apply_adjustment_mapping(client, df: pd.DataFrame) -> dict:
     return {"updated": updated, "errors": errors}
 
 
+def apply_order_adjustments(client, df: pd.DataFrame) -> dict:
+    """用订单号反查店铺/组织，平账后替换上月自媒体综合 C 单。"""
+    order_col = _find_column(df, ("订单号", "业务订单号"))
+    amount_col = _find_column(df, ("金额", "退差价金额", "差价金额"))
+    missing = [name for name, col in (("订单号", order_col), ("金额", amount_col)) if col is None]
+    if missing:
+        return {"updated": 0, "deleted": 0, "errors": [f"缺少列：{'、'.join(missing)}"]}
+
+    current_month_start = date.today().replace(day=1)
+    month_end = current_month_start - timedelta(days=1)
+    month_start = month_end.replace(day=1)
+    errors = []
+    inputs = []
+    seen = set()
+    for idx, row in df.iterrows():
+        order_no = str(row.get(order_col) or "").strip()
+        amount = pd.to_numeric(row.get(amount_col), errors="coerce")
+        excel_row = idx + 2
+        if not order_no and pd.isna(amount):
+            continue
+        if not order_no:
+            errors.append(f"第 {excel_row} 行：订单号为空")
+            continue
+        if order_no in seen:
+            errors.append(f"第 {excel_row} 行：订单号重复 {order_no}")
+            continue
+        seen.add(order_no)
+        if pd.isna(amount) or not math.isfinite(float(amount)) or float(amount) >= 0:
+            errors.append(f"第 {excel_row} 行：金额必须是有效负数")
+            continue
+        inputs.append((excel_row, order_no, float(amount)))
+    if not inputs:
+        errors.append("没有可处理的数据")
+        return {"updated": 0, "deleted": 0, "errors": errors}
+
+    mapping_rows = client.table("mapping").select("shop_name,anchor_name,org_name,dept").execute().data or []
+    mapping = {}
+    for row in mapping_rows:
+        key = (str(row.get("shop_name") or "").strip().upper(), str(row.get("anchor_name") or "NONE").strip().upper())
+        value = (str(row.get("org_name") or "").strip(), str(row.get("dept") or "").strip())
+        if all(value):
+            mapping.setdefault(key, set()).add(value)
+
+    resolved = []
+    for excel_row, order_no, amount in inputs:
+        candidates = client.table("product_sales_all").select(
+            "remark,shop_name,anchor_name,platform"
+        ).like("remark", f"{order_no}_%").limit(100).execute().data or []
+        candidates = [row for row in candidates if str(row.get("remark") or "").split("_", 1)[0] == order_no]
+        identities = {
+            (
+                str(row.get("shop_name") or "").strip(),
+                str(row.get("anchor_name") or "NONE").strip() or "NONE",
+                str(row.get("platform") or "unknown").strip(),
+            )
+            for row in candidates
+        }
+        if not identities:
+            errors.append(f"第 {excel_row} 行：数据库中找不到订单 {order_no}")
+            continue
+        if len(identities) != 1:
+            errors.append(f"第 {excel_row} 行：订单 {order_no} 对应多个店铺、主播或平台")
+            continue
+        shop, anchor, platform = next(iter(identities))
+        if platform not in ("douyin", "wechat_channels"):
+            errors.append(f"第 {excel_row} 行：订单 {order_no} 无法识别为抖音或视频号")
+            continue
+        org_matches = mapping.get((shop.upper(), anchor.upper()), set())
+        if len(org_matches) != 1:
+            reason = "未找到组织映射" if not org_matches else "存在多个组织映射"
+            errors.append(f"第 {excel_row} 行：订单 {order_no} 的店铺/主播{reason}")
+            continue
+        org, dept = next(iter(org_matches))
+        resolved.append((order_no, amount, shop, anchor, platform, org, dept))
+
+    raw_rows = _fetch_all(client.table("price_adjustments").select(
+        "id,document_no,platform,amount"
+    ).gte("sale_date", month_start.isoformat()).lte("sale_date", month_end.isoformat()).eq(
+        "allocation_status", "unallocated"
+    ).like("document_no", "C%").order("id"))
+    raw_totals = {}
+    for row in raw_rows:
+        raw_totals[row["platform"]] = raw_totals.get(row["platform"], 0.0) + float(row["amount"])
+    upload_totals = {}
+    for _, amount, _, _, platform, _, _ in resolved:
+        upload_totals[platform] = upload_totals.get(platform, 0.0) + amount
+
+    for platform in sorted(set(raw_totals) | set(upload_totals)):
+        raw_total = raw_totals.get(platform, 0.0)
+        upload_total = upload_totals.get(platform, 0.0)
+        if abs(raw_total - upload_total) > 0.01:
+            label = "抖音" if platform == "douyin" else "视频号"
+            errors.append(f"{label}金额不平：自媒体综合 C 单 {raw_total:.2f}，上传订单 {upload_total:.2f}，差额 {upload_total - raw_total:.2f}")
+    if errors:
+        return {"updated": 0, "deleted": 0, "errors": errors}
+
+    records = []
+    for order_no, amount, shop, anchor, platform, org, dept in resolved:
+        records.append({
+            "document_no": f"ORDER-{month_end.isoformat()}-{order_no}",
+            "business_order_no": order_no,
+            "sale_date": month_end.isoformat(),
+            "platform": platform,
+            "amount": amount,
+            "source_org_name": SOURCE_ORG,
+            "source_dept": SOURCE_DEPT,
+            "allocated_org_name": org,
+            "allocated_dept": dept,
+            "allocated_shop_name": shop,
+            "allocated_anchor_name": anchor,
+            "allocation_status": "allocated",
+            "mapping_batch_date": date.today().isoformat(),
+        })
+    client.table("price_adjustments").upsert(records, on_conflict="document_no").execute()
+    raw_ids = [row["id"] for row in raw_rows]
+    for start in range(0, len(raw_ids), 200):
+        client.table("price_adjustments").delete().in_("id", raw_ids[start:start + 200]).execute()
+    return {"updated": len(records), "deleted": len(raw_ids), "errors": []}
+
+
 def load_douyin_org_summary(client, start_date, end_date, amount_type="net", platform="douyin") -> pd.DataFrame:
     start_text, end_text = str(start_date), str(end_date)
     sales = _fetch_all(client.table("product_sales_all").select(
@@ -155,7 +275,7 @@ def load_douyin_org_summary(client, start_date, end_date, amount_type="net", pla
     ).eq("platform", platform).gte("sale_date", start_text).lte("sale_date", end_text).order("id"))
     mapping = client.table("mapping").select("shop_name,anchor_name,org_name,dept").execute().data or []
     adjustments = _fetch_all(client.table("price_adjustments").select(
-        "amount,source_org_name,source_dept,allocated_org_name,allocated_dept"
+        "amount,source_org_name,source_dept,allocated_org_name,allocated_dept,allocated_shop_name"
     ).eq("platform", platform).gte("sale_date", start_text).lte("sale_date", end_text).order("id"))
 
     map_df = pd.DataFrame(mapping)
@@ -177,7 +297,7 @@ def load_douyin_org_summary(client, start_date, end_date, amount_type="net", pla
         adj_df = pd.DataFrame(adjustments)
         adj_df["dept"] = adj_df["allocated_dept"].fillna(adj_df["source_dept"])
         adj_df["org_name"] = adj_df["allocated_org_name"].fillna(adj_df["source_org_name"])
-        adj_df["shop_name"] = "退差价（待归属店铺）"
+        adj_df["shop_name"] = adj_df["allocated_shop_name"].fillna("退差价（待归属店铺）")
         adj_df["sales_amount"] = pd.to_numeric(adj_df["amount"], errors="coerce").fillna(0)
         totals.append(adj_df[["shop_name", "dept", "org_name", "sales_amount"]])
     if not totals:
