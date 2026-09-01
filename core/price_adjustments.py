@@ -41,6 +41,22 @@ def is_price_adjustment(value) -> bool:
     return bool(ADJUSTMENT_RE.fullmatch(str(value or "").strip()))
 
 
+def normalize_order_no(value) -> str:
+    """保留订单号文本，并清理由 Excel 数值单元格产生的末尾 .0。"""
+    if value is None:
+        return ""
+    try:
+        if pd.isna(value):
+            return ""
+    except (TypeError, ValueError):
+        pass
+    if isinstance(value, (int, float)) and float(value).is_integer():
+        return str(int(value))
+    text = str(value).strip()
+    match = re.fullmatch(r"(\d+)\.0+", text)
+    return match.group(1) if match else text
+
+
 def adjustment_records(df: pd.DataFrame, platform: str) -> list[dict]:
     records = {}
     for row in df.to_dict(orient="records"):
@@ -163,7 +179,7 @@ def apply_order_adjustments(client, df: pd.DataFrame) -> dict:
     inputs = []
     seen = set()
     for idx, row in df.iterrows():
-        order_no = str(row.get(order_col) or "").strip()
+        order_no = normalize_order_no(row.get(order_col))
         amount = pd.to_numeric(row.get(amount_col), errors="coerce")
         excel_row = idx + 2
         if not order_no and pd.isna(amount):
@@ -194,9 +210,8 @@ def apply_order_adjustments(client, df: pd.DataFrame) -> dict:
     resolved = []
     for excel_row, order_no, amount in inputs:
         candidates = client.table("product_sales_all").select(
-            "remark,shop_name,anchor_name,platform"
-        ).like("remark", f"{order_no}_%").limit(100).execute().data or []
-        candidates = [row for row in candidates if str(row.get("remark") or "").split("_", 1)[0] == order_no]
+            "order_no,shop_name,anchor_name,platform"
+        ).eq("order_no", order_no).limit(100).execute().data or []
         identities = {
             (
                 str(row.get("shop_name") or "").strip(),

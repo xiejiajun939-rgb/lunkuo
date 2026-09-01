@@ -328,6 +328,7 @@ def save_product_sales(df_orders, suffix=None, platform="unknown"):
         if remark not in temp_records:
             rec = {
                 "remark": remark,
+                "order_no": str(remark).split("_", 1)[0],
                 "sale_date": row["日期"].strftime("%Y-%m-%d"),
                 "shop_name": row["店铺名称"],
                 "product_code": parsed["product_code"],
