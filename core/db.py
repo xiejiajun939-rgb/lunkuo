@@ -252,15 +252,53 @@ def _fetch_sales_summary_cached(start_date, end_date, suffix, view_mode, data_ve
                 df_offline['anchor'] = 'NONE'
                 df_offline['source'] = 'offline'
 
+    # ---- 退差价处理 ----
+    # 退差价没有商品货号，因此只进入经营、每日、店铺、组织和部门等金额汇总，
+    # 不进入商品/货号分析，避免将差价虚构到某个商品上。
+    df_adjustments = pd.DataFrame()
+    if suffix == "_all":
+        try:
+            adjustment_data = _fetch_rows_parallel(
+                "price_adjustments",
+                "sale_date,amount,allocated_shop_name,allocated_anchor_name,"
+                "allocated_org_name,allocated_dept,source_org_name,source_dept",
+                start_date=start_date,
+                end_date=end_date,
+            )
+        except Exception as e:
+            st.warning(f"查询退差价数据出错：{e}")
+            adjustment_data = []
+        if adjustment_data:
+            df_adjustments = pd.DataFrame(adjustment_data)
+            df_adjustments["sale_date"] = pd.to_datetime(df_adjustments["sale_date"])
+            df_adjustments["amount"] = pd.to_numeric(
+                df_adjustments["amount"], errors="coerce"
+            ).fillna(0)
+            df_adjustments["shop_name"] = (
+                df_adjustments["allocated_shop_name"]
+                .fillna("退差价（待归属店铺）")
+                .astype(str).str.strip().str.upper()
+            )
+            df_adjustments["anchor"] = (
+                df_adjustments["allocated_anchor_name"]
+                .fillna("NONE").astype(str).str.strip().str.upper()
+            )
+            df_adjustments["org_name"] = df_adjustments["allocated_org_name"].fillna(
+                df_adjustments["source_org_name"]
+            )
+            df_adjustments["dept"] = df_adjustments["allocated_dept"].fillna(
+                df_adjustments["source_dept"]
+            )
+            df_adjustments["ship_amount"] = df_adjustments["amount"].clip(lower=0)
+            df_adjustments["return_amount"] = (-df_adjustments["amount"]).clip(lower=0)
+            df_adjustments["net_amount"] = df_adjustments["amount"]
+            df_adjustments["source"] = "online"
+
     # ---- 合并 ----
-    if df_online.empty and df_offline.empty:
+    frames = [frame for frame in (df_online, df_offline, df_adjustments) if not frame.empty]
+    if not frames:
         return pd.DataFrame(columns=required_columns)
-    elif df_online.empty:
-        df = df_offline
-    elif df_offline.empty:
-        df = df_online
-    else:
-        df = pd.concat([df_online, df_offline], ignore_index=True)
+    df = pd.concat(frames, ignore_index=True)
 
     # ---- 重命名 ----
     df = df.rename(columns={
