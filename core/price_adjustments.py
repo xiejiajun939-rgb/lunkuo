@@ -148,15 +148,15 @@ def apply_adjustment_mapping(client, df: pd.DataFrame) -> dict:
     return {"updated": updated, "errors": errors}
 
 
-def load_douyin_org_summary(client, start_date, end_date, amount_type="net") -> pd.DataFrame:
+def load_douyin_org_summary(client, start_date, end_date, amount_type="net", platform="douyin") -> pd.DataFrame:
     start_text, end_text = str(start_date), str(end_date)
     sales = _fetch_all(client.table("product_sales_all").select(
         "sale_date,shop_name,anchor_name,ship_amount,net_amount"
-    ).eq("platform", "douyin").gte("sale_date", start_text).lte("sale_date", end_text).order("id"))
+    ).eq("platform", platform).gte("sale_date", start_text).lte("sale_date", end_text).order("id"))
     mapping = client.table("mapping").select("shop_name,anchor_name,org_name,dept").execute().data or []
     adjustments = _fetch_all(client.table("price_adjustments").select(
         "amount,source_org_name,source_dept,allocated_org_name,allocated_dept"
-    ).eq("platform", "douyin").gte("sale_date", start_text).lte("sale_date", end_text).order("id"))
+    ).eq("platform", platform).gte("sale_date", start_text).lte("sale_date", end_text).order("id"))
 
     map_df = pd.DataFrame(mapping)
     totals = []
