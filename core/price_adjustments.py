@@ -28,6 +28,20 @@ HISTORICAL_ORDER_OVERRIDES = {
         "org": "小店运营组",
         "dept": "小店运营",
     },
+    "16081112332996": {
+        "shop": "抖音江轮轮廓服饰专营店",
+        "anchor": "NONE",
+        "platform": "douyin",
+        "org": "小店运营组",
+        "dept": "小店运营",
+    },
+    "16080112264924": {
+        "shop": "抖音信刻吉丘古儿旗舰店",
+        "anchor": "NONE",
+        "platform": "douyin",
+        "org": "小店运营组",
+        "dept": "小店运营",
+    },
 }
 
 
@@ -229,7 +243,7 @@ def apply_order_adjustments(client, df: pd.DataFrame) -> dict:
         candidates = client.table("product_sales_all").select(
             "order_no,shop_name,anchor_name,platform"
         ).eq("order_no", order_no).limit(100).execute().data or []
-        if not candidates and order_no in HISTORICAL_ORDER_OVERRIDES:
+        if order_no in HISTORICAL_ORDER_OVERRIDES:
             override = HISTORICAL_ORDER_OVERRIDES[order_no]
             resolved.append((
                 order_no, amount, override["shop"], override["anchor"],
