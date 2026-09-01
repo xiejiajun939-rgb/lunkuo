@@ -150,6 +150,7 @@ with tab_upload:
     st.markdown("### 退差价归属")
     with st.container(border=True):
         st.caption("每月 1 日上传上月退差价表。必需列：订单号、金额（负数）；系统自动匹配平台、店铺、主播、部门和阿米巴组织，并归入上月最后一天。")
+        st.warning("临时模式：若上月数据库完全没有C单，允许凭订单号和负金额直接入账；上传完成后将恢复强制平账。")
         template_output = io.BytesIO()
         template_df = pd.DataFrame({
             "订单号": ["16083112505226"],
@@ -193,6 +194,8 @@ with tab_upload:
                 if result["updated"]:
                     callbacks["mark_data_changed"]()
                     st.success(f"已按订单归属 {result['updated']} 条退差价，并替换 {result.get('deleted', 0)} 条自媒体综合 C 单")
+                    if result.get("direct_entry_without_c"):
+                        st.info("本次因上月没有C单，已按临时直录模式处理。")
                 for error in result["errors"]:
                     st.warning(error)
 
