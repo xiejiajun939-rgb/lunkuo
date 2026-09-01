@@ -15,6 +15,19 @@ SOURCE_ORG = "自媒体综合"
 SOURCE_DEPT = "自媒体部"
 
 
+def _fetch_all(query, page_size: int = 1000) -> list[dict]:
+    """读取 PostgREST 全部分页，避免默认 1000 行上限截断汇总。"""
+    rows = []
+    start = 0
+    while True:
+        batch = query.range(start, start + page_size - 1).execute().data or []
+        rows.extend(batch)
+        if len(batch) < page_size:
+            break
+        start += page_size
+    return rows
+
+
 def infer_platform(filename: str) -> str:
     name = str(filename or "").strip().lower()
     if "抖音" in name or "douyin" in name:
@@ -137,13 +150,13 @@ def apply_adjustment_mapping(client, df: pd.DataFrame) -> dict:
 
 def load_douyin_org_summary(client, start_date, end_date) -> pd.DataFrame:
     start_text, end_text = str(start_date), str(end_date)
-    sales = client.table("product_sales_all").select(
+    sales = _fetch_all(client.table("product_sales_all").select(
         "sale_date,shop_name,anchor_name,net_amount"
-    ).eq("platform", "douyin").gte("sale_date", start_text).lte("sale_date", end_text).execute().data or []
+    ).eq("platform", "douyin").gte("sale_date", start_text).lte("sale_date", end_text).order("id"))
     mapping = client.table("mapping").select("shop_name,anchor_name,org_name,dept").execute().data or []
-    adjustments = client.table("price_adjustments").select(
+    adjustments = _fetch_all(client.table("price_adjustments").select(
         "amount,source_org_name,source_dept,allocated_org_name,allocated_dept"
-    ).eq("platform", "douyin").gte("sale_date", start_text).lte("sale_date", end_text).execute().data or []
+    ).eq("platform", "douyin").gte("sale_date", start_text).lte("sale_date", end_text).order("id"))
 
     map_df = pd.DataFrame(mapping)
     totals = []
