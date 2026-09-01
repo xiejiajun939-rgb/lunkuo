@@ -150,6 +150,35 @@ with tab_upload:
     st.markdown("### 退差价归属")
     with st.container(border=True):
         st.caption("每月 1 日上传上月退差价匹配表。必需列：订单号、金额、阿米巴组织；原始业务日期仍保留在上月 31 日。")
+        template_output = io.BytesIO()
+        template_df = pd.DataFrame({
+            "订单号": ["CWTKRWD2026083100006"],
+            "金额": [-100.00],
+            "阿米巴组织": ["示例阿米巴组织"],
+        })
+        instruction_df = pd.DataFrame({
+            "填写说明": [
+                "订单号必须填写完整的 C 开头单号",
+                "金额可填写正数或负数，系统按绝对值与原始退差价核对",
+                "阿米巴组织必须与系统映射关系中的组织名称完全一致",
+                "请删除示例行后再上传",
+            ]
+        })
+        with pd.ExcelWriter(template_output, engine="openpyxl") as writer:
+            template_df.to_excel(writer, sheet_name="退差价匹配", index=False)
+            instruction_df.to_excel(writer, sheet_name="填写说明", index=False)
+            writer.book["退差价匹配"].freeze_panes = "A2"
+            writer.book["填写说明"].column_dimensions["A"].width = 68
+            for sheet in writer.book.worksheets:
+                for cell in sheet[1]:
+                    cell.font = cell.font.copy(bold=True)
+        st.download_button(
+            "下载退差价匹配模板",
+            data=template_output.getvalue(),
+            file_name="退差价归属匹配模板.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="download_adjustment_mapping_template",
+        )
         adjustment_mapping_file = st.file_uploader(
             "退差价匹配表", type=["xlsx", "xls"], key="settings_adjustment_mapping"
         )
