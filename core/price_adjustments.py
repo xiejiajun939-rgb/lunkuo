@@ -148,10 +148,10 @@ def apply_adjustment_mapping(client, df: pd.DataFrame) -> dict:
     return {"updated": updated, "errors": errors}
 
 
-def load_douyin_org_summary(client, start_date, end_date) -> pd.DataFrame:
+def load_douyin_org_summary(client, start_date, end_date, amount_type="net") -> pd.DataFrame:
     start_text, end_text = str(start_date), str(end_date)
     sales = _fetch_all(client.table("product_sales_all").select(
-        "sale_date,shop_name,anchor_name,net_amount"
+        "sale_date,shop_name,anchor_name,ship_amount,net_amount"
     ).eq("platform", "douyin").gte("sale_date", start_text).lte("sale_date", end_text).order("id"))
     mapping = client.table("mapping").select("shop_name,anchor_name,org_name,dept").execute().data or []
     adjustments = _fetch_all(client.table("price_adjustments").select(
@@ -169,17 +169,24 @@ def load_douyin_org_summary(client, start_date, end_date) -> pd.DataFrame:
             sales_df = sales_df.merge(map_df, how="left", on=["shop_name", "anchor_name"])
         sales_df["org_name"] = sales_df.get("org_name", pd.Series(index=sales_df.index)).fillna("未匹配组织")
         sales_df["dept"] = sales_df.get("dept", pd.Series(index=sales_df.index)).fillna("未匹配部门")
-        sales_df["sales_amount"] = pd.to_numeric(sales_df["net_amount"], errors="coerce").fillna(0)
-        totals.append(sales_df[["dept", "org_name", "sales_amount"]])
-    if adjustments:
+        amount_column = "ship_amount" if amount_type == "ship" else "net_amount"
+        sales_df["sales_amount"] = pd.to_numeric(sales_df[amount_column], errors="coerce").fillna(0)
+        totals.append(sales_df[["shop_name", "dept", "org_name", "sales_amount"]])
+    # 退差价是实销调整，不属于发货金额。
+    if adjustments and amount_type == "net":
         adj_df = pd.DataFrame(adjustments)
         adj_df["dept"] = adj_df["allocated_dept"].fillna(adj_df["source_dept"])
         adj_df["org_name"] = adj_df["allocated_org_name"].fillna(adj_df["source_org_name"])
+        adj_df["shop_name"] = "退差价（待归属店铺）"
         adj_df["sales_amount"] = pd.to_numeric(adj_df["amount"], errors="coerce").fillna(0)
-        totals.append(adj_df[["dept", "org_name", "sales_amount"]])
+        totals.append(adj_df[["shop_name", "dept", "org_name", "sales_amount"]])
     if not totals:
-        return pd.DataFrame(columns=["部门", "阿米巴组织", "销售额", "销售占比"])
-    result = pd.concat(totals, ignore_index=True).groupby(["dept", "org_name"], as_index=False)["sales_amount"].sum()
-    grand_total = result["sales_amount"].sum()
-    result["销售占比"] = result["sales_amount"] / grand_total if grand_total else 0
-    return result.rename(columns={"dept": "部门", "org_name": "阿米巴组织", "sales_amount": "销售额"}).sort_values("销售额", ascending=False)
+        return pd.DataFrame(columns=["店铺", "部门", "阿米巴组织", "销售额", "店铺内销售占比"])
+    result = pd.concat(totals, ignore_index=True).groupby(
+        ["shop_name", "dept", "org_name"], as_index=False
+    )["sales_amount"].sum()
+    shop_totals = result.groupby("shop_name")["sales_amount"].transform("sum")
+    result["店铺内销售占比"] = result["sales_amount"].div(shop_totals.mask(shop_totals == 0)).fillna(0)
+    return result.rename(columns={
+        "shop_name": "店铺", "dept": "部门", "org_name": "阿米巴组织", "sales_amount": "销售额"
+    }).sort_values(["店铺", "销售额"], ascending=[True, False])

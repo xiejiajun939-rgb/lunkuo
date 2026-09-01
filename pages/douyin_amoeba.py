@@ -18,12 +18,16 @@ default_start = today.replace(day=1)
 col1, col2 = st.columns(2)
 start_date = col1.date_input("开始日期", value=default_start, key="douyin_amoeba_start")
 end_date = col2.date_input("结束日期", value=today, key="douyin_amoeba_end")
+amount_label = st.radio("销售口径", ["实销", "发货金额"], horizontal=True, key="douyin_amoeba_amount_type")
 if start_date > end_date:
     st.error("开始日期不能晚于结束日期")
     st.stop()
 
 try:
-    result = load_douyin_org_summary(init_supabase(), start_date, end_date)
+    result = load_douyin_org_summary(
+        init_supabase(), start_date, end_date,
+        amount_type="ship" if amount_label == "发货金额" else "net",
+    )
 except Exception as exc:
     st.error(f"查询失败：{exc}")
     st.stop()
@@ -31,14 +35,17 @@ except Exception as exc:
 if result.empty:
     st.info("所选时间内没有抖音数据")
 else:
-    total = result["销售额"].sum()
-    st.metric("抖音销售额", f"¥{total:,.2f}")
-    display = result.copy()
+    shop_options = sorted(result["店铺"].dropna().unique().tolist())
+    selected_shop = st.selectbox("店铺", ["全部店铺"] + shop_options, key="douyin_amoeba_shop")
+    filtered = result if selected_shop == "全部店铺" else result[result["店铺"] == selected_shop].copy()
+    total = filtered["销售额"].sum()
+    st.metric(f"抖音{amount_label}", f"¥{total:,.2f}")
+    display = filtered.copy()
     display["销售额"] = display["销售额"].map(lambda value: f"¥{value:,.2f}")
-    display["销售占比"] = display["销售占比"].map(lambda value: f"{value:.2%}")
+    display["店铺内销售占比"] = display["店铺内销售占比"].map(lambda value: f"{value:.2%}")
     st.dataframe(display, use_container_width=True, hide_index=True)
 
-    dept = result.groupby("部门", as_index=False)["销售额"].sum().sort_values("销售额", ascending=False)
+    dept = filtered.groupby("部门", as_index=False)["销售额"].sum().sort_values("销售额", ascending=False)
     dept["销售占比"] = dept["销售额"] / total if total else 0
     dept["销售额"] = dept["销售额"].map(lambda value: f"¥{value:,.2f}")
     dept["销售占比"] = dept["销售占比"].map(lambda value: f"{value:.2%}")
