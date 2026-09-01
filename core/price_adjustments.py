@@ -176,8 +176,8 @@ def apply_order_adjustments(client, df: pd.DataFrame) -> dict:
     month_end = current_month_start - timedelta(days=1)
     month_start = month_end.replace(day=1)
     errors = []
-    inputs = []
-    seen = set()
+    input_amounts = {}
+    input_first_rows = {}
     for idx, row in df.iterrows():
         order_no = normalize_order_no(row.get(order_col))
         amount = pd.to_numeric(row.get(amount_col), errors="coerce")
@@ -187,14 +187,15 @@ def apply_order_adjustments(client, df: pd.DataFrame) -> dict:
         if not order_no:
             errors.append(f"第 {excel_row} 行：订单号为空")
             continue
-        if order_no in seen:
-            errors.append(f"第 {excel_row} 行：订单号重复 {order_no}")
-            continue
-        seen.add(order_no)
         if pd.isna(amount) or not math.isfinite(float(amount)) or float(amount) >= 0:
             errors.append(f"第 {excel_row} 行：金额必须是有效负数")
             continue
-        inputs.append((excel_row, order_no, float(amount)))
+        input_amounts[order_no] = input_amounts.get(order_no, 0.0) + float(amount)
+        input_first_rows.setdefault(order_no, excel_row)
+    inputs = [
+        (input_first_rows[order_no], order_no, amount)
+        for order_no, amount in input_amounts.items()
+    ]
     if not inputs:
         errors.append("没有可处理的数据")
         return {"updated": 0, "deleted": 0, "errors": errors}
@@ -223,19 +224,28 @@ def apply_order_adjustments(client, df: pd.DataFrame) -> dict:
         if not identities:
             errors.append(f"第 {excel_row} 行：数据库中找不到订单 {order_no}")
             continue
-        if len(identities) != 1:
-            errors.append(f"第 {excel_row} 行：订单 {order_no} 对应多个店铺、主播或平台")
+        resolved_identities = set()
+        unresolved_identity = False
+        for shop, anchor, platform in identities:
+            if platform not in ("douyin", "wechat_channels"):
+                unresolved_identity = True
+                continue
+            org_matches = mapping.get((shop.upper(), anchor.upper()), set())
+            if len(org_matches) != 1:
+                unresolved_identity = True
+                continue
+            org, dept = next(iter(org_matches))
+            resolved_identities.add((shop, platform, org, dept, anchor))
+        business_identities = {(shop, platform, org, dept) for shop, platform, org, dept, _ in resolved_identities}
+        if unresolved_identity or not business_identities:
+            errors.append(f"第 {excel_row} 行：订单 {order_no} 存在无法识别的平台或组织映射")
             continue
-        shop, anchor, platform = next(iter(identities))
-        if platform not in ("douyin", "wechat_channels"):
-            errors.append(f"第 {excel_row} 行：订单 {order_no} 无法识别为抖音或视频号")
+        if len(business_identities) != 1:
+            errors.append(f"第 {excel_row} 行：订单 {order_no} 跨越多个店铺或阿米巴组织")
             continue
-        org_matches = mapping.get((shop.upper(), anchor.upper()), set())
-        if len(org_matches) != 1:
-            reason = "未找到组织映射" if not org_matches else "存在多个组织映射"
-            errors.append(f"第 {excel_row} 行：订单 {order_no} 的店铺/主播{reason}")
-            continue
-        org, dept = next(iter(org_matches))
+        shop, platform, org, dept = next(iter(business_identities))
+        anchors = {anchor for s, p, o, d, anchor in resolved_identities if (s, p, o, d) == (shop, platform, org, dept)}
+        anchor = next(iter(anchors)) if len(anchors) == 1 else "MULTIPLE"
         resolved.append((order_no, amount, shop, anchor, platform, org, dept))
 
     raw_rows = _fetch_all(client.table("price_adjustments").select(
