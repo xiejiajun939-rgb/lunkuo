@@ -13,6 +13,22 @@ import pandas as pd
 ADJUSTMENT_RE = re.compile(r"^C[A-Z0-9-]+$", re.IGNORECASE)
 SOURCE_ORG = "自媒体综合"
 SOURCE_DEPT = "自媒体部"
+HISTORICAL_ORDER_OVERRIDES = {
+    "16020510502738": {
+        "shop": "抖音江轮轮廓服饰专营店",
+        "anchor": "NONE",
+        "platform": "douyin",
+        "org": "小店运营组",
+        "dept": "小店运营",
+    },
+    "16041511224070": {
+        "shop": "抖音江轮轮廓服饰专营店",
+        "anchor": "NONE",
+        "platform": "douyin",
+        "org": "小店运营组",
+        "dept": "小店运营",
+    },
+}
 
 
 def _fetch_all(query, page_size: int = 1000) -> list[dict]:
@@ -213,6 +229,13 @@ def apply_order_adjustments(client, df: pd.DataFrame) -> dict:
         candidates = client.table("product_sales_all").select(
             "order_no,shop_name,anchor_name,platform"
         ).eq("order_no", order_no).limit(100).execute().data or []
+        if not candidates and order_no in HISTORICAL_ORDER_OVERRIDES:
+            override = HISTORICAL_ORDER_OVERRIDES[order_no]
+            resolved.append((
+                order_no, amount, override["shop"], override["anchor"],
+                override["platform"], override["org"], override["dept"],
+            ))
+            continue
         identities = {
             (
                 str(row.get("shop_name") or "").strip(),
