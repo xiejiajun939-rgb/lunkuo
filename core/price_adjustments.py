@@ -297,16 +297,12 @@ def apply_order_adjustments(client, df: pd.DataFrame) -> dict:
     for _, amount, _, _, platform, _, _ in resolved:
         upload_totals[platform] = upload_totals.get(platform, 0.0) + amount
 
-    # 临时兼容 2026 年 8 月：历史上传时 C 单尚未入库，因此没有原单可平账。
-    # 只在整个月完全没有 C 单时允许订单差价直录；一旦存在任意 C 单，仍强制逐平台平账。
-    direct_entry_without_c = not raw_rows and month_end == date(2026, 8, 31)
-    if not direct_entry_without_c:
-        for platform in sorted(set(raw_totals) | set(upload_totals)):
-            raw_total = raw_totals.get(platform, 0.0)
-            upload_total = upload_totals.get(platform, 0.0)
-            if abs(raw_total - upload_total) > 0.01:
-                label = "抖音" if platform == "douyin" else "视频号"
-                errors.append(f"{label}金额不平：自媒体综合 C 单 {raw_total:.2f}，上传订单 {upload_total:.2f}，差额 {upload_total - raw_total:.2f}")
+    for platform in sorted(set(raw_totals) | set(upload_totals)):
+        raw_total = raw_totals.get(platform, 0.0)
+        upload_total = upload_totals.get(platform, 0.0)
+        if abs(raw_total - upload_total) > 0.01:
+            label = "抖音" if platform == "douyin" else "视频号"
+            errors.append(f"{label}金额不平：自媒体综合 C 单 {raw_total:.2f}，上传订单 {upload_total:.2f}，差额 {upload_total - raw_total:.2f}")
     if errors:
         return {"updated": 0, "deleted": 0, "errors": errors}
 
@@ -333,7 +329,7 @@ def apply_order_adjustments(client, df: pd.DataFrame) -> dict:
         client.table("price_adjustments").delete().in_("id", raw_ids[start:start + 200]).execute()
     return {
         "updated": len(records), "deleted": len(raw_ids), "errors": [],
-        "direct_entry_without_c": direct_entry_without_c,
+        "direct_entry_without_c": False,
     }
 
 
