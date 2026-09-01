@@ -23,17 +23,17 @@ HISTORICAL_ORDER_OVERRIDES = {
     },
     "16041511224070": {
         "shop": "抖音江轮轮廓服饰专营店",
-        "anchor": "NONE",
+        "anchor": "吉丘古儿轮廓女装",
         "platform": "douyin",
-        "org": "小店运营组",
-        "dept": "小店运营",
+        "org": "南京J6展厅店",
+        "dept": "零售线上",
     },
     "16081112332996": {
         "shop": "抖音江轮轮廓服饰专营店",
-        "anchor": "NONE",
+        "anchor": "吉丘古儿轮廓女装",
         "platform": "douyin",
-        "org": "小店运营组",
-        "dept": "小店运营",
+        "org": "南京J6展厅店",
+        "dept": "零售线上",
     },
     "16080112264924": {
         "shop": "抖音信刻吉丘古儿旗舰店",
