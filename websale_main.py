@@ -24,6 +24,7 @@ from core.db import init_supabase, get_table_name, load_product_sales, load_prod
 from core.utils import extract_anchor, parse_product_code, date_quick_buttons, apply_data_permission
 from core.ai import get_siliconflow_client, get_ai_summary
 from core.theme import apply_global_theme
+from core.price_adjustments import infer_platform, save_adjustments, apply_adjustment_mapping
 
 # 防抖
 if "last_rerun" not in st.session_state:
@@ -273,7 +274,7 @@ def clear_targets(suffix=None):
     st.session_state.target_dict = {}
     st.rerun()
 
-def save_product_sales(df_orders, suffix=None):
+def save_product_sales(df_orders, suffix=None, platform="unknown"):
     if supabase is None:
         return
     master_df = load_product_master()
@@ -296,11 +297,19 @@ def save_product_sales(df_orders, suffix=None):
 
     table_name = get_table_name("product_sales", suffix)
     use_anchor = True
+    use_platform = True
     try:
         supabase.table(table_name).select("anchor_name").limit(1).execute()
     except Exception as e:
         if "does not exist" in str(e).lower() or "column" in str(e).lower():
             use_anchor = False
+        else:
+            raise
+    try:
+        supabase.table(table_name).select("platform").limit(1).execute()
+    except Exception as e:
+        if "does not exist" in str(e).lower() or "column" in str(e).lower():
+            use_platform = False
         else:
             raise
 
@@ -338,6 +347,8 @@ def save_product_sales(df_orders, suffix=None):
             }
             if use_anchor:
                 rec["anchor_name"] = anchor_name
+            if use_platform:
+                rec["platform"] = platform
             temp_records[remark] = rec
         else:
             existing = temp_records[remark]
@@ -476,7 +487,7 @@ def validate_order_data(df):
     except Exception as e:
         return False, f"验证过程发生异常: {str(e)}", None
 
-def process_uploaded_file(uploaded_file, suffix):
+def process_uploaded_file(uploaded_file, suffix, source_name=""):
     try:
         try:
             df = pd.read_excel(uploaded_file, header=1)
@@ -486,7 +497,9 @@ def process_uploaded_file(uploaded_file, suffix):
         if not is_valid:
             return False, err_msg
         try:
-            save_product_sales(df_valid, suffix)
+            platform = infer_platform(source_name)
+            adjustment_count = save_adjustments(supabase, df_valid, platform)
+            save_product_sales(df_valid, suffix, platform)
         except Exception as e:
             if "duplicate key" in str(e).lower():
                 return False, "数据重复：该文件中的订单备注与已存在数据冲突。"
@@ -496,7 +509,8 @@ def process_uploaded_file(uploaded_file, suffix):
             st.session_state.target_dict = load_targets(suffix)
         latest_date = df_valid["日期"].max().strftime('%Y-%m-%d') if not df_valid.empty else "无数据"
         refresh_materialized_view(suffix)
-        return True, f"处理完成！最新日期：{latest_date}"
+        adjustment_text = f"；识别退差价 {adjustment_count} 条" if adjustment_count else ""
+        return True, f"处理完成！最新日期：{latest_date}{adjustment_text}"
     except Exception as e:
         return False, f"未预料的错误：{str(e)}"
 
@@ -648,6 +662,7 @@ all_pages = {
     "📊 商品分析助手": "pages/product_assistant.py",   # 新增
     "🎤 主播分析": "pages/anchor.py",
     "📈 销售分布与品牌": "pages/distribution.py",
+    "🏬 抖音部门与阿米巴": "pages/douyin_amoeba.py",
     "🏢 组织与部门分析": "pages/org_dept.py",
     "📚 商品信息管理": "pages/export.py",
     "📣 推广参考": "pages/promotion_reference.py",
@@ -694,6 +709,7 @@ if not pages_to_show:
 # 页面执行前注册管理员工具回调，供系统设置页复用
 st.session_state["_admin_callbacks"] = {
     "process_uploaded_file": process_uploaded_file,
+    "apply_adjustment_mapping": lambda df: apply_adjustment_mapping(supabase, df),
     "load_target_file": load_target_file,
     "save_offline_sales": save_offline_sales,
     "save_org_targets": save_org_targets,

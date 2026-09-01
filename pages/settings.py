@@ -30,6 +30,7 @@ all_pages = {
     "📊 商品分析助手": "pages/product_assistant.py",
     "🎤 主播分析": "pages/anchor.py",
     "📈 销售分布与品牌": "pages/distribution.py",
+    "🏬 抖音部门与阿米巴": "pages/douyin_amoeba.py",
     "🏢 组织与部门分析": "pages/org_dept.py",
     "📚 商品信息管理": "pages/export.py",
     "📣 推广参考": "pages/promotion_reference.py",
@@ -120,7 +121,7 @@ with tab_upload:
                 else:
                     successes = 0
                     for uploaded in order_files:
-                        ok, msg = callbacks["process_uploaded_file"](io.BytesIO(uploaded.getvalue()), "_all")
+                        ok, msg = callbacks["process_uploaded_file"](io.BytesIO(uploaded.getvalue()), "_all", uploaded.name)
                         st.write(f"{'✅' if ok else '❌'} {uploaded.name}：{msg}")
                         successes += int(ok)
                     if successes:
@@ -145,6 +146,26 @@ with tab_upload:
                         st.write(f"✅ {uploaded.name}：{count} 条")
                     if total:
                         callbacks["mark_data_changed"]()
+
+    st.markdown("### 退差价归属")
+    with st.container(border=True):
+        st.caption("每月 1 日上传上月退差价匹配表。必需列：订单号、金额、阿米巴组织；原始业务日期仍保留在上月 31 日。")
+        adjustment_mapping_file = st.file_uploader(
+            "退差价匹配表", type=["xlsx", "xls"], key="settings_adjustment_mapping"
+        )
+        if st.button("上传并匹配退差价", key="settings_apply_adjustment_mapping"):
+            if adjustment_mapping_file is None:
+                st.warning("请先选择匹配表")
+            elif not callbacks:
+                st.error("管理工具尚未初始化，请刷新页面")
+            else:
+                mapping_df = pd.read_excel(adjustment_mapping_file)
+                result = callbacks["apply_adjustment_mapping"](mapping_df)
+                if result["updated"]:
+                    callbacks["mark_data_changed"]()
+                    st.success(f"已匹配 {result['updated']} 条退差价")
+                for error in result["errors"]:
+                    st.warning(error)
 
     st.markdown("### 目标文件")
     col_shop, col_org = st.columns(2)
