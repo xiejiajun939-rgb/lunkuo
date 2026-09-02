@@ -572,30 +572,70 @@ with st.expander("🎁 首单礼金候选", expanded=True):
             ]
             gift_export_columns = [column for column in gift_export_columns if column in gift_export.columns]
             gift_export = gift_export[gift_export_columns].copy()
+            gift_export.insert(
+                gift_export.columns.get_loc("商品图片链接"), "商品图片", ""
+            )
             if "商品标签" in gift_export.columns:
                 gift_export["商品标签"] = gift_export["商品标签"].map(product_tags_text)
             if "当前已设首单礼金" in gift_export.columns:
                 gift_export["当前已设首单礼金"] = gift_export["当前已设首单礼金"].fillna(False).map(
                     lambda value: "是" if bool(value) else "否"
                 )
-            gift_output = io.BytesIO()
-            with pd.ExcelWriter(gift_output, engine="openpyxl") as writer:
-                gift_export.to_excel(writer, index=False, sheet_name="首单礼金候选")
-                worksheet = writer.sheets["首单礼金候选"]
-                worksheet.freeze_panes = "A2"
-                worksheet.auto_filter.ref = worksheet.dimensions
-                for column_name in ["抖音小店实销占比", "视频号小店实销占比", "双平台最低占比"]:
-                    if column_name in gift_export.columns:
-                        column_index = gift_export.columns.get_loc(column_name) + 1
-                        for row_index in range(2, len(gift_export) + 2):
-                            worksheet.cell(row=row_index, column=column_index).number_format = "0.0%"
-            st.download_button(
-                "📥 下载首单礼金候选 Excel",
-                data=gift_output.getvalue(),
-                file_name=f"首单礼金候选_{gift_start:%Y%m%d}_{gift_end:%Y%m%d}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                key="download_newbie_gift_candidates",
-            )
+            if st.button("📷 生成带图片的候选 Excel", key="build_newbie_gift_candidates"):
+                from urllib.request import Request, urlopen
+                from PIL import Image as PILImage
+                from openpyxl.drawing.image import Image as ExcelImage
+                from openpyxl.utils import get_column_letter
+
+                gift_output = io.BytesIO()
+                image_buffers = []
+                progress = st.progress(0, text="正在下载并嵌入商品图片...")
+                with pd.ExcelWriter(gift_output, engine="openpyxl") as writer:
+                    gift_export.to_excel(writer, index=False, sheet_name="首单礼金候选")
+                    worksheet = writer.sheets["首单礼金候选"]
+                    worksheet.freeze_panes = "A2"
+                    worksheet.auto_filter.ref = worksheet.dimensions
+                    image_column = gift_export.columns.get_loc("商品图片") + 1
+                    worksheet.column_dimensions[get_column_letter(image_column)].width = 14
+                    for export_index, image_url in enumerate(gift_export["商品图片链接"], start=2):
+                        if pd.notna(image_url) and str(image_url).strip():
+                            try:
+                                request = Request(str(image_url), headers={"User-Agent": "Mozilla/5.0"})
+                                with urlopen(request, timeout=8) as response:
+                                    raw_image = response.read(8 * 1024 * 1024)
+                                source = PILImage.open(io.BytesIO(raw_image)).convert("RGB")
+                                source.thumbnail((90, 90))
+                                image_buffer = io.BytesIO()
+                                source.save(image_buffer, format="PNG")
+                                image_buffer.seek(0)
+                                image_buffers.append(image_buffer)
+                                excel_image = ExcelImage(image_buffer)
+                                excel_image.width, excel_image.height = source.size
+                                worksheet.add_image(
+                                    excel_image,
+                                    f"{get_column_letter(image_column)}{export_index}",
+                                )
+                                worksheet.row_dimensions[export_index].height = 70
+                            except Exception:
+                                worksheet.cell(export_index, image_column, "图片获取失败")
+                        progress.progress(
+                            (export_index - 1) / len(gift_export),
+                            text=f"正在处理商品图片 {export_index - 1}/{len(gift_export)}",
+                        )
+                    for column_name in ["抖音小店实销占比", "视频号小店实销占比", "双平台最低占比"]:
+                        if column_name in gift_export.columns:
+                            column_index = gift_export.columns.get_loc(column_name) + 1
+                            for row_index in range(2, len(gift_export) + 2):
+                                worksheet.cell(row=row_index, column=column_index).number_format = "0.0%"
+                progress.empty()
+                st.download_button(
+                    "📥 下载带图片的首单礼金候选 Excel",
+                    data=gift_output.getvalue(),
+                    file_name=f"首单礼金候选_带图片_{gift_start:%Y%m%d}_{gift_end:%Y%m%d}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="download_newbie_gift_candidates",
+                    on_click="ignore",
+                )
 
             selected_gift_style = st.selectbox(
                 "查看商品核实明细", candidates["style_code"].tolist(), key="newbie_gift_detail_style"
