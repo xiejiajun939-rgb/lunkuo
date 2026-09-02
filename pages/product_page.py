@@ -876,6 +876,16 @@ grouped = filtered.groupby("style_code").agg(
     净销售金额=("net_amount", "sum")
 ).reset_index().rename(columns={"style_code": "货号"})
 
+# 单款金额在当前查询结果全部货号总额中的贡献占比。
+total_ship_amount = grouped["发货金额"].sum()
+total_net_amount = grouped["净销售金额"].sum()
+grouped["发货金额占比"] = np.where(
+    total_ship_amount != 0, grouped["发货金额"] / total_ship_amount, np.nan
+)
+grouped["实销金额占比"] = np.where(
+    total_net_amount != 0, grouped["净销售金额"] / total_net_amount, np.nan
+)
+
 # 补充图片、分类、礼金信息
 if not master_df.empty and "style_code" in master_df.columns:
     # 商品管理/导出页以最后维护的档案为准；前台保持同一口径，避免重复货号
@@ -904,7 +914,7 @@ grouped["退款率"] = np.where(
 st.markdown("#### 货号汇总表")
 col_s1, col_s2, col_s3 = st.columns([1, 1, 2])
 with col_s1:
-    sort_opts = ["货号", "发货金额", "退货金额", "净销售金额", "退款率"]
+    sort_opts = ["货号", "发货金额", "发货金额占比", "退货金额", "净销售金额", "实销金额占比", "退款率"]
     sort_by = st.selectbox("排序字段", sort_opts, index=sort_opts.index(st.session_state.sort_by), key="sort_sel")
 with col_s2:
     asc = st.radio("顺序", ["降序", "升序"], horizontal=True, index=0 if not st.session_state.sort_ascending else 1, key="order")
@@ -923,10 +933,14 @@ if st.session_state.sort_by == "货号":
     grouped = grouped.sort_values("货号", ascending=st.session_state.sort_ascending)
 elif st.session_state.sort_by == "发货金额":
     grouped = grouped.sort_values("发货金额", ascending=st.session_state.sort_ascending)
+elif st.session_state.sort_by == "发货金额占比":
+    grouped = grouped.sort_values("发货金额占比", ascending=st.session_state.sort_ascending)
 elif st.session_state.sort_by == "退货金额":
     grouped = grouped.sort_values("退货金额", ascending=st.session_state.sort_ascending)
 elif st.session_state.sort_by == "净销售金额":
     grouped = grouped.sort_values("净销售金额", ascending=st.session_state.sort_ascending)
+elif st.session_state.sort_by == "实销金额占比":
+    grouped = grouped.sort_values("实销金额占比", ascending=st.session_state.sort_ascending)
 elif st.session_state.sort_by == "退款率":
     grouped["退款率_num"] = grouped["退款率"].str.rstrip("%").astype(float)
     grouped = grouped.sort_values("退款率_num", ascending=st.session_state.sort_ascending)
@@ -963,7 +977,10 @@ with col_export:
             export_df = grouped.copy()
             if "image_url" in export_df.columns:
                 export_df = export_df.drop(columns=["image_url"])
-            cols_order = ["货号", "master_category", "发货金额", "退货金额", "净销售金额", "退款率", "product_tags"]
+            cols_order = [
+                "货号", "master_category", "发货金额", "发货金额占比", "退货金额",
+                "净销售金额", "实销金额占比", "退款率", "product_tags"
+            ]
             export_cols = [c for c in cols_order if c in export_df.columns]
             export_df = export_df[export_cols]
             export_df.rename(columns={
@@ -986,7 +1003,10 @@ with col_export:
                 (detail_agg["明细退货金额"] / detail_agg["明细发货金额"] * 100).map("{:.2f}%".format),
                 "-"
             )
-            master_cols = grouped[["货号", "master_category", "发货金额", "退货金额", "净销售金额", "退款率", "product_tags"]].copy()
+            master_cols = grouped[[
+                "货号", "master_category", "发货金额", "发货金额占比", "退货金额",
+                "净销售金额", "实销金额占比", "退款率", "product_tags"
+            ]].copy()
             export_df = pd.merge(
                 detail_agg,
                 master_cols,
@@ -1002,7 +1022,8 @@ with col_export:
             }, inplace=True)
             export_df["商品标签"] = export_df["商品标签"].map(product_tags_text)
             final_cols = [
-                "货号", "商品分类", "发货金额", "退货金额", "净销售金额", "退款率", "商品标签",
+                "货号", "商品分类", "发货金额", "发货金额占比", "退货金额",
+                "净销售金额", "实销金额占比", "退款率", "商品标签",
                 "明细类型", group_name, "明细发货金额", "明细退货金额", "明细净销售金额", "明细退款率"
             ]
             export_df = export_df[final_cols]
@@ -1011,6 +1032,12 @@ with col_export:
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
             export_df.to_excel(writer, index=False, sheet_name=sheet_name)
+            worksheet = writer.sheets[sheet_name]
+            for percentage_column in ["发货金额占比", "实销金额占比"]:
+                if percentage_column in export_df.columns:
+                    column_index = export_df.columns.get_loc(percentage_column) + 1
+                    for row_index in range(2, len(export_df) + 2):
+                        worksheet.cell(row=row_index, column=column_index).number_format = "0.00%"
         st.success("导出成功！点击下方按钮下载")
         st.download_button(
             label="💾 点击下载 Excel",
@@ -1021,13 +1048,18 @@ with col_export:
         )
 
 # ---------- 显示表格 ----------
-cols = st.columns([1.7, 0.5, 1.3, 1.1, 1.1, 1.1, 0.9, 0.7, 0.65, 0.65])
-headers = ["货号", "图片", "商品分类", "发货金额(¥)", "退货金额(¥)", "净销售金额(¥)", "退款率", "商品标签", "详情", "趋势"]
+cols = st.columns([1.5, 0.5, 1.1, 1.0, 0.8, 1.0, 1.0, 0.8, 0.8, 0.7, 0.6, 0.6])
+headers = [
+    "货号", "图片", "商品分类", "发货金额(¥)", "发货占比", "退货金额(¥)",
+    "实销金额(¥)", "实销占比", "退款率", "商品标签", "详情", "趋势"
+]
 for c, h in zip(cols, headers):
     c.markdown(f"**{h}**")
 
 for idx, row in page_df.iterrows():
-    c1, c2, c3, c4, c5, c6, c7, c8, c9, c10 = st.columns([1.7, 0.5, 1.3, 1.1, 1.1, 1.1, 0.9, 0.7, 0.65, 0.65])
+    c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12 = st.columns(
+        [1.5, 0.5, 1.1, 1.0, 0.8, 1.0, 1.0, 0.8, 0.8, 0.7, 0.6, 0.6]
+    )
     c1.write(row["货号"])
     if row.get("image_url") and pd.notna(row["image_url"]):
         c2.image(row["image_url"], width=50)
@@ -1037,11 +1069,13 @@ for idx, row in page_df.iterrows():
     category_text = str(row["master_category"]).strip() if pd.notna(row["master_category"]) else "-"
     c3.text(category_text or "-")
     c4.write(f"{row['发货金额']:,.2f}")
-    c5.write(f"{row['退货金额']:,.2f}")
-    c6.write(f"{row['净销售金额']:,.2f}")
-    c7.write(row["退款率"])
-    c8.caption(product_tags_text(row.get("product_tags")) or "—")
-    if c9.button("📊", key=f"detail_btn_{row['货号']}_{idx}"):
+    c5.write(f"{row['发货金额占比']:.2%}" if pd.notna(row["发货金额占比"]) else "-")
+    c6.write(f"{row['退货金额']:,.2f}")
+    c7.write(f"{row['净销售金额']:,.2f}")
+    c8.write(f"{row['实销金额占比']:.2%}" if pd.notna(row["实销金额占比"]) else "-")
+    c9.write(row["退款率"])
+    c10.caption(product_tags_text(row.get("product_tags")) or "-")
+    if c11.button("📊", key=f"detail_btn_{row['货号']}_{idx}"):
         style_code = row["货号"]
         detail_df = filtered[filtered["style_code"] == style_code].copy()
         if not detail_df.empty:
@@ -1070,7 +1104,7 @@ for idx, row in page_df.iterrows():
         st.session_state.show_dialog = True
         st.session_state.detail_clicked = True
         st.rerun()
-    if c10.button("📈", key=f"trend_btn_{row['货号']}_{idx}"):
+    if c12.button("📈", key=f"trend_btn_{row['货号']}_{idx}"):
         style_code = row["货号"]
         trend_data = filtered[filtered["style_code"] == style_code].copy()
         if not trend_data.empty:
