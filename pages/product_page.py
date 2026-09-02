@@ -549,6 +549,54 @@ with st.expander("🎁 首单礼金候选", expanded=True):
                 },
             )
 
+            gift_export = candidates.rename(columns={
+                "style_code": "货号", "brand": "品牌", "product_year": "年份",
+                "season": "季节", "product_category": "商品分类", "image_url": "商品图片链接",
+                "douyin_ship": "抖音整体发货", "douyin_return": "抖音整体退货",
+                "douyin_net": "抖音整体实销", "douyin_shop_ship": "抖音小店发货",
+                "douyin_shop_return": "抖音小店退货", "douyin_shop_net": "抖音小店实销",
+                "douyin_share": "抖音小店实销占比", "wechat_ship": "视频号整体发货",
+                "wechat_return": "视频号整体退货", "wechat_net": "视频号整体实销",
+                "wechat_shop_ship": "视频号小店发货", "wechat_shop_return": "视频号小店退货",
+                "wechat_shop_net": "视频号小店实销", "wechat_share": "视频号小店实销占比",
+                "shop_net_total": "双平台小店实销", "lowest_share": "双平台最低占比",
+                "has_newbie_coupon": "当前已设首单礼金", "tags": "商品标签",
+            })
+            gift_export_columns = [
+                "货号", "商品分类", "品牌", "年份", "季节", "商品图片链接", "商品标签",
+                "抖音整体发货", "抖音整体退货", "抖音整体实销",
+                "抖音小店发货", "抖音小店退货", "抖音小店实销", "抖音小店实销占比",
+                "视频号整体发货", "视频号整体退货", "视频号整体实销",
+                "视频号小店发货", "视频号小店退货", "视频号小店实销", "视频号小店实销占比",
+                "双平台小店实销", "双平台最低占比", "当前已设首单礼金",
+            ]
+            gift_export_columns = [column for column in gift_export_columns if column in gift_export.columns]
+            gift_export = gift_export[gift_export_columns].copy()
+            if "商品标签" in gift_export.columns:
+                gift_export["商品标签"] = gift_export["商品标签"].map(product_tags_text)
+            if "当前已设首单礼金" in gift_export.columns:
+                gift_export["当前已设首单礼金"] = gift_export["当前已设首单礼金"].fillna(False).map(
+                    lambda value: "是" if bool(value) else "否"
+                )
+            gift_output = io.BytesIO()
+            with pd.ExcelWriter(gift_output, engine="openpyxl") as writer:
+                gift_export.to_excel(writer, index=False, sheet_name="首单礼金候选")
+                worksheet = writer.sheets["首单礼金候选"]
+                worksheet.freeze_panes = "A2"
+                worksheet.auto_filter.ref = worksheet.dimensions
+                for column_name in ["抖音小店实销占比", "视频号小店实销占比", "双平台最低占比"]:
+                    if column_name in gift_export.columns:
+                        column_index = gift_export.columns.get_loc(column_name) + 1
+                        for row_index in range(2, len(gift_export) + 2):
+                            worksheet.cell(row=row_index, column=column_index).number_format = "0.0%"
+            st.download_button(
+                "📥 下载首单礼金候选 Excel",
+                data=gift_output.getvalue(),
+                file_name=f"首单礼金候选_{gift_start:%Y%m%d}_{gift_end:%Y%m%d}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="download_newbie_gift_candidates",
+            )
+
             selected_gift_style = st.selectbox(
                 "查看商品核实明细", candidates["style_code"].tolist(), key="newbie_gift_detail_style"
             )
