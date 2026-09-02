@@ -495,6 +495,43 @@ def load_product_sales(
 PRODUCT_CUBE_CACHE_VERSION = 2
 
 
+@st.cache_data(ttl=300, show_spinner=False)
+def load_newbie_coupon_candidates(start_date, end_date, data_version=None):
+    """读取首单礼金候选所需的双平台货号聚合数据。"""
+    if supabase is None:
+        return pd.DataFrame()
+    rows = []
+    page = 0
+    while True:
+        response = (
+            supabase.rpc(
+                "get_newbie_coupon_candidates",
+                {
+                    "p_start_date": start_date.isoformat(),
+                    "p_end_date": end_date.isoformat(),
+                },
+            )
+            .order("style_code")
+            .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1)
+            .execute()
+        )
+        page_rows = response.data or []
+        rows.extend(page_rows)
+        if len(page_rows) < PAGE_SIZE:
+            break
+        page += 1
+    if not rows:
+        return pd.DataFrame()
+    result = pd.DataFrame(rows)
+    amount_columns = [
+        column for column in result.columns
+        if column.endswith(("_ship", "_return", "_net"))
+    ]
+    for column in amount_columns:
+        result[column] = pd.to_numeric(result[column], errors="coerce").fillna(0)
+    return result
+
+
 @st.cache_data(ttl=60, show_spinner=False)
 def _load_product_sales_cube_rpc(start_date, end_date, data_version, department=None):
     """从数据库读取日级商品聚合；RPC 未部署时返回 None 触发兼容降级。"""

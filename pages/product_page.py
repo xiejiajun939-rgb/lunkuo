@@ -8,7 +8,12 @@ import io
 import re
 import numpy as np
 
-from core.db import load_product_sales, load_product_master, get_sales_date_range
+from core.db import (
+    load_product_sales,
+    load_product_master,
+    get_sales_date_range,
+    load_newbie_coupon_candidates,
+)
 from core.product_tags import normalize_product_tags, product_tags_text
 try:
     from core.db import load_product_sales_cube
@@ -398,6 +403,192 @@ date_quick_buttons("prod_start_month", "prod_end_month",
                    max_date=max_date)
 start_date = st.session_state.get("prod_start_month", default_start)
 end_date = st.session_state.get("prod_end_month", max_date)
+
+# ---------- 首单礼金候选 ----------
+with st.expander("🎁 首单礼金候选", expanded=True):
+    st.caption(
+        "默认分析最近 60 天。实销 = 发货金额 - 退货金额；占比 = 小店运营实销 ÷ 对应平台整体实销。"
+        "这里只筛选候选，不会自动修改商品的首单礼金状态。"
+    )
+    gift_default_start = max(min_date, max_date - timedelta(days=59))
+    gift_col1, gift_col2, gift_col3, gift_col4 = st.columns(4)
+    with gift_col1:
+        gift_period = st.date_input(
+            "分析日期",
+            value=(gift_default_start, max_date),
+            min_value=min_date,
+            max_value=max_date,
+            key="newbie_gift_period",
+        )
+    with gift_col2:
+        gift_seasons = st.multiselect(
+            "适用季节", ["春", "夏", "秋", "冬"], default=["春", "秋"],
+            key="newbie_gift_seasons",
+        )
+    with gift_col3:
+        gift_min_share = st.slider(
+            "各平台小店实销占比至少", 0, 100, 30, 5,
+            format="%d%%", key="newbie_gift_min_share",
+        )
+    with gift_col4:
+        gift_min_net = st.number_input(
+            "双平台小店实销至少（元）", min_value=0.0, value=1000.0,
+            step=500.0, key="newbie_gift_min_net",
+        )
+
+    option_col1, option_col2 = st.columns([1, 2])
+    with option_col1:
+        gift_require_both = st.checkbox(
+            "要求抖音、视频号均有实销", value=True, key="newbie_gift_require_both"
+        )
+    with option_col2:
+        gift_style_search = st.text_input(
+            "在候选中查找货号", placeholder="输入完整或部分货号", key="newbie_gift_style_search"
+        )
+
+    if isinstance(gift_period, (tuple, list)) and len(gift_period) == 2:
+        gift_start, gift_end = gift_period
+    else:
+        gift_start, gift_end = gift_default_start, max_date
+
+    with st.spinner("计算首单礼金候选..."):
+        gift_df = load_newbie_coupon_candidates(
+            gift_start,
+            gift_end,
+            st.session_state.get("_data_version", 0),
+        )
+
+    if gift_df.empty:
+        st.info("当前日期范围内没有可分析的抖音或视频号商品数据。")
+    else:
+        for platform in ["douyin", "wechat"]:
+            total_col = f"{platform}_net"
+            shop_col = f"{platform}_shop_net"
+            gift_df[f"{platform}_share"] = np.where(
+                gift_df[total_col] > 0,
+                gift_df[shop_col] / gift_df[total_col],
+                np.nan,
+            )
+        gift_df["shop_net_total"] = gift_df["douyin_shop_net"] + gift_df["wechat_shop_net"]
+        gift_df["lowest_share"] = gift_df[["douyin_share", "wechat_share"]].min(axis=1, skipna=True)
+
+        gift_master = load_product_master().copy()
+        if not gift_master.empty and "style_code" in gift_master.columns:
+            gift_master["style_code"] = gift_master["style_code"].fillna("").astype(str).str.strip().str.upper()
+            gift_master = gift_master[gift_master["style_code"] != ""].drop_duplicates("style_code", keep="last")
+            keep_columns = [
+                column for column in ["style_code", "image_url", "category", "has_newbie_coupon", "tags"]
+                if column in gift_master.columns
+            ]
+            gift_df = gift_df.merge(gift_master[keep_columns], on="style_code", how="left", suffixes=("", "_master"))
+            if "image_url_master" in gift_df.columns:
+                gift_df["image_url"] = gift_df["image_url_master"].combine_first(gift_df["image_url"])
+            if "category" in gift_df.columns:
+                gift_df["product_category"] = gift_df["category"].replace("", np.nan).combine_first(gift_df["product_category"])
+
+        candidate_mask = gift_df["shop_net_total"] >= gift_min_net
+        if gift_seasons:
+            candidate_mask &= gift_df["season"].fillna("").isin(gift_seasons)
+        share_floor = gift_min_share / 100
+        if gift_require_both:
+            candidate_mask &= (
+                (gift_df["douyin_net"] > 0)
+                & (gift_df["wechat_net"] > 0)
+                & (gift_df["douyin_share"] >= share_floor)
+                & (gift_df["wechat_share"] >= share_floor)
+            )
+        else:
+            candidate_mask &= (
+                (gift_df["douyin_share"] >= share_floor)
+                | (gift_df["wechat_share"] >= share_floor)
+            )
+        candidates = gift_df[candidate_mask].copy()
+        if gift_style_search.strip():
+            candidates = candidates[
+                candidates["style_code"].str.contains(
+                    re.escape(gift_style_search.strip()), case=False, na=False
+                )
+            ]
+        candidates = candidates.sort_values(
+            ["lowest_share", "shop_net_total"], ascending=[False, False], na_position="last"
+        )
+
+        st.metric("符合条件的候选货号", f"{len(candidates):,}")
+        if candidates.empty:
+            st.info("暂无符合当前条件的货号，可适当降低占比或实销门槛。")
+        else:
+            candidate_table = candidates.rename(columns={
+                "image_url": "图片", "style_code": "货号", "brand": "品牌",
+                "product_year": "年份", "season": "季节", "product_category": "商品分类",
+                "douyin_shop_net": "抖音小店实销", "douyin_net": "抖音整体实销",
+                "douyin_share": "抖音小店占比", "wechat_shop_net": "视频号小店实销",
+                "wechat_net": "视频号整体实销", "wechat_share": "视频号小店占比",
+                "shop_net_total": "双平台小店实销", "lowest_share": "双平台最低占比",
+                "has_newbie_coupon": "当前已设首单礼金",
+            })
+            show_columns = [
+                "图片", "货号", "商品分类", "品牌", "年份", "季节",
+                "抖音小店实销", "抖音整体实销", "抖音小店占比",
+                "视频号小店实销", "视频号整体实销", "视频号小店占比",
+                "双平台小店实销", "双平台最低占比", "当前已设首单礼金",
+            ]
+            show_columns = [column for column in show_columns if column in candidate_table.columns]
+            st.dataframe(
+                candidate_table[show_columns], hide_index=True, use_container_width=True,
+                column_config={
+                    "图片": st.column_config.ImageColumn("图片", width="small"),
+                    "抖音小店实销": st.column_config.NumberColumn(format="¥%.2f"),
+                    "抖音整体实销": st.column_config.NumberColumn(format="¥%.2f"),
+                    "抖音小店占比": st.column_config.NumberColumn(format="percent"),
+                    "视频号小店实销": st.column_config.NumberColumn(format="¥%.2f"),
+                    "视频号整体实销": st.column_config.NumberColumn(format="¥%.2f"),
+                    "视频号小店占比": st.column_config.NumberColumn(format="percent"),
+                    "双平台小店实销": st.column_config.NumberColumn(format="¥%.2f"),
+                    "双平台最低占比": st.column_config.NumberColumn(format="percent"),
+                    "当前已设首单礼金": st.column_config.CheckboxColumn(),
+                },
+            )
+
+            selected_gift_style = st.selectbox(
+                "查看商品核实明细", candidates["style_code"].tolist(), key="newbie_gift_detail_style"
+            )
+            gift_row = candidates[candidates["style_code"] == selected_gift_style].iloc[0]
+            detail_image, detail_info = st.columns([1, 3])
+            with detail_image:
+                if pd.notna(gift_row.get("image_url")) and gift_row.get("image_url"):
+                    st.image(gift_row["image_url"], use_container_width=True)
+                else:
+                    st.info("暂无商品图片")
+            with detail_info:
+                st.markdown(f"#### {selected_gift_style}")
+                st.write(
+                    f"商品分类：{gift_row.get('product_category') or '未维护'}　"
+                    f"品牌：{gift_row.get('brand') or '未维护'}　"
+                    f"年份/季节：{gift_row.get('product_year') or '-'} / {gift_row.get('season') or '-'}"
+                )
+                st.caption(f"商品标签：{product_tags_text(gift_row.get('tags')) or '无'}")
+                detail_table = pd.DataFrame([
+                    {
+                        "平台": "抖音", "小店发货": gift_row["douyin_shop_ship"],
+                        "小店退货": gift_row["douyin_shop_return"], "小店实销": gift_row["douyin_shop_net"],
+                        "平台整体实销": gift_row["douyin_net"], "小店实销占比": gift_row["douyin_share"],
+                    },
+                    {
+                        "平台": "视频号", "小店发货": gift_row["wechat_shop_ship"],
+                        "小店退货": gift_row["wechat_shop_return"], "小店实销": gift_row["wechat_shop_net"],
+                        "平台整体实销": gift_row["wechat_net"], "小店实销占比": gift_row["wechat_share"],
+                    },
+                ])
+                st.dataframe(
+                    detail_table, hide_index=True, use_container_width=True,
+                    column_config={
+                        "小店发货": st.column_config.NumberColumn(format="¥%.2f"),
+                        "小店退货": st.column_config.NumberColumn(format="¥%.2f"),
+                        "小店实销": st.column_config.NumberColumn(format="¥%.2f"),
+                        "平台整体实销": st.column_config.NumberColumn(format="¥%.2f"),
+                        "小店实销占比": st.column_config.NumberColumn(format="percent"),
+                    },
+                )
 
 # ---------- 加载所选日期范围的数据 ----------
 with st.spinner("加载商品销售数据..."):
