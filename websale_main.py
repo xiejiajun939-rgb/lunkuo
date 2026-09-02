@@ -659,6 +659,7 @@ all_pages = {
     "📊 经营驾驶舱": "pages/dashboard.py",
     "📋 每日明细": "pages/daily_detail.py",
     "📦 商品分析": "pages/product_page.py",
+    "📑 商品月度复盘": "pages/product_monthly_report.py",
     "🔀 商品销售对比": "pages/product_comparison.py",
     "📊 商品分析助手": "pages/product_assistant.py",   # 新增
     "🎤 主播分析": "pages/anchor.py",
@@ -705,6 +706,7 @@ if not pages_to_show:
         Page("pages/dashboard.py", title="📊 经营驾驶舱"),
         Page("pages/daily_detail.py", title="📋 每日明细"),
         Page("pages/product_page.py", title="📦 商品分析"),
+        Page("pages/product_monthly_report.py", title="📑 商品月度复盘"),
     ]
 
 # 页面执行前注册管理员工具回调，供系统设置页复用

@@ -26,6 +26,7 @@ all_pages = {
     "📊 经营驾驶舱": "pages/dashboard.py",
     "📋 每日明细": "pages/daily_detail.py",
     "📦 商品分析": "pages/product_page.py",
+    "📑 商品月度复盘": "pages/product_monthly_report.py",
     "🔀 商品销售对比": "pages/product_comparison.py",
     "📊 商品分析助手": "pages/product_assistant.py",
     "🎤 主播分析": "pages/anchor.py",
@@ -360,6 +361,7 @@ DEFAULT_TABS = [
     "📊 经营驾驶舱",
     "📋 每日明细",
     "📦 商品分析",
+    "📑 商品月度复盘",
     "📈 销售分布与品牌"
 ]
 
