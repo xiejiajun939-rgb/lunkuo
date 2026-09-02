@@ -8,7 +8,7 @@ import streamlit as st
 
 from core.db import get_sales_date_range, load_product_master, load_product_sales_cube
 from core.theme import page_header
-from core.utils import clear_cache_on_page_change
+from core.utils import SEASON_MAP, clear_cache_on_page_change
 
 
 st.set_page_config(page_title="商品月度复盘", layout="wide")
@@ -33,6 +33,11 @@ def _prepare(frame):
     result["platform_name"] = np.where(
         result["shop_name"].fillna("").astype(str).str.startswith("视频号"), "视频号", "抖音"
     )
+    # 年份和季节原本就编码在货号中，例如 L263Y002 = 26年、秋款。
+    # 商品档案若未单独维护这两个字段，则按系统上传时的同一规则从货号补齐。
+    valid_style = result["style_code"].str.len().ge(4)
+    parsed_year = result["style_code"].str.slice(1, 3).where(valid_style, "")
+    parsed_season = result["style_code"].str.slice(3, 4).map(SEASON_MAP).where(valid_style, "")
     master = load_product_master().copy()
     if not master.empty and "style_code" in master.columns:
         master["style_code"] = master["style_code"].fillna("").astype(str).str.strip().str.upper()
@@ -51,18 +56,21 @@ def _prepare(frame):
         master = master[master["style_code"] != ""].drop_duplicates("style_code", keep="last")
         attributes = master[["style_code", "category", "product_year", "season", "master_brand"]]
         result = result.merge(attributes, on="style_code", how="left")
-        for column in ["category", "product_year", "season"]:
-            result[column] = result[column].replace("", np.nan).fillna("未维护")
+        result["category"] = result["category"].replace("", np.nan).fillna("未维护")
+        result["product_year"] = result["product_year"].replace("", np.nan).fillna(parsed_year)
+        result["season"] = result["season"].replace("", np.nan).fillna(parsed_season)
         result["brand"] = result["master_brand"].replace("", np.nan).combine_first(
             result.get("brand", pd.Series(index=result.index, dtype="object"))
         ).fillna("未维护")
         result = result.drop(columns=["master_brand"])
     else:
         result["category"] = "未维护"
-        result["product_year"] = "未维护"
-        result["season"] = "未维护"
+        result["product_year"] = parsed_year
+        result["season"] = parsed_season
         if "brand" not in result.columns:
             result["brand"] = "未维护"
+    result["product_year"] = result["product_year"].replace("", np.nan).fillna("无法识别")
+    result["season"] = result["season"].replace("", np.nan).fillna("无法识别")
     return result
 
 
