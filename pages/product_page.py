@@ -486,9 +486,35 @@ with st.expander("🎁 首单礼金候选", expanded=True):
             if "category" in gift_df.columns:
                 gift_df["product_category"] = gift_df["category"].replace("", np.nan).combine_first(gift_df["product_category"])
 
+        attribute_col1, attribute_col2, attribute_col3 = st.columns(3)
+        with attribute_col1:
+            gift_years = st.multiselect(
+                "年份",
+                sorted(gift_df["product_year"].dropna().astype(str).unique()),
+                key="newbie_gift_years",
+            )
+        with attribute_col2:
+            gift_brands = st.multiselect(
+                "品牌",
+                sorted(gift_df["brand"].dropna().astype(str).unique()),
+                key="newbie_gift_brands",
+            )
+        with attribute_col3:
+            gift_categories = st.multiselect(
+                "品类",
+                sorted(gift_df["product_category"].dropna().astype(str).unique()),
+                key="newbie_gift_categories",
+            )
+
         candidate_mask = gift_df["shop_net_total"] >= gift_min_net
         if gift_seasons:
             candidate_mask &= gift_df["season"].fillna("").isin(gift_seasons)
+        if gift_years:
+            candidate_mask &= gift_df["product_year"].fillna("").astype(str).isin(gift_years)
+        if gift_brands:
+            candidate_mask &= gift_df["brand"].fillna("").astype(str).isin(gift_brands)
+        if gift_categories:
+            candidate_mask &= gift_df["product_category"].fillna("").astype(str).isin(gift_categories)
         share_floor = gift_min_share / 100
         if gift_require_both:
             candidate_mask &= (
