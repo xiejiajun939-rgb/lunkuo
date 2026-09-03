@@ -362,11 +362,16 @@ def _fetch_rows_parallel(table_name, select_cols, start_date=None, end_date=None
             query = query.gte("sale_date", start_date.isoformat())
         if end_date is not None:
             query = query.lte("sale_date", end_date.isoformat())
-        response = (
-            query.order("id")
-            .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1)
-            .execute()
-        )
+        # 日期区间查询必须先按 sale_date 排序，再用 id 保证同日记录稳定。
+        # 若只按主键 id 排序，Postgres 容易选择主键扫描后再过滤日期，
+        # 历史明细增大后即使只查近 7 天也可能触发 statement_timeout。
+        if start_date is not None or end_date is not None:
+            query = query.order("sale_date").order("id")
+        else:
+            query = query.order("id")
+        response = query.range(
+            page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1
+        ).execute()
         return page, response.data or []
 
     all_rows = []
