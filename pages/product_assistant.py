@@ -62,6 +62,32 @@ st.markdown("""
     .stDataFrame { border-radius: 12px; overflow: hidden; }
     .diagnosis-box { background: #f8fafc; border-radius: 12px; padding: 20px; border: 1px solid #e2e8f0; }
     .diagnosis-box .highlight { color: #2563eb; font-weight: 600; }
+
+    /* 侧边栏筛选：提高已选值、提示文字和多选标签的对比度 */
+    section[data-testid="stSidebar"] .stSelectbox label p,
+    section[data-testid="stSidebar"] .stMultiSelect label p,
+    section[data-testid="stSidebar"] .stDateInput label p,
+    section[data-testid="stSidebar"] .stNumberInput label p,
+    section[data-testid="stSidebar"] [data-baseweb="select"],
+    section[data-testid="stSidebar"] [data-baseweb="select"] * {
+        color: #0f172a !important;
+        -webkit-text-fill-color: #0f172a !important;
+        opacity: 1 !important;
+    }
+    section[data-testid="stSidebar"] [data-baseweb="select"] input::placeholder {
+        color: #475569 !important;
+        -webkit-text-fill-color: #475569 !important;
+        opacity: 1 !important;
+    }
+    section[data-testid="stSidebar"] [data-testid="stMultiSelectTag"],
+    section[data-testid="stSidebar"] [data-testid="stMultiSelectTag"] *,
+    section[data-testid="stSidebar"] [data-testid="stMultiSelectTag"] svg {
+        color: #0f172a !important;
+        fill: #0f172a !important;
+        -webkit-text-fill-color: #0f172a !important;
+        opacity: 1 !important;
+        font-weight: 600 !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
