@@ -805,8 +805,8 @@ with col2:
 with col3:
     style_input = st.text_input("货号（逗号分隔）", placeholder="例如: L262Y050", key="sc")
 with col4:
-    brands = ["全部"] + sorted(prod_df["brand"].dropna().unique())
-    selected_brand = st.selectbox("品牌", brands, key="bf")
+    brand_options = sorted(prod_df["brand"].dropna().unique())
+    selected_brands = st.multiselect("品牌", brand_options, key="bf")
 
 # 第二行：平台、店铺、商品标签、下钻说明
 tag_master_df = load_product_master()
@@ -818,11 +818,15 @@ tag_periods = {
 
 col5, col6, col7, col8 = st.columns(4)
 with col5:
-    platform_options = ["全部", "抖音", "视频号", "小红书", "天猫", "唯品会"]
-    selected_platform = st.selectbox("平台", platform_options, key="pf")
+    platform_options = ["抖音", "视频号", "小红书", "天猫", "唯品会"]
+    selected_platforms = st.multiselect("平台", platform_options, key="pf")
 with col6:
     all_shops = prod_df["shop_name"].dropna().unique()
-    shop_opts = [s for s in all_shops if selected_platform == "全部" or selected_platform.lower() in str(s).lower()]
+    shop_opts = [
+        shop for shop in all_shops
+        if not selected_platforms
+        or any(platform.lower() in str(shop).lower() for platform in selected_platforms)
+    ]
     selected_shops = st.multiselect("店铺", sorted(shop_opts), key="sf")
 with col7:
     show_inactive_tags = st.checkbox(
@@ -843,60 +847,55 @@ with col8:
     else:
         st.info(f"未指定对象：明细按{analysis_level if analysis_level != '全部' else '店铺'}展示")
 
-# 按商品首次上新时间筛选；默认关闭，保留未维护日期的旧商品。
+# 上新年份和日期只显示商品库中真实存在的选项。
 launch_source = tag_master_df.copy()
 if "launch_date" not in launch_source.columns:
     launch_source["launch_date"] = pd.NaT
 launch_source["launch_date"] = pd.to_datetime(launch_source["launch_date"], errors="coerce")
 available_launch_dates = launch_source["launch_date"].dropna()
-default_launch_start = available_launch_dates.min().date() if not available_launch_dates.empty else date.today()
-default_launch_end = available_launch_dates.max().date() if not available_launch_dates.empty else date.today()
-col9, col10, col11 = st.columns([1, 1, 2])
+launch_year_options = sorted(available_launch_dates.dt.year.astype(int).unique(), reverse=True)
+launch_date_options = sorted(available_launch_dates.dt.date.unique(), reverse=True)
+col9, col10 = st.columns(2)
 with col9:
-    current_year_launch_only = st.checkbox(
-        f"仅看 {date.today().year} 年上新", value=False,
-        key="product_current_year_launch_only",
+    selected_launch_years = st.multiselect(
+        "上新年份", launch_year_options, key="product_launch_years",
     )
 with col10:
-    use_launch_date_filter = st.checkbox(
-        "按上新时间范围筛选", value=False,
-        key="product_use_launch_date_filter",
-    )
-with col11:
-    launch_date_range = st.date_input(
-        "上新时间", value=(default_launch_start, default_launch_end),
-        disabled=not use_launch_date_filter, key="product_launch_date_range",
+    selected_launch_dates = st.multiselect(
+        "上新日期", launch_date_options,
+        format_func=lambda value: value.strftime("%Y年%m月%d日"),
+        key="product_launch_dates",
     )
 
 # ---------- 应用筛选 ----------
 mask = (prod_df["sale_date"] >= pd.to_datetime(start_date)) & (prod_df["sale_date"] <= pd.to_datetime(end_date))
 filtered = prod_df[mask].copy()
 
-if selected_platform != "全部":
-    filtered = filtered[filtered["shop_name"].str.contains(selected_platform, case=False, na=False)]
+if selected_platforms:
+    platform_pattern = "|".join(re.escape(platform) for platform in selected_platforms)
+    filtered = filtered[
+        filtered["shop_name"].str.contains(platform_pattern, case=False, na=False, regex=True)
+    ]
 if selected_shops:
     filtered = filtered[filtered["shop_name"].isin(selected_shops)]
 if style_input.strip():
     codes = [c.strip().upper() for c in style_input.split(",") if c.strip()]
     if codes:
         filtered = filtered[filtered["style_code"].isin(codes)]
-if selected_brand != "全部":
-    filtered = filtered[filtered["brand"] == selected_brand]
+if selected_brands:
+    filtered = filtered[filtered["brand"].isin(selected_brands)]
 if level_field and selected_objects:
     filtered = filtered[filtered[level_field].astype(str).isin(selected_objects)]
 
-if current_year_launch_only or use_launch_date_filter:
+if selected_launch_years or selected_launch_dates:
     launch_source["style_code"] = (
         launch_source["style_code"].fillna("").astype(str).str.strip().str.upper()
     )
     launch_mask = pd.Series(True, index=launch_source.index)
-    if current_year_launch_only:
-        launch_mask &= launch_source["launch_date"].dt.year.eq(date.today().year)
-    if use_launch_date_filter and isinstance(launch_date_range, (tuple, list)) and len(launch_date_range) == 2:
-        launch_start, launch_end = launch_date_range
-        launch_mask &= launch_source["launch_date"].between(
-            pd.Timestamp(launch_start), pd.Timestamp(launch_end), inclusive="both"
-        )
+    if selected_launch_years:
+        launch_mask &= launch_source["launch_date"].dt.year.isin(selected_launch_years)
+    if selected_launch_dates:
+        launch_mask &= launch_source["launch_date"].dt.date.isin(selected_launch_dates)
     launch_styles = set(launch_source.loc[launch_mask, "style_code"])
     filtered = filtered[filtered["style_code"].isin(launch_styles)]
 
