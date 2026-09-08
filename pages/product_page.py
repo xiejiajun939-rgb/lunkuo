@@ -843,6 +843,31 @@ with col8:
     else:
         st.info(f"未指定对象：明细按{analysis_level if analysis_level != '全部' else '店铺'}展示")
 
+# 按商品首次上新时间筛选；默认关闭，保留未维护日期的旧商品。
+launch_source = tag_master_df.copy()
+if "launch_date" not in launch_source.columns:
+    launch_source["launch_date"] = pd.NaT
+launch_source["launch_date"] = pd.to_datetime(launch_source["launch_date"], errors="coerce")
+available_launch_dates = launch_source["launch_date"].dropna()
+default_launch_start = available_launch_dates.min().date() if not available_launch_dates.empty else date.today()
+default_launch_end = available_launch_dates.max().date() if not available_launch_dates.empty else date.today()
+col9, col10, col11 = st.columns([1, 1, 2])
+with col9:
+    current_year_launch_only = st.checkbox(
+        f"仅看 {date.today().year} 年上新", value=False,
+        key="product_current_year_launch_only",
+    )
+with col10:
+    use_launch_date_filter = st.checkbox(
+        "按上新时间范围筛选", value=False,
+        key="product_use_launch_date_filter",
+    )
+with col11:
+    launch_date_range = st.date_input(
+        "上新时间", value=(default_launch_start, default_launch_end),
+        disabled=not use_launch_date_filter, key="product_launch_date_range",
+    )
+
 # ---------- 应用筛选 ----------
 mask = (prod_df["sale_date"] >= pd.to_datetime(start_date)) & (prod_df["sale_date"] <= pd.to_datetime(end_date))
 filtered = prod_df[mask].copy()
@@ -859,6 +884,21 @@ if selected_brand != "全部":
     filtered = filtered[filtered["brand"] == selected_brand]
 if level_field and selected_objects:
     filtered = filtered[filtered[level_field].astype(str).isin(selected_objects)]
+
+if current_year_launch_only or use_launch_date_filter:
+    launch_source["style_code"] = (
+        launch_source["style_code"].fillna("").astype(str).str.strip().str.upper()
+    )
+    launch_mask = pd.Series(True, index=launch_source.index)
+    if current_year_launch_only:
+        launch_mask &= launch_source["launch_date"].dt.year.eq(date.today().year)
+    if use_launch_date_filter and isinstance(launch_date_range, (tuple, list)) and len(launch_date_range) == 2:
+        launch_start, launch_end = launch_date_range
+        launch_mask &= launch_source["launch_date"].between(
+            pd.Timestamp(launch_start), pd.Timestamp(launch_end), inclusive="both"
+        )
+    launch_styles = set(launch_source.loc[launch_mask, "style_code"])
+    filtered = filtered[filtered["style_code"].isin(launch_styles)]
 
 # ---------- 过滤线下订单（remark 以 LA、PA、FA 开头） ----------
 if "remark" in filtered.columns:
