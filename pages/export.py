@@ -94,6 +94,31 @@ def _upsert_records(records):
     return len(existing) + len(incoming)
 
 
+def _delete_tag_from_products(tag_name, product_df):
+    """Remove one tag globally and return the number of affected products."""
+    affected = product_df[
+        product_df["tags"].map(lambda value: tag_name in normalize_product_tags(value))
+    ]
+    records = []
+    for record in affected[["style_code", "tags"]].to_dict("records"):
+        payload = {
+            "style_code": str(record["style_code"]).strip().upper(),
+            "tags": [
+                tag for tag in normalize_product_tags(record["tags"])
+                if tag != tag_name
+            ],
+        }
+        # 兼容旧字段，否则 load_product_master 会把首单礼金标签再次补回来。
+        if tag_name == "首单礼金":
+            payload["has_newbie_coupon"] = False
+        records.append(payload)
+    for offset in range(0, len(records), 500):
+        supabase.table("product_master").upsert(
+            records[offset:offset + 500], on_conflict="style_code"
+        ).execute()
+    return len(records)
+
+
 callbacks = st.session_state.get("_admin_callbacks", {})
 
 
@@ -329,6 +354,45 @@ with tab_tags:
     })
     if current_tags:
         st.write("当前标签：" + "　".join(f"`{tag}`" for tag in current_tags))
+
+        with st.container(border=True):
+            st.markdown("#### 删除现有标签")
+            delete_tag = st.selectbox(
+                "选择要删除的标签",
+                current_tags,
+                index=None,
+                placeholder="请选择标签",
+                key="delete_product_tag_name",
+            )
+            affected_count = int(master_df["tags"].map(
+                lambda value: delete_tag in normalize_product_tags(value) if delete_tag else False
+            ).sum())
+            if delete_tag:
+                st.warning(
+                    f"删除“{delete_tag}”后，将从 {affected_count:,} 个商品中同步移除该标签。"
+                )
+            confirm_tag_delete = st.checkbox(
+                "我确认从所有关联商品中删除这个标签",
+                key="confirm_product_tag_delete",
+            )
+            if st.button(
+                "🗑️ 删除标签",
+                disabled=not delete_tag,
+                key="delete_product_tag",
+            ):
+                if not confirm_tag_delete:
+                    st.warning("请先勾选删除确认。")
+                else:
+                    try:
+                        count = _delete_tag_from_products(delete_tag, master_df)
+                        st.cache_data.clear()
+                        st.session_state.product_tag_flash = (
+                            f"已删除标签“{delete_tag}”，并从 {count:,} 个商品中同步移除。"
+                        )
+                        st.rerun()
+                    except Exception as exc:
+                        st.error(f"删除标签失败：{exc}")
+
     tag_name = st.text_input("标签名称", placeholder="例如：秋季新品", key="custom_tag_name").strip()
     operation = st.radio("批量操作", ["添加标签", "移除标签"], horizontal=True, key="custom_tag_operation")
     style_text = st.text_area(
