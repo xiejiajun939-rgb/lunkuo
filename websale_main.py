@@ -39,7 +39,7 @@ def safe_rerun():
 st.set_page_config(
     page_title="业绩统计工具",
     layout="wide",
-    page_icon="📊",
+    page_icon="assets/logo.svg",
     menu_items={
         'Get Help': None,
         'Report a bug': None,
