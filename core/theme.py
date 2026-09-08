@@ -6,7 +6,7 @@ import plotly.io as pio
 
 def apply_global_theme():
     pio.templates["lunkuo"] = go.layout.Template(layout={
-        "font": {"family": "Inter, Microsoft YaHei", "color": "#52657a"},
+        "font": {"family": "Inter, Microsoft YaHei", "color": "#34495e"},
         "paper_bgcolor": "#ffffff", "plot_bgcolor": "#ffffff",
         "colorway": ["#176eae", "#20b7d3", "#6f63d9", "#16a081", "#ed9b32", "#dc5d72", "#5e86b3"],
         "margin": {"l": 42, "r": 24, "t": 58, "b": 42},
@@ -18,7 +18,7 @@ def apply_global_theme():
     pio.templates.default = "lunkuo"
     st.markdown("""
     <style>
-    :root{--navy:#081a2f;--navy2:#0d2b4b;--blue:#176eae;--cyan:#20b7d3;--ink:#132238;--muted:#66778c;--line:#dbe6ef;--bg:#f3f7fb;--white:#fff;--r:14px;--shadow:0 8px 26px rgba(16,48,82,.08)}
+    :root{--navy:#081a2f;--navy2:#0d2b4b;--blue:#176eae;--cyan:#20b7d3;--ink:#0f1f33;--muted:#40546b;--line:#dbe6ef;--bg:#f3f7fb;--white:#fff;--r:14px;--shadow:0 8px 26px rgba(16,48,82,.08)}
     html,body,[class*="css"]{font-family:Inter,"Microsoft YaHei","PingFang SC",sans-serif}.stApp{background:var(--bg);color:var(--ink)}
     header[data-testid="stHeader"]{background:rgba(243,247,251,.84);backdrop-filter:blur(14px)}#MainMenu,footer{visibility:hidden}
     section[data-testid="stSidebar"]{width:280px!important;min-width:280px!important;max-width:280px!important;background:linear-gradient(180deg,#061425,var(--navy) 55%,var(--navy2))!important;border-right:1px solid rgba(255,255,255,.08);box-shadow:8px 0 30px rgba(7,20,38,.13)}
@@ -29,7 +29,7 @@ def apply_global_theme():
     section[data-testid="stSidebar"] a[data-testid="stSidebarNavLink"]:hover{background:rgba(255,255,255,.08);border-color:rgba(255,255,255,.08);transform:translateX(2px)}
     section[data-testid="stSidebar"] a[data-testid="stSidebarNavLink"][aria-current="page"]{background:linear-gradient(90deg,rgba(32,183,211,.27),rgba(23,110,174,.18));border-color:rgba(80,210,232,.25);box-shadow:inset 3px 0 0 #4bd1e8}
     section[data-testid="stSidebar"] hr{border-color:rgba(255,255,255,.12)!important}
-    .main .block-container{width:100%;max-width:1680px;padding:2rem 2.2rem 4rem}h1,h2,h3,h4{color:var(--ink)!important;letter-spacing:-.025em}h1{font-size:2rem!important;font-weight:790!important}h2{font-size:1.55rem!important;font-weight:760!important}h3{font-size:1.2rem!important;font-weight:720!important}p,label,.stCaption{color:var(--muted)}hr{border:0!important;border-top:1px solid var(--line)!important;margin:1.2rem 0!important}
+    .main .block-container{width:100%;max-width:1680px;padding:2rem 2.2rem 4rem}h1,h2,h3,h4{color:var(--ink)!important;letter-spacing:-.025em}h1{font-size:2rem!important;font-weight:790!important}h2{font-size:1.55rem!important;font-weight:760!important}h3{font-size:1.2rem!important;font-weight:720!important}p,label,.stCaption{color:var(--muted)}.main p,.main label,.main .stCaption,.main [data-testid="stCaptionContainer"],.main [data-testid="stWidgetLabel"]{color:var(--muted)!important}.main [data-testid="stMarkdownContainer"],.main [data-testid="stText"]{color:var(--ink)}.main input,.main textarea,.main [data-baseweb="select"] *{color:var(--ink)!important}hr{border:0!important;border-top:1px solid var(--line)!important;margin:1.2rem 0!important}
     div[data-testid="stMetric"]{min-height:116px;padding:18px 19px;border:1px solid var(--line);border-radius:var(--r);background:linear-gradient(145deg,#fff,#f9fcff);box-shadow:0 2px 8px rgba(16,48,82,.06);position:relative;overflow:hidden;transition:.18s ease}
     div[data-testid="stMetric"]:before{content:"";position:absolute;left:0;top:0;right:0;height:3px;background:linear-gradient(90deg,var(--blue),var(--cyan))}div[data-testid="stMetric"]:hover{transform:translateY(-2px);box-shadow:var(--shadow)}
     div[data-testid="stMetricLabel"]{font-size:.82rem;font-weight:660;color:var(--muted)}div[data-testid="stMetricValue"]{font-size:1.72rem;font-weight:800;color:var(--ink);letter-spacing:-.04em}
