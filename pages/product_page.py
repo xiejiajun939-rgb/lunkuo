@@ -120,6 +120,39 @@ st.markdown("""
         margin-bottom: 2px !important;
     }
 
+    /* 筛选区文字统一加深：标题、输入值、占位文字、已选标签及删除图标 */
+    .stSelectbox label p, .stMultiSelect label p, .stTextInput label p,
+    .stDateInput label p, .stCheckbox label p, .stRadio label p {
+        color: #111827 !important;
+        opacity: 1 !important;
+        font-weight: 600 !important;
+    }
+    .stSelectbox [data-baseweb="select"],
+    .stSelectbox [data-baseweb="select"] *,
+    .stMultiSelect [data-baseweb="select"],
+    .stMultiSelect [data-baseweb="select"] *,
+    .stTextInput input, .stDateInput input {
+        color: #111827 !important;
+        -webkit-text-fill-color: #111827 !important;
+        opacity: 1 !important;
+    }
+    .stTextInput input::placeholder,
+    .stDateInput input::placeholder,
+    .stMultiSelect input::placeholder {
+        color: #475569 !important;
+        -webkit-text-fill-color: #475569 !important;
+        opacity: 1 !important;
+    }
+    .stMultiSelect [data-testid="stMultiSelectTag"],
+    .stMultiSelect [data-testid="stMultiSelectTag"] *,
+    .stMultiSelect [data-testid="stMultiSelectTag"] svg {
+        color: #0f172a !important;
+        fill: #0f172a !important;
+        -webkit-text-fill-color: #0f172a !important;
+        opacity: 1 !important;
+        font-weight: 600 !important;
+    }
+
     /* 筛选输入框、下拉框（透明无框，只保留底部线条） */
     .stSelectbox > div > div > div,
     .stTextInput > div > div > input,
