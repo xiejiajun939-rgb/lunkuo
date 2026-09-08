@@ -1,5 +1,6 @@
 import json
 import re
+from datetime import date
 
 
 def normalize_product_tags(value, legacy_coupon=False):
@@ -37,3 +38,23 @@ def product_tags_text(value, legacy_coupon=False):
 
 def product_has_tag(value, tag):
     return tag in normalize_product_tags(value)
+
+
+def active_product_tags(value, periods=None, as_of=None, include_inactive=False):
+    """Return tags active on a date; legacy tags without a period stay active."""
+    tags = normalize_product_tags(value)
+    if include_inactive or not periods:
+        return tags
+    check_date = as_of or date.today()
+    result = []
+    for tag in tags:
+        period = periods.get(tag)
+        if period is None:
+            result.append(tag)
+            continue
+        start_date, end_date = period
+        if (start_date is None or start_date <= check_date) and (
+            end_date is None or check_date <= end_date
+        ):
+            result.append(tag)
+    return result

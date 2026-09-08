@@ -1,12 +1,17 @@
 # -*- coding: utf-8 -*-
 import io
 import math
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import pandas as pd
 import streamlit as st
 
-from core.db import init_supabase, load_product_master, load_sold_style_codes
+from core.db import (
+    init_supabase,
+    load_product_master,
+    load_product_tag_periods,
+    load_sold_style_codes,
+)
 from core.product_tags import normalize_product_tags, product_tags_text
 from core.utils import clear_cache_on_page_change
 from core.theme import page_header
@@ -116,6 +121,7 @@ def _delete_tag_from_products(tag_name, product_df):
         supabase.table("product_master").upsert(
             records[offset:offset + 500], on_conflict="style_code"
         ).execute()
+    supabase.table("product_tag_periods").delete().eq("tag_name", tag_name).execute()
     return len(records)
 
 
@@ -352,8 +358,37 @@ with tab_tags:
         tag for value in master_df["tags"]
         for tag in normalize_product_tags(value)
     })
+    tag_period_df = load_product_tag_periods()
     if current_tags:
         st.write("当前标签：" + "　".join(f"`{tag}`" for tag in current_tags))
+        period_view = pd.DataFrame({"标签名称": current_tags})
+        if not tag_period_df.empty:
+            period_view = period_view.merge(
+                tag_period_df.rename(columns={
+                    "tag_name": "标签名称",
+                    "start_date": "开始日期",
+                    "end_date": "结束日期",
+                }),
+                on="标签名称",
+                how="left",
+            )
+        else:
+            period_view["开始日期"] = None
+            period_view["结束日期"] = None
+        today = date.today()
+        period_view["状态"] = period_view.apply(
+            lambda row: (
+                "长期有效（旧标签）"
+                if pd.isna(row["开始日期"]) or pd.isna(row["结束日期"])
+                else "未生效"
+                if today < row["开始日期"]
+                else "已失效"
+                if today > row["结束日期"]
+                else "生效中"
+            ),
+            axis=1,
+        )
+        st.dataframe(period_view, hide_index=True, width="stretch")
 
         with st.container(border=True):
             st.markdown("#### 删除现有标签")
@@ -395,6 +430,20 @@ with tab_tags:
 
     tag_name = st.text_input("标签名称", placeholder="例如：秋季新品", key="custom_tag_name").strip()
     operation = st.radio("批量操作", ["添加标签", "移除标签"], horizontal=True, key="custom_tag_operation")
+    tag_start = tag_end = None
+    if operation == "添加标签":
+        period_start_col, period_end_col = st.columns(2)
+        with period_start_col:
+            tag_start = st.date_input(
+                "活动开始日期", value=date.today(), key="custom_tag_start_date"
+            )
+        with period_end_col:
+            tag_end = st.date_input(
+                "活动结束日期",
+                value=date.today() + timedelta(days=30),
+                min_value=tag_start,
+                key="custom_tag_end_date",
+            )
     style_text = st.text_area(
         "商品货号",
         placeholder="每行一个货号，也支持逗号分隔",
@@ -409,8 +458,17 @@ with tab_tags:
         })
         if not tag_name or not style_codes:
             st.warning("请输入标签名称和至少一个商品货号。")
+        elif operation == "添加标签" and tag_start > tag_end:
+            st.warning("活动结束日期不能早于开始日期。")
         else:
             try:
+                if operation == "添加标签":
+                    supabase.table("product_tag_periods").upsert({
+                        "tag_name": tag_name,
+                        "start_date": tag_start.isoformat(),
+                        "end_date": tag_end.isoformat(),
+                        "updated_at": datetime.now(timezone.utc).isoformat(),
+                    }, on_conflict="tag_name").execute()
                 lookup = master_df.set_index("style_code")["tags"].to_dict()
                 records = []
                 for style_code in style_codes:

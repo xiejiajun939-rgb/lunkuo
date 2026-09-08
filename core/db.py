@@ -740,6 +740,28 @@ def load_product_master():
         st.error(f"加载商品库失败：{e}")
         return pd.DataFrame()
 
+
+@st.cache_data(ttl=300, show_spinner=False)
+def load_product_tag_periods():
+    """Load global activity periods for product tags."""
+    columns = ["tag_name", "start_date", "end_date"]
+    if supabase is None:
+        return pd.DataFrame(columns=columns)
+    try:
+        response = (
+            supabase.table("product_tag_periods")
+            .select(",".join(columns))
+            .order("tag_name")
+            .execute()
+        )
+        result = pd.DataFrame(response.data or [], columns=columns)
+        for column in ["start_date", "end_date"]:
+            result[column] = pd.to_datetime(result[column], errors="coerce").dt.date
+        return result
+    except Exception:
+        # 兼容数据库脚本部署前的短暂窗口；旧标签按长期有效处理。
+        return pd.DataFrame(columns=columns)
+
 # ---------- 组织目标管理 ----------
 @st.cache_data(ttl=300)
 def load_org_targets(suffix=None):

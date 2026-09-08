@@ -11,10 +11,11 @@ import numpy as np
 from core.db import (
     load_product_sales,
     load_product_master,
+    load_product_tag_periods,
     get_sales_date_range,
     load_newbie_coupon_candidates,
 )
-from core.product_tags import normalize_product_tags, product_tags_text
+from core.product_tags import active_product_tags, normalize_product_tags, product_tags_text
 try:
     from core.db import load_product_sales_cube
 except ImportError:
@@ -808,6 +809,13 @@ with col4:
     selected_brand = st.selectbox("品牌", brands, key="bf")
 
 # 第二行：平台、店铺、商品标签、下钻说明
+tag_master_df = load_product_master()
+tag_period_df = load_product_tag_periods()
+tag_periods = {
+    row["tag_name"]: (row["start_date"], row["end_date"])
+    for row in tag_period_df.to_dict("records")
+}
+
 col5, col6, col7, col8 = st.columns(4)
 with col5:
     platform_options = ["全部", "抖音", "视频号", "小红书", "天猫", "唯品会"]
@@ -817,9 +825,16 @@ with col6:
     shop_opts = [s for s in all_shops if selected_platform == "全部" or selected_platform.lower() in str(s).lower()]
     selected_shops = st.multiselect("店铺", sorted(shop_opts), key="sf")
 with col7:
+    show_inactive_tags = st.checkbox(
+        "显示未生效/已失效标签",
+        value=False,
+        key="show_inactive_product_tags",
+    )
     tag_options = sorted({
-        tag for value in load_product_master().get("tags", pd.Series(dtype=object))
-        for tag in normalize_product_tags(value)
+        tag for value in tag_master_df.get("tags", pd.Series(dtype=object))
+        for tag in active_product_tags(
+            value, tag_periods, include_inactive=show_inactive_tags
+        )
     })
     selected_tags = st.multiselect("商品标签", tag_options, key="product_tag_filter")
 with col8:
@@ -850,12 +865,16 @@ if "remark" in filtered.columns:
     filtered = filtered[~filtered["remark"].astype(str).str.upper().str.startswith(("LA", "PA", "FA"))]
 
 # 礼金标记
-master_df = load_product_master()
+master_df = tag_master_df.copy()
 tag_map = {}
 if not master_df.empty and "style_code" in master_df.columns:
     master_df["style_code"] = master_df["style_code"].astype(str).str.strip().str.upper()
     tag_map = master_df.set_index("style_code")["tags"].to_dict()
-filtered["product_tags"] = filtered["style_code"].map(tag_map).map(normalize_product_tags)
+filtered["product_tags"] = filtered["style_code"].map(tag_map).map(
+    lambda value: active_product_tags(
+        value, tag_periods, include_inactive=show_inactive_tags
+    )
+)
 if selected_tags:
     filtered = filtered[filtered["product_tags"].map(
         lambda tags: all(tag in tags for tag in selected_tags)
@@ -898,7 +917,11 @@ if not master_df.empty and "style_code" in master_df.columns:
     cat_map = master_df.set_index("style_code")["category"].to_dict()
     grouped["image_url"] = grouped["货号"].map(img_map)
     grouped["master_category"] = grouped["货号"].map(cat_map).replace("", None)
-    grouped["product_tags"] = grouped["货号"].map(tag_map).map(normalize_product_tags)
+    grouped["product_tags"] = grouped["货号"].map(tag_map).map(
+        lambda value: active_product_tags(
+            value, tag_periods, include_inactive=show_inactive_tags
+        )
+    )
 else:
     grouped["image_url"] = None
     grouped["master_category"] = None
