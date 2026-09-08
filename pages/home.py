@@ -9,7 +9,7 @@ from core.app_config import load_carousel_config
 from core.theme import page_header
 
 
-st.set_page_config(page_title="主页", layout="wide")
+st.set_page_config(page_title="数据罗盘", layout="wide")
 
 page_header(
     f"欢迎回来，{st.session_state.get('username', '伙伴')}",

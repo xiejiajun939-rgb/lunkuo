@@ -37,7 +37,7 @@ def safe_rerun():
         st.rerun()
 
 st.set_page_config(
-    page_title="业绩统计工具",
+    page_title="数据罗盘",
     layout="wide",
     page_icon="assets/logo.svg",
     menu_items={
