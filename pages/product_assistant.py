@@ -64,29 +64,58 @@ st.markdown("""
     .diagnosis-box .highlight { color: #2563eb; font-weight: 600; }
 
     /* 侧边栏筛选：提高已选值、提示文字和多选标签的对比度 */
-    section[data-testid="stSidebar"] .stSelectbox label p,
-    section[data-testid="stSidebar"] .stMultiSelect label p,
-    section[data-testid="stSidebar"] .stDateInput label p,
-    section[data-testid="stSidebar"] .stNumberInput label p,
-    section[data-testid="stSidebar"] [data-baseweb="select"],
-    section[data-testid="stSidebar"] [data-baseweb="select"] * {
-        color: #0f172a !important;
-        -webkit-text-fill-color: #0f172a !important;
-        opacity: 1 !important;
+    /* 深色侧栏上的统一高对比筛选方案 */
+    section[data-testid="stSidebar"] h1,
+    section[data-testid="stSidebar"] h2,
+    section[data-testid="stSidebar"] h3 {
+        color: #f8fafc !important;
     }
-    section[data-testid="stSidebar"] [data-baseweb="select"] input::placeholder {
-        color: #475569 !important;
-        -webkit-text-fill-color: #475569 !important;
+    section[data-testid="stSidebar"] .stMarkdown p,
+    section[data-testid="stSidebar"] label p,
+    section[data-testid="stSidebar"] [data-testid="stWidgetLabel"] p,
+    section[data-testid="stSidebar"] .stSlider p {
+        color: #dbe7f2 !important;
         opacity: 1 !important;
+        font-weight: 600 !important;
     }
-    section[data-testid="stSidebar"] [data-testid="stMultiSelectTag"],
-    section[data-testid="stSidebar"] [data-testid="stMultiSelectTag"] *,
-    section[data-testid="stSidebar"] [data-testid="stMultiSelectTag"] svg {
+    section[data-testid="stSidebar"] [data-baseweb="select"] > div,
+    section[data-testid="stSidebar"] .stDateInput [data-baseweb="input"] > div,
+    section[data-testid="stSidebar"] .stNumberInput [data-baseweb="input"] > div {
+        background: #f8fafc !important;
+        border-color: #b9cddd !important;
+    }
+    section[data-testid="stSidebar"] [data-baseweb="select"] span,
+    section[data-testid="stSidebar"] [data-baseweb="select"] input,
+    section[data-testid="stSidebar"] .stDateInput input,
+    section[data-testid="stSidebar"] .stNumberInput input {
         color: #0f172a !important;
-        fill: #0f172a !important;
         -webkit-text-fill-color: #0f172a !important;
         opacity: 1 !important;
         font-weight: 600 !important;
+    }
+    section[data-testid="stSidebar"] input::placeholder {
+        color: #52657a !important;
+        -webkit-text-fill-color: #52657a !important;
+        opacity: 1 !important;
+    }
+    section[data-testid="stSidebar"] [data-baseweb="select"] svg,
+    section[data-testid="stSidebar"] .stDateInput svg,
+    section[data-testid="stSidebar"] .stNumberInput svg {
+        color: #334155 !important;
+        fill: #334155 !important;
+    }
+    section[data-testid="stSidebar"] [data-testid="stMultiSelectTag"] {
+        background: #c9f3fb !important;
+        border: 1px solid #73d5e5 !important;
+    }
+    section[data-testid="stSidebar"] [data-testid="stMultiSelectTag"],
+    section[data-testid="stSidebar"] [data-testid="stMultiSelectTag"] span,
+    section[data-testid="stSidebar"] [data-testid="stMultiSelectTag"] svg {
+        color: #082f49 !important;
+        fill: #082f49 !important;
+        -webkit-text-fill-color: #082f49 !important;
+        opacity: 1 !important;
+        font-weight: 700 !important;
     }
 </style>
 """, unsafe_allow_html=True)
