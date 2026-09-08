@@ -241,11 +241,33 @@ with tab_manage:
                 "缺失资料筛选", missing_filter_options,
                 key="master_missing_filters",
             )
-        current_year_only = st.checkbox(
-            f"仅显示 {date.today().year} 年上新的商品",
-            value=False,
-            key="master_current_year_launch_only",
-        )
+        launch_filter_col1, launch_filter_col2, launch_filter_col3 = st.columns([1, 1, 2])
+        with launch_filter_col1:
+            current_year_only = st.checkbox(
+                f"仅显示 {date.today().year} 年上新的商品",
+                value=False,
+                key="master_current_year_launch_only",
+            )
+        with launch_filter_col2:
+            use_launch_date_filter = st.checkbox(
+                "按上新时间范围筛选",
+                value=False,
+                key="master_use_launch_date_filter",
+            )
+        with launch_filter_col3:
+            launch_dates = catalog_df["launch_date"].dropna()
+            default_launch_start = (
+                launch_dates.min().date() if not launch_dates.empty else date.today()
+            )
+            default_launch_end = (
+                launch_dates.max().date() if not launch_dates.empty else date.today()
+            )
+            launch_date_range = st.date_input(
+                "筛选上新时间",
+                value=(default_launch_start, default_launch_end),
+                disabled=not use_launch_date_filter,
+                key="master_launch_date_range",
+            )
 
     filtered = catalog_df.copy()
     if keyword.strip():
@@ -264,6 +286,13 @@ with tab_manage:
         )]
     if current_year_only:
         filtered = filtered[filtered["launch_date"].dt.year.eq(date.today().year)]
+    if use_launch_date_filter and isinstance(launch_date_range, (tuple, list)) and len(launch_date_range) == 2:
+        launch_start, launch_end = launch_date_range
+        filtered = filtered[
+            filtered["launch_date"].between(
+                pd.Timestamp(launch_start), pd.Timestamp(launch_end), inclusive="both"
+            )
+        ]
     missing_image = _is_missing(filtered["image_url"])
     missing_category = _is_missing(filtered["category"])
     missing_record = filtered["id"].isna()
