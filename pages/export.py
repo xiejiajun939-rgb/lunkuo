@@ -161,6 +161,20 @@ else:
     sold_styles_df = pd.DataFrame(columns=["style_code"])
     catalog_df = master_df.copy()
 catalog_df["tags"] = catalog_df["tags"].fillna("")
+style_text = catalog_df["style_code"].fillna("").astype(str).str.strip().str.upper()
+parsed_brand = style_text.str.slice(0, 1).where(style_text.str.len().ge(1), "")
+parsed_year = style_text.str.slice(1, 3).where(style_text.str.len().ge(3), "")
+brand_source = catalog_df.get("brand", pd.Series("", index=catalog_df.index))
+year_source = catalog_df.get(
+    "product_year",
+    catalog_df.get("year", pd.Series("", index=catalog_df.index)),
+)
+catalog_df["filter_brand"] = (
+    brand_source.fillna("").astype(str).str.strip().replace("", pd.NA).fillna(parsed_brand)
+)
+catalog_df["filter_year"] = (
+    year_source.fillna("").astype(str).str.strip().replace("", pd.NA).fillna(parsed_year)
+)
 
 with tab_manage:
     audit_action, audit_note = st.columns([1, 3])
@@ -189,9 +203,17 @@ with tab_manage:
     c4.metric("缺少品类", f"{missing_category_count:,}")
 
     with st.container(border=True):
-        col_search, col_category, col_tags, col_missing = st.columns([1.2, 1, 1, 1.3])
+        col_search, col_year, col_brand, col_category, col_tags, col_missing = st.columns(
+            [1.3, 0.8, 0.8, 1, 1, 1.3]
+        )
         with col_search:
             keyword = st.text_input("搜索货号", placeholder="支持部分货号", key="master_keyword")
+        with col_year:
+            years = sorted(v for v in catalog_df["filter_year"].dropna().astype(str).unique() if v)
+            selected_years = st.multiselect("筛选年份", years, key="master_years")
+        with col_brand:
+            brands = sorted(v for v in catalog_df["filter_brand"].dropna().astype(str).unique() if v)
+            selected_brands = st.multiselect("筛选品牌", brands, key="master_brands")
         with col_category:
             categories = sorted(v for v in catalog_df["category"].dropna().astype(str).str.strip().unique() if v)
             selected_categories = st.multiselect("筛选品类", categories, key="master_categories")
@@ -215,6 +237,10 @@ with tab_manage:
         filtered = filtered[filtered["style_code"].astype("string").str.contains(
             keyword.strip(), case=False, na=False, regex=False
         )]
+    if selected_years:
+        filtered = filtered[filtered["filter_year"].astype(str).isin(selected_years)]
+    if selected_brands:
+        filtered = filtered[filtered["filter_brand"].astype(str).isin(selected_brands)]
     if selected_categories:
         filtered = filtered[filtered["category"].astype(str).isin(selected_categories)]
     if selected_tags:
