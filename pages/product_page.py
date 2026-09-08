@@ -478,7 +478,7 @@ with st.expander("🎁 首单礼金候选", expanded=True):
             gift_master["style_code"] = gift_master["style_code"].fillna("").astype(str).str.strip().str.upper()
             gift_master = gift_master[gift_master["style_code"] != ""].drop_duplicates("style_code", keep="last")
             keep_columns = [
-                column for column in ["style_code", "image_url", "category", "has_newbie_coupon", "tags"]
+                column for column in ["style_code", "image_url", "category", "launch_date", "has_newbie_coupon", "tags"]
                 if column in gift_master.columns
             ]
             gift_df = gift_df.merge(gift_master[keep_columns], on="style_code", how="left", suffixes=("", "_master"))
@@ -915,8 +915,12 @@ if not master_df.empty and "style_code" in master_df.columns:
     grouped["货号"] = grouped["货号"].fillna("").astype(str).str.strip().str.upper()
     img_map = master_df.set_index("style_code")["image_url"].to_dict()
     cat_map = master_df.set_index("style_code")["category"].to_dict()
+    launch_map = master_df.set_index("style_code")["launch_date"].to_dict()
     grouped["image_url"] = grouped["货号"].map(img_map)
     grouped["master_category"] = grouped["货号"].map(cat_map).replace("", None)
+    grouped["launch_date"] = pd.to_datetime(
+        grouped["货号"].map(launch_map), errors="coerce"
+    ).dt.date
     grouped["product_tags"] = grouped["货号"].map(tag_map).map(
         lambda value: active_product_tags(
             value, tag_periods, include_inactive=show_inactive_tags
@@ -925,6 +929,7 @@ if not master_df.empty and "style_code" in master_df.columns:
 else:
     grouped["image_url"] = None
     grouped["master_category"] = None
+    grouped["launch_date"] = None
     grouped["product_tags"] = [[] for _ in range(len(grouped))]
 
 grouped["退款率"] = np.where(
@@ -1001,13 +1006,14 @@ with col_export:
             if "image_url" in export_df.columns:
                 export_df = export_df.drop(columns=["image_url"])
             cols_order = [
-                "货号", "master_category", "发货金额", "发货金额占比", "退货金额",
+                "货号", "master_category", "launch_date", "发货金额", "发货金额占比", "退货金额",
                 "净销售金额", "实销金额占比", "退款率", "product_tags"
             ]
             export_cols = [c for c in cols_order if c in export_df.columns]
             export_df = export_df[export_cols]
             export_df.rename(columns={
                 "master_category": "商品分类",
+                "launch_date": "上新时间",
                 "product_tags": "商品标签"
             }, inplace=True)
             export_df["商品标签"] = export_df["商品标签"].map(product_tags_text)
@@ -1027,7 +1033,7 @@ with col_export:
                 "-"
             )
             master_cols = grouped[[
-                "货号", "master_category", "发货金额", "发货金额占比", "退货金额",
+                "货号", "master_category", "launch_date", "发货金额", "发货金额占比", "退货金额",
                 "净销售金额", "实销金额占比", "退款率", "product_tags"
             ]].copy()
             export_df = pd.merge(
@@ -1041,11 +1047,12 @@ with col_export:
             export_df.rename(columns={
                 group_col: group_name,
                 "master_category": "商品分类",
+                "launch_date": "上新时间",
                 "product_tags": "商品标签"
             }, inplace=True)
             export_df["商品标签"] = export_df["商品标签"].map(product_tags_text)
             final_cols = [
-                "货号", "商品分类", "发货金额", "发货金额占比", "退货金额",
+                "货号", "商品分类", "上新时间", "发货金额", "发货金额占比", "退货金额",
                 "净销售金额", "实销金额占比", "退款率", "商品标签",
                 "明细类型", group_name, "明细发货金额", "明细退货金额", "明细净销售金额", "明细退款率"
             ]
@@ -1071,17 +1078,17 @@ with col_export:
         )
 
 # ---------- 显示表格 ----------
-cols = st.columns([1.5, 0.5, 1.1, 1.0, 0.8, 1.0, 1.0, 0.8, 0.8, 0.7, 0.6, 0.6])
+cols = st.columns([1.4, 0.5, 1.0, 0.9, 1.0, 0.8, 1.0, 1.0, 0.8, 0.8, 0.7, 0.6, 0.6])
 headers = [
-    "货号", "图片", "商品分类", "发货金额(¥)", "发货占比", "退货金额(¥)",
+    "货号", "图片", "商品分类", "上新时间", "发货金额(¥)", "发货占比", "退货金额(¥)",
     "实销金额(¥)", "实销占比", "退款率", "商品标签", "详情", "趋势"
 ]
 for c, h in zip(cols, headers):
     c.markdown(f"**{h}**")
 
 for idx, row in page_df.iterrows():
-    c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12 = st.columns(
-        [1.5, 0.5, 1.1, 1.0, 0.8, 1.0, 1.0, 0.8, 0.8, 0.7, 0.6, 0.6]
+    c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13 = st.columns(
+        [1.4, 0.5, 1.0, 0.9, 1.0, 0.8, 1.0, 1.0, 0.8, 0.8, 0.7, 0.6, 0.6]
     )
     c1.write(row["货号"])
     if row.get("image_url") and pd.notna(row["image_url"]):
@@ -1091,14 +1098,15 @@ for idx, row in page_df.iterrows():
     # 分类是普通文本，不交给 st.write 做富文本类型推断，避免中文短文本异常渲染。
     category_text = str(row["master_category"]).strip() if pd.notna(row["master_category"]) else "-"
     c3.text(category_text or "-")
-    c4.write(f"{row['发货金额']:,.2f}")
-    c5.write(f"{row['发货金额占比']:.2%}" if pd.notna(row["发货金额占比"]) else "-")
-    c6.write(f"{row['退货金额']:,.2f}")
-    c7.write(f"{row['净销售金额']:,.2f}")
-    c8.write(f"{row['实销金额占比']:.2%}" if pd.notna(row["实销金额占比"]) else "-")
-    c9.write(row["退款率"])
-    c10.caption(product_tags_text(row.get("product_tags")) or "-")
-    if c11.button("📊", key=f"detail_btn_{row['货号']}_{idx}"):
+    c4.write(row["launch_date"].isoformat() if pd.notna(row.get("launch_date")) else "-")
+    c5.write(f"{row['发货金额']:,.2f}")
+    c6.write(f"{row['发货金额占比']:.2%}" if pd.notna(row["发货金额占比"]) else "-")
+    c7.write(f"{row['退货金额']:,.2f}")
+    c8.write(f"{row['净销售金额']:,.2f}")
+    c9.write(f"{row['实销金额占比']:.2%}" if pd.notna(row["实销金额占比"]) else "-")
+    c10.write(row["退款率"])
+    c11.caption(product_tags_text(row.get("product_tags")) or "-")
+    if c12.button("📊", key=f"detail_btn_{row['货号']}_{idx}"):
         style_code = row["货号"]
         detail_df = filtered[filtered["style_code"] == style_code].copy()
         if not detail_df.empty:
@@ -1116,6 +1124,7 @@ for idx, row in page_df.iterrows():
                 "detail_label": detail_label,
                 "image_url": row.get("image_url"),
                 "category": row.get("master_category"),
+                "launch_date": row.get("launch_date"),
             }
         else:
             st.session_state.cached_detail_data = None
@@ -1127,7 +1136,7 @@ for idx, row in page_df.iterrows():
         st.session_state.show_dialog = True
         st.session_state.detail_clicked = True
         st.rerun()
-    if c12.button("📈", key=f"trend_btn_{row['货号']}_{idx}"):
+    if c13.button("📈", key=f"trend_btn_{row['货号']}_{idx}"):
         style_code = row["货号"]
         trend_data = filtered[filtered["style_code"] == style_code].copy()
         if not trend_data.empty:
@@ -1166,6 +1175,8 @@ if st.session_state.show_dialog and st.session_state.dialog_style_code:
             with info_col:
                 st.markdown(f"### {style_code}")
                 st.caption(f"商品分类：{cached.get('category') or '未维护'}")
+                launch_date = cached.get("launch_date")
+                st.caption(f"上新时间：{launch_date.isoformat() if pd.notna(launch_date) else '未维护'}")
                 st.markdown(f"#### 按{cached.get('detail_label')}查看销售明细")
             if not shop_detail.empty:
                 st.dataframe(shop_detail, column_config={

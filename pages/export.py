@@ -24,7 +24,7 @@ if st.session_state.get("role") != "admin":
     st.stop()
 
 supabase = init_supabase()
-EDIT_COLUMNS = ["id", "style_code", "image_url", "category", "tags"]
+EDIT_COLUMNS = ["id", "style_code", "launch_date", "image_url", "category", "tags"]
 
 
 def _is_missing(series):
@@ -43,13 +43,14 @@ def _normalize_upload(df):
         "货号": "style_code", "商品货号": "style_code", "款号": "style_code",
         "图片": "image_url", "图片地址": "image_url", "商品图片": "image_url",
         "品类": "category", "商品品类": "category",
+        "上新时间": "launch_date", "上新日期": "launch_date", "launch_date": "launch_date",
         "商品标签": "tags", "标签": "tags", "tags": "tags",
         "新人礼金": "has_newbie_coupon", "是否新人礼金": "has_newbie_coupon",
     }
     result = df.rename(columns={c: aliases.get(str(c).strip(), str(c).strip()) for c in df.columns}).copy()
     if "style_code" not in result.columns:
         raise ValueError("文件中缺少货号列（style_code／货号／商品货号／款号）。")
-    for col in ["image_url", "category"]:
+    for col in ["image_url", "category", "launch_date"]:
         if col not in result.columns:
             result[col] = ""
     if "tags" not in result.columns:
@@ -60,11 +61,12 @@ def _normalize_upload(df):
         product_tags_text(tags, _to_bool(coupon))
         for tags, coupon in zip(result["tags"], result["has_newbie_coupon"])
     ]
-    result = result[["style_code", "image_url", "category", "tags"]]
+    result = result[["style_code", "launch_date", "image_url", "category", "tags"]]
     result["style_code"] = result["style_code"].astype("string").str.strip().str.upper()
     result = result[~_is_missing(result["style_code"])].drop_duplicates("style_code", keep="last")
     result["image_url"] = result["image_url"].fillna("").astype(str).str.strip()
     result["category"] = result["category"].fillna("").astype(str).str.strip()
+    result["launch_date"] = pd.to_datetime(result["launch_date"], errors="coerce").dt.date
     return result
 
 
@@ -80,6 +82,11 @@ def _upsert_records(records):
             "style_code": style_code,
             "image_url": str(record.get("image_url") or "").strip() or None,
             "category": str(record.get("category") or "").strip() or None,
+            "launch_date": (
+                pd.to_datetime(record.get("launch_date"), errors="coerce").date().isoformat()
+                if pd.notna(pd.to_datetime(record.get("launch_date"), errors="coerce"))
+                else None
+            ),
             "tags": normalize_product_tags(record.get("tags")),
             "updated_at": now,
         }
@@ -161,6 +168,7 @@ else:
     sold_styles_df = pd.DataFrame(columns=["style_code"])
     catalog_df = master_df.copy()
 catalog_df["tags"] = catalog_df["tags"].fillna("")
+catalog_df["launch_date"] = pd.to_datetime(catalog_df["launch_date"], errors="coerce")
 style_text = catalog_df["style_code"].fillna("").astype(str).str.strip().str.upper()
 parsed_brand = style_text.str.slice(0, 1).where(style_text.str.len().ge(1), "")
 parsed_year = style_text.str.slice(1, 3).where(style_text.str.len().ge(3), "")
@@ -196,11 +204,13 @@ with tab_manage:
     missing_record_count = int(catalog_df["id"].isna().sum()) if total_count and audit_loaded else 0
     missing_image_count = int(_is_missing(catalog_df["image_url"]).sum()) if total_count else 0
     missing_category_count = int(_is_missing(catalog_df["category"]).sum()) if total_count else 0
-    c1, c2, c3, c4 = st.columns(4)
+    current_year_launches = int(catalog_df["launch_date"].dt.year.eq(date.today().year).sum())
+    c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("商品库档案", f"{len(master_df):,}")
     c2.metric("尚未建立档案", f"{missing_record_count:,}" if audit_loaded else "未核对")
     c3.metric("缺少图片", f"{missing_image_count:,}")
     c4.metric("缺少品类", f"{missing_category_count:,}")
+    c5.metric(f"{date.today().year}年上新", f"{current_year_launches:,}")
 
     with st.container(border=True):
         col_search, col_year, col_brand, col_category, col_tags, col_missing = st.columns(
@@ -231,6 +241,11 @@ with tab_manage:
                 "缺失资料筛选", missing_filter_options,
                 key="master_missing_filters",
             )
+        current_year_only = st.checkbox(
+            f"仅显示 {date.today().year} 年上新的商品",
+            value=False,
+            key="master_current_year_launch_only",
+        )
 
     filtered = catalog_df.copy()
     if keyword.strip():
@@ -247,6 +262,8 @@ with tab_manage:
         filtered = filtered[filtered["tags"].map(
             lambda value: all(tag in normalize_product_tags(value) for tag in selected_tags)
         )]
+    if current_year_only:
+        filtered = filtered[filtered["launch_date"].dt.year.eq(date.today().year)]
     missing_image = _is_missing(filtered["image_url"])
     missing_category = _is_missing(filtered["category"])
     missing_record = filtered["id"].isna()
@@ -281,6 +298,7 @@ with tab_manage:
             "选择删除": st.column_config.CheckboxColumn("删除", default=False),
             "id": st.column_config.NumberColumn("ID", disabled=True),
             "style_code": st.column_config.TextColumn("商品货号", required=True),
+            "launch_date": st.column_config.DateColumn("上新时间", format="YYYY-MM-DD"),
             "image_url": st.column_config.LinkColumn("图片地址", display_text="查看图片"),
             "category": st.column_config.TextColumn("品类"),
             "tags": st.column_config.TextColumn("商品标签", help="多个标签用逗号分隔，例如：秋季新品，主推品"),
@@ -326,17 +344,19 @@ with tab_upload:
     unregistered_template["image_url"] = ""
     unregistered_template["category"] = ""
     unregistered_template["tags"] = ""
+    unregistered_template["launch_date"] = ""
     unregistered_template = unregistered_template.rename(columns={
         "style_code": "货号",
         "image_url": "图片地址",
         "category": "品类",
         "tags": "商品标签",
+        "launch_date": "上新时间",
     })
     pending_buffer = io.BytesIO()
     with pd.ExcelWriter(pending_buffer, engine="openpyxl") as writer:
         unregistered_template.to_excel(writer, index=False, sheet_name="待维护商品")
 
-    template = pd.DataFrame(columns=["style_code", "image_url", "category", "tags"])
+    template = pd.DataFrame(columns=["style_code", "launch_date", "image_url", "category", "tags"])
     template_buffer = io.BytesIO()
     with pd.ExcelWriter(template_buffer, engine="openpyxl") as writer:
         template.to_excel(writer, index=False, sheet_name="商品信息")
