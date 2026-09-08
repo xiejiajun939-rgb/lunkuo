@@ -117,6 +117,31 @@ st.markdown("""
         opacity: 1 !important;
         font-weight: 700 !important;
     }
+    /* 明确标示已选择的平台和日期 */
+    section[data-testid="stSidebar"] .stSelectbox [data-baseweb="select"] > div,
+    section[data-testid="stSidebar"] .stDateInput [data-baseweb="input"] > div {
+        background: #fee2e2 !important;
+        border: 1px solid #fca5a5 !important;
+    }
+    section[data-testid="stSidebar"] .stSelectbox [data-baseweb="select"] span,
+    section[data-testid="stSidebar"] .stDateInput input {
+        color: #991b1b !important;
+        -webkit-text-fill-color: #991b1b !important;
+        font-weight: 700 !important;
+    }
+    section[data-testid="stSidebar"] .stMultiSelect [data-baseweb="select"] > div {
+        background: #f8fafc !important;
+        border: 1px solid #b9cddd !important;
+    }
+    section[data-testid="stSidebar"] [data-testid="stMultiSelectTag"] {
+        background: #fee2e2 !important;
+        border: 1px solid #fca5a5 !important;
+    }
+    section[data-testid="stSidebar"] [data-testid="stMultiSelectTag"] span,
+    section[data-testid="stSidebar"] [data-testid="stMultiSelectTag"] svg {
+        color: #991b1b !important;
+        -webkit-text-fill-color: #991b1b !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
