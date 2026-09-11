@@ -260,20 +260,64 @@ with tabs[2]:
     detail_cols[4].metric("支付GMV（原始）", f"¥{room_products['paid_amount'].sum():,.0f}")
     st.caption(f"店铺：{room['shop_name']}　主播：{room['anchor_name']}　场次ID：{selected_room}")
 
-    metric_tab, product_tab = st.tabs(["全部直播指标", "全部商品平台表现"])
+    metric_tab, product_tab = st.tabs(["直播核心指标", "全部商品平台表现"])
     with metric_tab:
         if room_metrics.empty:
             st.info("该场次暂无直播指标。")
         else:
-            metric_detail = room_metrics[[
-                "module", "metric_name", "metric_value", "raw_value", "unit",
-                "benchmark_value", "benchmark_raw", "comparison_display",
-            ]].rename(columns={
-                "module": "指标模块", "metric_name": "指标名称", "metric_value": "指标值",
-                "raw_value": "平台原值", "unit": "单位", "benchmark_value": "基准值",
-                "benchmark_raw": "基准原值", "comparison_display": "较基准表现",
-            }).sort_values(["指标模块", "指标名称"])
-            st.dataframe(metric_detail, width="stretch", hide_index=True)
+            metric_groups = {
+                "流量": ["直播间曝光人数", "进入直播间人数", "自然流量观看人数", "付费流量观看人数", "平均在线人数", "最高在线人数"],
+                "转化": ["直播间成交人数", "直播间观看-成交转化率(人数)"],
+                "互动与沉淀": ["人均观看时长", "直播间观看-互动率(人数)", "直播间观看-关注率(人数)", "新增粉丝数", "评论次数", "点赞次数"],
+                "人群": ["首购率(人数)", "粉丝成交人数占比", "粉丝成交金额占比"],
+            }
+            deduplicated = (
+                room_metrics.sort_values(["metric_name", "module"])
+                .drop_duplicates("metric_name", keep="first")
+                .set_index("metric_name")
+            )
+
+            def display_metric_value(row, value_column, raw_column):
+                raw = row.get(raw_column)
+                if pd.notna(raw) and str(raw).strip() not in {"", "-"}:
+                    text = str(raw).strip()
+                else:
+                    value = pd.to_numeric(row.get(value_column), errors="coerce")
+                    text = "-" if pd.isna(value) else f"{value:,.2f}".rstrip("0").rstrip(".")
+                unit_value = row.get("unit")
+                unit = "" if pd.isna(unit_value) else str(unit_value).strip()
+                if unit and unit not in text and not any(mark in text for mark in ["%", "秒", "分", "小时"]):
+                    text = f"{text} {unit}"
+                return text
+
+            concise_rows = []
+            for group_name, names in metric_groups.items():
+                for name in names:
+                    if name not in deduplicated.index:
+                        continue
+                    row = deduplicated.loc[name]
+                    current = pd.to_numeric(row.get("metric_value"), errors="coerce")
+                    benchmark = pd.to_numeric(row.get("benchmark_value"), errors="coerce")
+                    if pd.notna(current) and pd.notna(benchmark) and benchmark != 0:
+                        difference = (current - benchmark) / abs(benchmark) * 100
+                        comparison = f"{'高于' if difference >= 0 else '低于'} {abs(difference):.1f}%"
+                    else:
+                        comparison = "-"
+                    concise_rows.append({
+                        "指标分组": group_name,
+                        "指标": name.replace("直播间", "").replace("(人数)", ""),
+                        "当前表现": display_metric_value(row, "metric_value", "raw_value"),
+                        "近7天中位数": display_metric_value(row, "benchmark_value", "benchmark_raw"),
+                        "对比结果": comparison,
+                    })
+
+            concise_rows.extend([
+                {"指标分组": "转化", "指标": "商品点击人数（商品汇总）", "当前表现": f"{room_products['click_users'].sum():,.0f} 人次", "近7天中位数": "-", "对比结果": "-"},
+                {"指标分组": "转化", "指标": "成交件数", "当前表现": f"{room_products['sold_units'].sum():,.0f} 件", "近7天中位数": "-", "对比结果": "-"},
+                {"指标分组": "转化", "指标": "支付GMV", "当前表现": f"¥{room_products['paid_amount'].sum():,.0f}", "近7天中位数": "-", "对比结果": "-"},
+            ])
+            st.dataframe(pd.DataFrame(concise_rows), width="stretch", hide_index=True)
+            st.caption("同名指标已去重；商品点击人数为商品明细汇总，同一用户点击多个商品时可能重复。")
     with product_tab:
         if room_products.empty:
             st.info("该场次暂无商品平台数据。")
