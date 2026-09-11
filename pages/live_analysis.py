@@ -27,12 +27,12 @@ if "live_end_date" not in st.session_state:
 quick_cols = st.columns([1, 1, 1, 1, 2, 2])
 for column, label, days in zip(quick_cols[:3], ["近7天", "近15天", "近30天"], [7, 15, 30]):
     with column:
-        if st.button(label, use_container_width=True):
+        if st.button(label, width="stretch"):
             st.session_state.live_start_date = today - timedelta(days=days - 1)
             st.session_state.live_end_date = today
             st.rerun()
 with quick_cols[3]:
-    if st.button("本月", use_container_width=True):
+    if st.button("本月", width="stretch"):
         st.session_state.live_start_date = today.replace(day=1)
         st.session_state.live_end_date = today
         st.rerun()
@@ -121,7 +121,7 @@ with tabs[0]:
         ]})
         fig = go.Figure(go.Funnel(y=funnel["阶段"], x=funnel["数量"], textinfo="value+percent initial"))
         fig.update_layout(height=330, margin=dict(l=20, r=20, t=20, b=20))
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
     with right:
         st.subheader("GMV与履约趋势")
         live_daily = products.assign(日期=pd.to_datetime(products["start_time"]).dt.date).groupby("日期", as_index=False)["paid_amount"].sum()
@@ -134,7 +134,7 @@ with tabs[0]:
             trend = live_daily.assign(关联发货=0, 关联退货=0, 关联实销=0)
         fig = px.line(trend, x="日期", y=["直播支付GMV", "关联发货", "关联退货", "关联实销"], markers=True)
         fig.update_layout(height=330, legend_title_text="口径", yaxis_title="金额（元）")
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
         st.caption("直播支付GMV与数据罗盘履约金额是不同口径，只用于并列观察。")
 
 with tabs[1]:
@@ -148,10 +148,10 @@ with tabs[1]:
     )
     grouped["成交件数/讲解"] = grouped["成交件数"].div(grouped["讲解次数"].replace(0, pd.NA))
     grouped["点击成交率"] = grouped["成交件数"].div(grouped["点击人数"].replace(0, pd.NA))
-    st.dataframe(grouped.rename(columns={dimension: compare_dimension}), use_container_width=True, hide_index=True,
+    st.dataframe(grouped.rename(columns={dimension: compare_dimension}), width="stretch", hide_index=True,
                  column_config={"支付GMV": st.column_config.NumberColumn(format="¥ %.0f"), "平台退款": st.column_config.NumberColumn(format="¥ %.0f"), "点击成交率": st.column_config.NumberColumn(format="%.1%%"), "成交件数/讲解": st.column_config.NumberColumn(format="%.2f")})
     chart = px.bar(grouped, x=dimension, y=["成交件数", "讲解次数"], barmode="group", title="成交件数与讲解次数")
-    st.plotly_chart(chart, use_container_width=True)
+    st.plotly_chart(chart, width="stretch")
 
 with tabs[2]:
     st.subheader("场次表现")
@@ -160,7 +160,7 @@ with tabs[2]:
         成交件数=("sold_units", "sum"), 支付GMV=("paid_amount", "sum"),
     )
     session_summary["点击成交率"] = session_summary["成交件数"].div(session_summary["点击人数"].replace(0, pd.NA))
-    st.dataframe(session_summary.rename(columns={"start_time": "开播时间", "shop_name": "店铺", "anchor_name": "主播"}), use_container_width=True, hide_index=True)
+    st.dataframe(session_summary.rename(columns={"start_time": "开播时间", "shop_name": "店铺", "anchor_name": "主播"}), width="stretch", hide_index=True)
 
 with tabs[3]:
     st.subheader("商品经营表现")
@@ -172,7 +172,7 @@ with tabs[3]:
     style_summary["成交件数/讲解"] = style_summary["成交件数"].div(style_summary["讲解次数"].replace(0, pd.NA))
     style_summary["点击成交率"] = style_summary["成交件数"].div(style_summary["点击人数"].replace(0, pd.NA))
     style_summary = style_summary.sort_values(["成交件数", "net_amount"], ascending=False)
-    st.dataframe(style_summary.rename(columns={"style_code": "货号", "product_name": "商品名称", "ship_amount": "关联发货", "return_amount": "关联退货", "net_amount": "关联实销"}), use_container_width=True, hide_index=True)
+    st.dataframe(style_summary.rename(columns={"style_code": "货号", "product_name": "商品名称", "ship_amount": "关联发货", "return_amount": "关联退货", "net_amount": "关联实销"}), width="stretch", hide_index=True)
 
 with tabs[4]:
     style_options = (
@@ -190,7 +190,7 @@ with tabs[4]:
     info_col, title_col = st.columns([1, 5])
     with info_col:
         if not master_row.empty and master_row.iloc[0].get("image_url"):
-            st.image(master_row.iloc[0]["image_url"], use_container_width=True)
+            st.image(master_row.iloc[0]["image_url"], width="stretch")
     with title_col:
         st.subheader(f"{selected_style} · {item['product_name'].iloc[0]}")
         if not master_row.empty:
@@ -212,7 +212,7 @@ with tabs[4]:
     anchor_item["成交件数/讲解"] = anchor_item["成交件数"].div(anchor_item["讲解次数"].replace(0, pd.NA))
     anchor_item["点击成交率"] = anchor_item["成交件数"].div(anchor_item["点击人数"].replace(0, pd.NA))
     st.markdown("#### 主播对比")
-    st.dataframe(anchor_item.rename(columns={"anchor_name": "主播"}), use_container_width=True, hide_index=True)
+    st.dataframe(anchor_item.rename(columns={"anchor_name": "主播"}), width="stretch", hide_index=True)
     st.caption("GMV仅显示原始金额，不计算商品占主播、平台或公司的GMV比例。")
 
 with tabs[5]:
@@ -223,4 +223,4 @@ with tabs[5]:
     if review.empty:
         st.success("当前筛选范围内所有商品名称都已识别出货号并通过校验。")
     else:
-        st.dataframe(review, use_container_width=True, hide_index=True)
+        st.dataframe(review, width="stretch", hide_index=True)
