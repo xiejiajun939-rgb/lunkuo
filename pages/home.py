@@ -94,13 +94,15 @@ st.markdown("### 快速开始")
 st.markdown("""<style>
 .quick-card{min-height:142px;padding:22px;border:1px solid #dbe6ef;border-radius:16px;background:linear-gradient(145deg,#fff,#f9fcff);box-shadow:0 3px 12px rgba(16,48,82,.06);transition:.18s ease}.quick-card:hover{transform:translateY(-3px);box-shadow:0 12px 28px rgba(16,48,82,.11);border-color:#b8d4e7}.quick-icon{width:44px;height:44px;display:flex;align-items:center;justify-content:center;border-radius:12px;background:linear-gradient(135deg,#e7f5ff,#e8fbfd);font-size:22px}.quick-title{font-size:16px;font-weight:760;color:#132238;margin:14px 0 6px}.quick-desc{font-size:13px;line-height:1.55;color:#66778c;margin:0}
 </style>""", unsafe_allow_html=True)
-cols = st.columns(4)
+cols = st.columns(5)
 cards = [
-    ("📊", "经营驾驶舱", "查看核心经营指标、趋势和异常提醒"),
-    ("📦", "商品分析", "按本月数据分析商品表现与退货风险"),
-    ("🎤", "主播分析", "洞察主播贡献、货品结构与增长空间"),
-    ("🏢", "组织与部门", "查看组织、部门与店铺的经营贡献"),
+    ("📊", "经营驾驶舱", "查看核心经营指标、趋势和异常提醒", "pages/dashboard.py"),
+    ("📦", "商品分析", "按本月数据分析商品表现与退货风险", "pages/product_page.py"),
+    ("🎤", "主播分析", "洞察主播贡献、货品结构与增长空间", "pages/anchor.py"),
+    ("🎬", "直播分析", "串联直播表现与商品实销，支持主播和店铺对比", "pages/live_analysis.py"),
+    ("🏢", "组织与部门", "查看组织、部门与店铺的经营贡献", "pages/org_dept.py"),
 ]
-for col, (icon, title, desc) in zip(cols, cards):
+for col, (icon, title, desc, path) in zip(cols, cards):
     with col:
         st.markdown(f"<div class='quick-card'><div class='quick-icon'>{icon}</div><div class='quick-title'>{title}</div><p class='quick-desc'>{desc}</p></div>", unsafe_allow_html=True)
+        st.page_link(path, label=f"进入{title}", icon="➡️", width="stretch")
