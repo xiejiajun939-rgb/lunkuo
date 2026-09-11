@@ -214,10 +214,11 @@ def _fetch_all(table_name, columns="*", query_builder=None):
 
 @st.cache_data(ttl=120, show_spinner=False)
 def load_live_dataset(start_date: date, end_date: date):
-    end_exclusive = (pd.Timestamp(end_date) + pd.Timedelta(days=1)).date().isoformat()
+    start_boundary = pd.Timestamp(start_date).tz_localize("Asia/Shanghai").isoformat()
+    end_boundary = (pd.Timestamp(end_date) + pd.Timedelta(days=1)).tz_localize("Asia/Shanghai").isoformat()
     sessions = _fetch_all(
         "live_sessions", "*",
-        lambda q: q.gte("start_time", start_date.isoformat()).lt("start_time", end_exclusive).order("start_time"),
+        lambda q: q.gte("start_time", start_boundary).lt("start_time", end_boundary).order("start_time"),
     )
     session_df = pd.DataFrame(sessions)
     if session_df.empty:
@@ -228,7 +229,9 @@ def load_live_dataset(start_date: date, end_date: date):
         room_batch = room_ids[start:start + 50]
         products.extend(_fetch_all("live_products", "*", lambda q, ids=room_batch: q.in_("live_room_id", ids)))
         metrics.extend(_fetch_all("live_metrics", "*", lambda q, ids=room_batch: q.in_("live_room_id", ids)))
-    session_df["start_time"] = pd.to_datetime(session_df["start_time"])
+    for column in ["start_time", "end_time", "source_collected_at", "imported_at"]:
+        if column in session_df.columns:
+            session_df[column] = pd.to_datetime(session_df[column], utc=True, errors="coerce").dt.tz_convert("Asia/Shanghai")
     return session_df, pd.DataFrame(products), pd.DataFrame(metrics)
 
 

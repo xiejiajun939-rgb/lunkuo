@@ -57,7 +57,7 @@ if sessions.empty:
     st.stop()
 
 products = products.merge(
-    sessions[["live_room_id", "shop_name", "anchor_name", "start_time", "duration_seconds"]],
+    sessions[["live_room_id", "shop_name", "anchor_name", "start_time", "end_time", "duration_seconds"]],
     on="live_room_id", how="left", validate="many_to_one",
 )
 for column in ["talk_count", "click_users", "sold_units", "paid_amount", "pre_ship_refund_amount", "post_ship_refund_amount"]:
@@ -78,6 +78,7 @@ with filter_cols[2]:
 
 sessions = sessions[sessions["shop_name"].isin(selected_shops) & sessions["anchor_name"].isin(selected_anchors)]
 products = products[products["live_room_id"].isin(sessions["live_room_id"])]
+metrics = metrics[metrics["live_room_id"].isin(sessions["live_room_id"])]
 if match_filter == "已识别货号":
     products = products[products["style_code"].notna()]
 elif match_filter == "待确认":
@@ -98,10 +99,21 @@ if not actuals.empty and "style_code" in actuals.columns:
         ship_amount=("ship_amount", "sum"), return_amount=("return_amount", "sum"), net_amount=("net_amount", "sum")
     )
 
-total_duration = sessions["duration_seconds"].sum() / 3600
+def format_duration(total_seconds):
+    total_seconds = int(total_seconds or 0)
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    if hours:
+        return f"{hours}小时{minutes}分"
+    if minutes:
+        return f"{minutes}分{seconds}秒"
+    return f"{seconds}秒"
+
+
+total_duration_seconds = sessions["duration_seconds"].sum()
 total_refund = products["pre_ship_refund_amount"].sum() + products["post_ship_refund_amount"].sum()
 metric_cols = st.columns(6)
-metric_cols[0].metric("直播场次", f"{len(sessions):,}", f"{total_duration:,.1f}小时")
+metric_cols[0].metric("直播场次", f"{len(sessions):,}", format_duration(total_duration_seconds))
 metric_cols[1].metric("支付GMV（原始）", f"¥{products['paid_amount'].sum():,.0f}")
 metric_cols[2].metric("成交件数", f"{products['sold_units'].sum():,.0f}")
 metric_cols[3].metric("商品点击人数", f"{products['click_users'].sum():,.0f}")
@@ -206,12 +218,86 @@ with tabs[1]:
 
 with tabs[2]:
     st.subheader("场次表现")
-    session_summary = products.groupby(["live_room_id", "shop_name", "anchor_name", "start_time"], as_index=False).agg(
+    session_summary = products.groupby(["live_room_id", "shop_name", "anchor_name", "start_time", "end_time", "duration_seconds"], as_index=False).agg(
         商品数=("product_id", "nunique"), 讲解次数=("talk_count", "sum"), 点击人数=("click_users", "sum"),
         成交件数=("sold_units", "sum"), 支付GMV=("paid_amount", "sum"),
     )
     session_summary["点击成交率"] = session_summary["成交件数"].div(session_summary["点击人数"].replace(0, pd.NA))
-    st.dataframe(session_summary.rename(columns={"start_time": "开播时间", "shop_name": "店铺", "anchor_name": "主播"}), width="stretch", hide_index=True)
+    session_summary["直播时长"] = session_summary["duration_seconds"].map(format_duration)
+    session_table = session_summary.rename(columns={
+        "start_time": "开播时间", "end_time": "下播时间", "shop_name": "店铺", "anchor_name": "主播",
+    }).drop(columns=["duration_seconds"])
+    st.dataframe(
+        session_table,
+        width="stretch",
+        hide_index=True,
+        column_config={
+            "开播时间": st.column_config.DatetimeColumn(format="YYYY-MM-DD HH:mm"),
+            "下播时间": st.column_config.DatetimeColumn(format="YYYY-MM-DD HH:mm"),
+            "支付GMV": st.column_config.NumberColumn(format="¥ %.0f"),
+            "点击成交率": st.column_config.NumberColumn(format="%.2f%%"),
+        },
+    )
+
+    st.markdown("#### 单场直播下钻")
+    session_rows = sessions.sort_values("start_time", ascending=False).set_index("live_room_id")
+    room_options = session_rows.index.astype(str).tolist()
+
+    def room_label(room_id):
+        row = session_rows.loc[room_id]
+        return f"{row['start_time']:%Y-%m-%d %H:%M}｜{row['anchor_name']}｜{row['live_title'] or '未命名场次'}"
+
+    selected_room = st.selectbox("选择直播场次", room_options, format_func=room_label)
+    room = session_rows.loc[selected_room]
+    room_products = products[products["live_room_id"].astype(str) == selected_room].copy()
+    room_metrics = metrics[metrics["live_room_id"].astype(str) == selected_room].copy()
+
+    detail_cols = st.columns(5)
+    detail_cols[0].metric("开播时间", room["start_time"].strftime("%m-%d %H:%M"))
+    detail_cols[1].metric("下播时间", room["end_time"].strftime("%m-%d %H:%M") if pd.notna(room["end_time"]) else "-")
+    detail_cols[2].metric("直播时长", format_duration(room["duration_seconds"]))
+    detail_cols[3].metric("商品数", f"{room_products['product_id'].nunique():,}")
+    detail_cols[4].metric("支付GMV（原始）", f"¥{room_products['paid_amount'].sum():,.0f}")
+    st.caption(f"店铺：{room['shop_name']}　主播：{room['anchor_name']}　场次ID：{selected_room}")
+
+    metric_tab, product_tab = st.tabs(["全部直播指标", "全部商品平台表现"])
+    with metric_tab:
+        if room_metrics.empty:
+            st.info("该场次暂无直播指标。")
+        else:
+            metric_detail = room_metrics[[
+                "module", "metric_name", "metric_value", "raw_value", "unit",
+                "benchmark_value", "benchmark_raw", "comparison_display",
+            ]].rename(columns={
+                "module": "指标模块", "metric_name": "指标名称", "metric_value": "指标值",
+                "raw_value": "平台原值", "unit": "单位", "benchmark_value": "基准值",
+                "benchmark_raw": "基准原值", "comparison_display": "较基准表现",
+            }).sort_values(["指标模块", "指标名称"])
+            st.dataframe(metric_detail, width="stretch", hide_index=True)
+    with product_tab:
+        if room_products.empty:
+            st.info("该场次暂无商品平台数据。")
+        else:
+            product_columns = [
+                "style_code", "product_name", "product_id", "talk_count", "first_listed_at", "live_price",
+                "paid_amount", "sold_units", "presale_orders", "click_users", "exposure_click_rate",
+                "click_conversion_rate", "gmv_per_1000_exposure", "pre_ship_refund_orders",
+                "pre_ship_refund_amount", "pre_ship_refund_users", "pre_ship_refund_rate",
+                "post_ship_refund_orders", "post_ship_refund_amount", "post_ship_refund_users", "post_ship_refund_rate",
+            ]
+            product_columns = [column for column in product_columns if column in room_products.columns]
+            product_detail = room_products[product_columns].rename(columns={
+                "style_code": "货号", "product_name": "商品名称", "product_id": "平台商品ID",
+                "talk_count": "讲解次数", "first_listed_at": "首次上架时间", "live_price": "直播间价格",
+                "paid_amount": "用户支付金额", "sold_units": "成交件数", "presale_orders": "预售订单数",
+                "click_users": "商品点击人数", "exposure_click_rate": "曝光点击率",
+                "click_conversion_rate": "点击成交率", "gmv_per_1000_exposure": "千次曝光支付金额",
+                "pre_ship_refund_orders": "发货前退款订单", "pre_ship_refund_amount": "发货前退款金额",
+                "pre_ship_refund_users": "发货前退款人数", "pre_ship_refund_rate": "发货前退款率",
+                "post_ship_refund_orders": "发货后退款订单", "post_ship_refund_amount": "发货后退款金额",
+                "post_ship_refund_users": "发货后退款人数", "post_ship_refund_rate": "发货后退款率",
+            }).sort_values(["用户支付金额", "成交件数"], ascending=False)
+            st.dataframe(product_detail, width="stretch", hide_index=True)
 
 with tabs[3]:
     st.subheader("商品经营表现")
