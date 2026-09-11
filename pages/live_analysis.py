@@ -120,7 +120,7 @@ metric_cols[3].metric("商品点击人数", f"{products['click_users'].sum():,.0
 metric_cols[4].metric("平台退款金额", f"¥{total_refund:,.0f}")
 metric_cols[5].metric("关联实销", f"¥{actual_by_style['net_amount'].sum():,.0f}")
 
-tabs = st.tabs(["经营总览", "对比分析", "场次分析", "商品分析", "单货品分析", "待确认商品"])
+tabs = st.tabs(["经营总览", "对比分析", "场次趋势", "场次分析", "商品分析", "单货品分析", "待确认商品"])
 
 with tabs[0]:
     left, right = st.columns([1.1, 0.9])
@@ -217,6 +217,114 @@ with tabs[1]:
     st.plotly_chart(chart, width="stretch")
 
 with tabs[2]:
+    st.subheader("平台指标场次趋势")
+    st.caption("横轴按北京时间的开播先后排列，每个节点代表一场直播；不同量级指标已分图展示。")
+    trend_metric_groups = {
+        "人数与数量": [
+            "直播间曝光人数", "进入直播间人数", "自然流量观看人数", "付费流量观看人数",
+            "平均在线人数", "最高在线人数", "直播间成交人数", "商品点击人数", "成交件数",
+            "新增粉丝数", "评论次数", "点赞次数",
+        ],
+        "转化率": [
+            "直播间观看-成交转化率(人数)", "直播间观看-互动率(人数)",
+            "直播间观看-关注率(人数)", "首购率(人数)", "粉丝成交人数占比", "粉丝成交金额占比",
+        ],
+        "金额": ["支付GMV"],
+    }
+    available_platform_metrics = set(metrics["metric_name"].dropna().astype(str))
+    product_trend_metrics = {"商品点击人数", "成交件数", "支付GMV"}
+    trend_options = [
+        name for names in trend_metric_groups.values() for name in names
+        if name in available_platform_metrics or name in product_trend_metrics
+    ]
+    default_trend_metrics = [
+        name for name in ["直播间曝光人数", "进入直播间人数", "直播间成交人数", "商品点击人数", "成交件数", "支付GMV"]
+        if name in trend_options
+    ]
+    selected_trend_metrics = st.multiselect(
+        "选择趋势指标",
+        trend_options,
+        default=default_trend_metrics,
+        placeholder="选择一个或多个平台指标",
+    )
+
+    platform_trend = (
+        metrics.sort_values(["live_room_id", "metric_name", "module"])
+        .drop_duplicates(["live_room_id", "metric_name"], keep="first")
+        [["live_room_id", "metric_name", "metric_value", "benchmark_value"]]
+    )
+    product_by_room = products.groupby("live_room_id", as_index=False).agg(
+        商品点击人数=("click_users", "sum"), 成交件数=("sold_units", "sum"), 支付GMV=("paid_amount", "sum")
+    )
+    room_context = sessions[["live_room_id", "start_time", "shop_name", "anchor_name"]].copy()
+    room_context["场次"] = room_context["start_time"].dt.strftime("%m-%d %H:%M")
+    room_context = room_context.sort_values("start_time")
+
+    if not selected_trend_metrics:
+        st.info("请至少选择一个趋势指标。")
+    else:
+        trend_rows = []
+        for metric_name in selected_trend_metrics:
+            if metric_name in product_trend_metrics:
+                values = product_by_room[["live_room_id", metric_name]].rename(columns={metric_name: "当前值"})
+                values["基准值"] = pd.NA
+            else:
+                values = platform_trend[platform_trend["metric_name"] == metric_name][
+                    ["live_room_id", "metric_value", "benchmark_value"]
+                ].rename(columns={"metric_value": "当前值", "benchmark_value": "基准值"})
+            values = room_context.merge(values, on="live_room_id", how="left")
+            values["指标"] = metric_name.replace("直播间", "").replace("(人数)", "")
+            trend_rows.append(values)
+        trend_data = pd.concat(trend_rows, ignore_index=True)
+        trend_data["当前值"] = pd.to_numeric(trend_data["当前值"], errors="coerce")
+        trend_data["基准值"] = pd.to_numeric(trend_data["基准值"], errors="coerce")
+
+        for group_name, group_metrics in trend_metric_groups.items():
+            display_names = [name.replace("直播间", "").replace("(人数)", "") for name in group_metrics]
+            group_data = trend_data[trend_data["指标"].isin(display_names) & trend_data["当前值"].notna()]
+            if group_data.empty:
+                continue
+            st.markdown(f"#### {group_name}趋势")
+            fig = px.line(
+                group_data,
+                x="场次",
+                y="当前值",
+                color="指标",
+                markers=True,
+                category_orders={"场次": room_context["场次"].tolist()},
+                hover_data={"shop_name": True, "anchor_name": True, "live_room_id": True, "场次": True, "当前值": ":,.2f"},
+                labels={"当前值": "金额（元）" if group_name == "金额" else ("比例（%）" if group_name == "转化率" else "人数 / 数量")},
+            )
+            benchmark_data = group_data[group_data["基准值"].notna()]
+            for metric_name, benchmark_series in benchmark_data.groupby("指标", sort=False):
+                fig.add_trace(go.Scatter(
+                    x=benchmark_series["场次"],
+                    y=benchmark_series["基准值"],
+                    mode="lines",
+                    line=dict(dash="dot", width=1.5),
+                    opacity=0.65,
+                    name=f"{metric_name}·近7天中位数",
+                    hovertemplate="%{x}<br>近7天中位数：%{y:,.2f}<extra></extra>",
+                ))
+            fig.update_layout(height=360, legend_title_text="指标", xaxis_title="开播时间（北京时间）")
+            st.plotly_chart(fig, width="stretch")
+
+            if not benchmark_data.empty:
+                benchmark_table = benchmark_data[["场次", "指标", "当前值", "基准值"]].copy()
+                benchmark_table["较中位数"] = benchmark_table.apply(
+                    lambda row: (row["当前值"] - row["基准值"]) / abs(row["基准值"])
+                    if row["基准值"] else pd.NA,
+                    axis=1,
+                )
+                with st.expander(f"查看{group_name}的近7天中位数对照"):
+                    st.dataframe(
+                        benchmark_table,
+                        width="stretch",
+                        hide_index=True,
+                        column_config={"较中位数": st.column_config.NumberColumn(format="%.1f%%")},
+                    )
+
+with tabs[3]:
     st.subheader("场次表现")
     session_summary = products.groupby(["live_room_id", "shop_name", "anchor_name", "start_time", "end_time", "duration_seconds"], as_index=False).agg(
         商品数=("product_id", "nunique"), 讲解次数=("talk_count", "sum"), 点击人数=("click_users", "sum"),
@@ -343,7 +451,7 @@ with tabs[2]:
             }).sort_values(["用户支付金额", "成交件数"], ascending=False)
             st.dataframe(product_detail, width="stretch", hide_index=True)
 
-with tabs[3]:
+with tabs[4]:
     st.subheader("商品经营表现")
     style_summary = products[products["style_code"].notna()].groupby(["style_code", "product_name"], as_index=False).agg(
         场次数=("live_room_id", "nunique"), 讲解次数=("talk_count", "sum"), 点击人数=("click_users", "sum"),
@@ -355,7 +463,7 @@ with tabs[3]:
     style_summary = style_summary.sort_values(["成交件数", "net_amount"], ascending=False)
     st.dataframe(style_summary.rename(columns={"style_code": "货号", "product_name": "商品名称", "ship_amount": "关联发货", "return_amount": "关联退货", "net_amount": "关联实销"}), width="stretch", hide_index=True)
 
-with tabs[4]:
+with tabs[5]:
     style_options = (
         products[products["style_code"].notna()]
         .groupby("style_code")["sold_units"].sum()
@@ -396,7 +504,7 @@ with tabs[4]:
     st.dataframe(anchor_item.rename(columns={"anchor_name": "主播"}), width="stretch", hide_index=True)
     st.caption("GMV仅显示原始金额，不计算商品占主播、平台或公司的GMV比例。")
 
-with tabs[5]:
+with tabs[6]:
     review = products[products["style_code"].isna() | products["match_status"].isin(["unmatched", "catalog_missing"])][
         ["shop_name", "product_id", "product_name", "style_code", "match_status"]
     ].drop_duplicates()
