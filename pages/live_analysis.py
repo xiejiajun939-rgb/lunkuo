@@ -92,8 +92,14 @@ actual_by_style = pd.DataFrame(columns=["style_code", "ship_amount", "return_amo
 if not actuals.empty and "style_code" in actuals.columns:
     actuals = actuals.copy()
     actuals["shop_key"] = actuals["shop_name"].astype(str).str.strip().str.upper()
+    anchor_source = actuals["anchor"] if "anchor" in actuals.columns else actuals.get("anchor_display", pd.Series(index=actuals.index, dtype=str))
+    actuals["anchor_key"] = anchor_source.fillna("").astype(str).str.strip().str.upper()
     selected_shop_keys = {str(x).strip().upper() for x in selected_shops}
-    actuals = actuals[actuals["shop_key"].isin(selected_shop_keys)]
+    selected_anchor_keys = {str(x).strip().upper() for x in selected_anchors}
+    actuals = actuals[
+        actuals["shop_key"].isin(selected_shop_keys)
+        & actuals["anchor_key"].isin(selected_anchor_keys)
+    ]
     actuals["style_code"] = actuals["style_code"].astype(str).str.strip().str.upper()
     actual_by_style = actuals.groupby("style_code", as_index=False).agg(
         ship_amount=("ship_amount", "sum"), return_amount=("return_amount", "sum"), net_amount=("net_amount", "sum")
@@ -112,13 +118,24 @@ def format_duration(total_seconds):
 
 total_duration_seconds = sessions["duration_seconds"].sum()
 total_refund = products["pre_ship_refund_amount"].sum() + products["post_ship_refund_amount"].sum()
-metric_cols = st.columns(6)
+metric_cols = st.columns(5)
 metric_cols[0].metric("直播场次", f"{len(sessions):,}", format_duration(total_duration_seconds))
 metric_cols[1].metric("支付GMV（原始）", f"¥{products['paid_amount'].sum():,.0f}")
 metric_cols[2].metric("成交件数", f"{products['sold_units'].sum():,.0f}")
 metric_cols[3].metric("商品点击人数", f"{products['click_users'].sum():,.0f}")
 metric_cols[4].metric("平台退款金额", f"¥{total_refund:,.0f}")
-metric_cols[5].metric("关联实销", f"¥{actual_by_style['net_amount'].sum():,.0f}")
+
+selected_ship = actual_by_style["ship_amount"].sum()
+selected_return = actual_by_style["return_amount"].sum()
+selected_net = actual_by_style["net_amount"].sum()
+selected_return_rate = selected_return / selected_ship if selected_ship else 0
+st.markdown("#### 所选范围履约数据")
+fulfillment_cols = st.columns(4)
+fulfillment_cols[0].metric("发货金额", f"¥{selected_ship:,.0f}")
+fulfillment_cols[1].metric("退货金额", f"¥{selected_return:,.0f}")
+fulfillment_cols[2].metric("实销金额", f"¥{selected_net:,.0f}")
+fulfillment_cols[3].metric("退货率", f"{selected_return_rate:.1%}")
+st.caption("数据罗盘口径：按当前日期、店铺和主播范围汇总；商品明细再按货号关联。实销金额＝发货金额－退货金额。")
 
 tabs = st.tabs(["经营总览", "对比分析", "场次分析", "商品分析", "单货品分析", "待确认商品"])
 
@@ -191,11 +208,11 @@ with tabs[0]:
         live_daily = live_daily.rename(columns={"paid_amount": "直播支付GMV"})
         if not actuals.empty:
             actual_daily = actuals.assign(日期=pd.to_datetime(actuals["sale_date"]).dt.date).groupby("日期", as_index=False).agg(
-                关联发货=("ship_amount", "sum"), 关联退货=("return_amount", "sum"), 关联实销=("net_amount", "sum"))
+                所选范围发货=("ship_amount", "sum"), 所选范围退货=("return_amount", "sum"), 所选范围实销=("net_amount", "sum"))
             trend = live_daily.merge(actual_daily, on="日期", how="outer").fillna(0).sort_values("日期")
         else:
-            trend = live_daily.assign(关联发货=0, 关联退货=0, 关联实销=0)
-        fig = px.line(trend, x="日期", y=["直播支付GMV", "关联发货", "关联退货", "关联实销"], markers=True)
+            trend = live_daily.assign(所选范围发货=0, 所选范围退货=0, 所选范围实销=0)
+        fig = px.line(trend, x="日期", y=["直播支付GMV", "所选范围发货", "所选范围退货", "所选范围实销"], markers=True)
         fig.update_layout(height=330, legend_title_text="口径", yaxis_title="金额（元）")
         st.plotly_chart(fig, width="stretch")
         st.caption("直播支付GMV与数据罗盘履约金额是不同口径，只用于并列观察。")
@@ -461,7 +478,7 @@ with tabs[3]:
     style_summary["成交件数/讲解"] = style_summary["成交件数"].div(style_summary["讲解次数"].replace(0, pd.NA))
     style_summary["点击成交率"] = style_summary["成交件数"].div(style_summary["点击人数"].replace(0, pd.NA))
     style_summary = style_summary.sort_values(["成交件数", "net_amount"], ascending=False)
-    st.dataframe(style_summary.rename(columns={"style_code": "货号", "product_name": "商品名称", "ship_amount": "关联发货", "return_amount": "关联退货", "net_amount": "关联实销"}), width="stretch", hide_index=True)
+    st.dataframe(style_summary.rename(columns={"style_code": "货号", "product_name": "商品名称", "ship_amount": "所选范围发货", "return_amount": "所选范围退货", "net_amount": "所选范围实销"}), width="stretch", hide_index=True)
 
 with tabs[4]:
     style_options = (
@@ -492,7 +509,7 @@ with tabs[4]:
     item_metrics[2].metric("商品点击人数", f"{item['click_users'].sum():,.0f}")
     item_actual = actual_by_style[actual_by_style["style_code"] == selected_style]
     item_net = item_actual["net_amount"].sum() if not item_actual.empty else 0
-    item_metrics[3].metric("关联实销", f"¥{item_net:,.0f}")
+    item_metrics[3].metric("所选范围实销", f"¥{item_net:,.0f}")
     anchor_item = item.groupby("anchor_name", as_index=False).agg(
         场次数=("live_room_id", "nunique"), 讲解次数=("talk_count", "sum"), 点击人数=("click_users", "sum"),
         成交件数=("sold_units", "sum"), 支付GMV原始值=("paid_amount", "sum"),
