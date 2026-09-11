@@ -662,7 +662,6 @@ all_pages = {
     "📑 商品月度复盘": "pages/product_monthly_report.py",
     "🔀 商品销售对比": "pages/product_comparison.py",
     "📊 商品分析助手": "pages/product_assistant.py",   # 新增
-    "🎤 主播分析": "pages/anchor.py",
     "🎬 直播分析": "pages/live_analysis.py",
     "📈 销售分布与品牌": "pages/distribution.py",
     "🏬 抖音部门与阿米巴": "pages/douyin_amoeba.py",
@@ -691,8 +690,6 @@ for label, path in all_pages.items():
     if label == "⚙️ 系统设置" and role != "admin":
         continue
     if label == "🏢 组织与部门分析" and current_suffix != "_all":
-        continue
-    if label == "🎤 主播分析" and current_suffix != "_all":
         continue
     # 新页面添加任何特殊限制（例如只在全部数据源显示）可在此添加
     # 但商品分析助手不限数据源，所以不需要额外条件
