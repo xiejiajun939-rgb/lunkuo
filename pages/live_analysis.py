@@ -120,7 +120,7 @@ metric_cols[3].metric("商品点击人数", f"{products['click_users'].sum():,.0
 metric_cols[4].metric("平台退款金额", f"¥{total_refund:,.0f}")
 metric_cols[5].metric("关联实销", f"¥{actual_by_style['net_amount'].sum():,.0f}")
 
-tabs = st.tabs(["经营总览", "对比分析", "场次趋势", "场次分析", "商品分析", "单货品分析", "待确认商品"])
+tabs = st.tabs(["经营总览", "对比分析", "场次分析", "商品分析", "单货品分析", "待确认商品"])
 
 with tabs[0]:
     left, right = st.columns([1.1, 0.9])
@@ -216,7 +216,7 @@ with tabs[1]:
     chart = px.bar(grouped, x=dimension, y=["成交件数", "讲解次数"], barmode="group", title="成交件数与讲解次数")
     st.plotly_chart(chart, width="stretch")
 
-with tabs[2]:
+with tabs[0]:
     st.subheader("平台指标场次趋势")
     st.caption("横轴按北京时间的开播先后排列，每个节点代表一场直播；不同量级指标已分图展示。")
     trend_metric_groups = {
@@ -324,7 +324,7 @@ with tabs[2]:
                         column_config={"较中位数": st.column_config.NumberColumn(format="%.1f%%")},
                     )
 
-with tabs[3]:
+with tabs[2]:
     st.subheader("场次表现")
     session_summary = products.groupby(["live_room_id", "shop_name", "anchor_name", "start_time", "end_time", "duration_seconds"], as_index=False).agg(
         商品数=("product_id", "nunique"), 讲解次数=("talk_count", "sum"), 点击人数=("click_users", "sum"),
@@ -451,7 +451,7 @@ with tabs[3]:
             }).sort_values(["用户支付金额", "成交件数"], ascending=False)
             st.dataframe(product_detail, width="stretch", hide_index=True)
 
-with tabs[4]:
+with tabs[3]:
     st.subheader("商品经营表现")
     style_summary = products[products["style_code"].notna()].groupby(["style_code", "product_name"], as_index=False).agg(
         场次数=("live_room_id", "nunique"), 讲解次数=("talk_count", "sum"), 点击人数=("click_users", "sum"),
@@ -463,7 +463,7 @@ with tabs[4]:
     style_summary = style_summary.sort_values(["成交件数", "net_amount"], ascending=False)
     st.dataframe(style_summary.rename(columns={"style_code": "货号", "product_name": "商品名称", "ship_amount": "关联发货", "return_amount": "关联退货", "net_amount": "关联实销"}), width="stretch", hide_index=True)
 
-with tabs[5]:
+with tabs[4]:
     style_options = (
         products[products["style_code"].notna()]
         .groupby("style_code")["sold_units"].sum()
@@ -504,7 +504,7 @@ with tabs[5]:
     st.dataframe(anchor_item.rename(columns={"anchor_name": "主播"}), width="stretch", hide_index=True)
     st.caption("GMV仅显示原始金额，不计算商品占主播、平台或公司的GMV比例。")
 
-with tabs[6]:
+with tabs[5]:
     review = products[products["style_code"].isna() | products["match_status"].isin(["unmatched", "catalog_missing"])][
         ["shop_name", "product_id", "product_name", "style_code", "match_status"]
     ].drop_duplicates()
