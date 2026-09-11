@@ -158,10 +158,13 @@ with tab_upload:
             st.markdown("""
             **必须包含：**
 
-            1. `database/直播数据.db`：保存直播场次和平台指标。
-            2. 每场直播对应的 `{场次ID}_商品明细.xlsx`：保存该场全部商品的平台表现。
+            1. `直播基础数据/场次N.json`：保存主播、场次 ID、开播时间和直播时长。
+            2. `流量转化/场次N.json`：保存流量和成交指标。
+            3. `商品数据/场次N.xlsx`：保存该场全部商品的平台表现。
 
-            商品明细可以放在 ZIP 内任意子文件夹，系统会按场次 ID 自动查找。原始 JSON、完整页面数据、截图和导出的 CSV 均不需要上传。
+            **建议同时包含：** `互动/场次N.json`、`人群/场次N.json`。`完整页面数据/场次N.json`可以保留，系统会自动去重。
+
+            请直接压缩采集工具生成的整个“主播_日期”文件夹，不需要改目录或文件名。旧版包含 `database/直播数据.db` 和 `{场次ID}_商品明细.xlsx` 的 ZIP 也继续兼容。
             """)
         live_archive = st.file_uploader(
             "直播采集数据 ZIP",
@@ -197,7 +200,9 @@ with tab_upload:
                     preview_cols[3].metric("商品明细行数", preview["product_rows"])
                     st.write(f"**主播账号：** {', '.join(preview['anchors']) or '未识别'}")
                     st.write(f"**数据时间：** {preview['start_time']:%Y-%m-%d %H:%M} 至 {preview['end_time']:%Y-%m-%d %H:%M}")
-                    st.write(f"**直播数据库：** `{preview['database_path']}`")
+                    st.write(f"**识别格式：** {preview['source_type']}")
+                    if preview["database_path"]:
+                        st.write(f"**直播数据库：** `{preview['database_path']}`")
                     if preview["missing_rooms"]:
                         st.error(f"缺少 {len(preview['missing_rooms'])} 场商品明细，不能正式导入。")
                         st.code("\n".join(preview["missing_rooms"][:30]))

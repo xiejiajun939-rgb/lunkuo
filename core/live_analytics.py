@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import re
+import json
 from datetime import date, datetime
 from pathlib import Path
 
@@ -17,6 +18,65 @@ STYLE_CODE_PATTERN = re.compile(
     r"(?<![A-Z0-9])([A-Z]\d{3}[A-Z]\d{3}(?:-\d+)?)(?![A-Z0-9])",
     re.IGNORECASE,
 )
+
+
+def _load_capture_frames(root):
+    """兼容采集工具原始目录和旧版 SQLite 导出目录。"""
+    import sqlite3
+
+    root = Path(root)
+    db_candidates = list(root.rglob("直播数据.db"))
+    if db_candidates:
+        with sqlite3.connect(db_candidates[0]) as connection:
+            sessions = pd.read_sql_query("select * from live_sessions", connection)
+            metrics = pd.read_sql_query("select * from live_metrics", connection)
+        return sessions, metrics, db_candidates[0]
+
+    basic_files = [
+        path for path in root.rglob("场次*.json")
+        if path.parent.name == "直播基础数据"
+    ]
+    if not basic_files:
+        raise FileNotFoundError("未找到 直播基础数据/场次*.json")
+
+    session_rows = []
+    session_by_index = {}
+    for path in sorted(basic_files):
+        payload = json.loads(path.read_text(encoding="utf-8-sig"))
+        index = int(payload.get("session_index") or re.search(r"\d+", path.stem).group())
+        payload["session_index"] = index
+        session_by_index[index] = payload
+        session_rows.append(payload)
+
+    metric_records = {}
+    metric_dirs = {"流量转化", "互动", "人群", "完整页面数据"}
+    for path in root.rglob("场次*.json"):
+        if path.parent.name not in metric_dirs:
+            continue
+        payload = json.loads(path.read_text(encoding="utf-8-sig"))
+        session = payload.get("session") or {}
+        room_id = str(session.get("live_room_id") or "")
+        if not room_id:
+            index_match = re.search(r"\d+", path.stem)
+            session_row = session_by_index.get(int(index_match.group())) if index_match else None
+            room_id = str((session_row or {}).get("live_room_id") or "")
+        for metric in payload.get("metrics") or []:
+            record = dict(metric)
+            record["live_room_id"] = room_id
+            module = str(record.get("module") or payload.get("module") or path.parent.name)
+            record["module"] = module
+            key = (room_id, module, str(record.get("metric_name") or ""))
+            metric_records[key] = record
+
+    for row in session_rows:
+        index = int(row["session_index"])
+        candidates = [
+            path for path in root.rglob(f"场次{index}.xlsx")
+            if path.parent.name == "商品数据"
+        ]
+        row["product_file_path"] = str(candidates[0]) if candidates else ""
+
+    return pd.DataFrame(session_rows), pd.DataFrame(metric_records.values()), None
 
 
 def extract_style_code(product_name):
@@ -119,17 +179,9 @@ def upsert_batches(table_name, records, on_conflict, batch_size=300):
 
 
 def import_live_folder(root_path, anchor_name=None):
-    """从采集工具目录导入。SQLite中的10个唯一场次是唯一可信入口。"""
-    import sqlite3
-
+    """从采集工具原始目录或旧版 SQLite 目录导入。"""
     root = Path(root_path)
-    db_candidates = list(root.rglob("直播数据.db"))
-    if not db_candidates:
-        raise FileNotFoundError("未找到直播数据库：database/直播数据.db")
-    db_path = db_candidates[0]
-    with sqlite3.connect(db_path) as connection:
-        sessions = pd.read_sql_query("select * from live_sessions", connection)
-        metrics = pd.read_sql_query("select * from live_metrics", connection)
+    sessions, metrics, _ = _load_capture_frames(root)
     master = load_product_master()
     known_styles = set(master.get("style_code", pd.Series(dtype=str)).astype(str).str.strip().str.upper())
     mapping_rows = supabase.table("mapping").select("shop_name,anchor_name").execute().data or []
@@ -201,16 +253,8 @@ def import_live_folder(root_path, anchor_name=None):
 
 def preview_live_folder(root_path):
     """只读取采集目录并返回导入预检结果，不写入数据库。"""
-    import sqlite3
-
     root = Path(root_path)
-    db_candidates = list(root.rglob("直播数据.db"))
-    if not db_candidates:
-        raise FileNotFoundError("压缩包中缺少 database/直播数据.db")
-    db_path = db_candidates[0]
-    with sqlite3.connect(db_path) as connection:
-        sessions = pd.read_sql_query("select * from live_sessions", connection)
-        metrics = pd.read_sql_query("select * from live_metrics", connection)
+    sessions, metrics, db_path = _load_capture_frames(root)
     if sessions.empty:
         raise ValueError("直播数据库中没有场次数据")
 
@@ -219,8 +263,10 @@ def preview_live_folder(root_path):
     product_rows = 0
     missing_rooms = []
     for room_id in room_ids:
-        candidates = list(root.rglob(f"{room_id}_商品明细.xlsx"))
-        if not candidates:
+        session_row = sessions[sessions["live_room_id"].astype(str) == room_id].iloc[0]
+        configured_path = Path(str(session_row.get("product_file_path") or ""))
+        candidates = [configured_path] if configured_path.exists() else list(root.rglob(f"{room_id}_商品明细.xlsx"))
+        if not candidates or not candidates[0].exists():
             missing_rooms.append(room_id)
             continue
         product_files.append(candidates[0])
@@ -237,7 +283,8 @@ def preview_live_folder(root_path):
         "anchors": sorted(sessions.get("account_name", pd.Series(dtype=str)).dropna().astype(str).str.strip().unique().tolist()),
         "start_time": start_times.min(),
         "end_time": end_times.max(),
-        "database_path": str(db_path.relative_to(root)),
+        "source_type": "SQLite 数据库" if db_path else "原始采集目录",
+        "database_path": str(db_path.relative_to(root)) if db_path else None,
     }
 
 
