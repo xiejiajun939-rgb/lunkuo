@@ -123,9 +123,10 @@ def import_live_folder(root_path, anchor_name=None):
     import sqlite3
 
     root = Path(root_path)
-    db_path = root / "database" / "直播数据.db"
-    if not db_path.exists():
-        raise FileNotFoundError(f"未找到直播数据库：{db_path}")
+    db_candidates = list(root.rglob("直播数据.db"))
+    if not db_candidates:
+        raise FileNotFoundError("未找到直播数据库：database/直播数据.db")
+    db_path = db_candidates[0]
     with sqlite3.connect(db_path) as connection:
         sessions = pd.read_sql_query("select * from live_sessions", connection)
         metrics = pd.read_sql_query("select * from live_metrics", connection)
@@ -195,6 +196,48 @@ def import_live_folder(root_path, anchor_name=None):
         "unique_products": len({r["product_id"] for r in product_records}),
         "matched": sum(r["style_code"] is not None for r in product_records),
         "unmatched": sum(r["style_code"] is None for r in product_records),
+    }
+
+
+def preview_live_folder(root_path):
+    """只读取采集目录并返回导入预检结果，不写入数据库。"""
+    import sqlite3
+
+    root = Path(root_path)
+    db_candidates = list(root.rglob("直播数据.db"))
+    if not db_candidates:
+        raise FileNotFoundError("压缩包中缺少 database/直播数据.db")
+    db_path = db_candidates[0]
+    with sqlite3.connect(db_path) as connection:
+        sessions = pd.read_sql_query("select * from live_sessions", connection)
+        metrics = pd.read_sql_query("select * from live_metrics", connection)
+    if sessions.empty:
+        raise ValueError("直播数据库中没有场次数据")
+
+    room_ids = sessions["live_room_id"].astype(str).unique().tolist()
+    product_files = []
+    product_rows = 0
+    missing_rooms = []
+    for room_id in room_ids:
+        candidates = list(root.rglob(f"{room_id}_商品明细.xlsx"))
+        if not candidates:
+            missing_rooms.append(room_id)
+            continue
+        product_files.append(candidates[0])
+        product_rows += len(pd.read_excel(candidates[0]))
+
+    start_times = pd.to_datetime(sessions.get("start_time"), errors="coerce")
+    end_times = pd.to_datetime(sessions.get("end_time"), errors="coerce")
+    return {
+        "sessions": len(room_ids),
+        "metrics": len(metrics),
+        "product_files": len(product_files),
+        "product_rows": product_rows,
+        "missing_rooms": missing_rooms,
+        "anchors": sorted(sessions.get("account_name", pd.Series(dtype=str)).dropna().astype(str).str.strip().unique().tolist()),
+        "start_time": start_times.min(),
+        "end_time": end_times.max(),
+        "database_path": str(db_path.relative_to(root)),
     }
 
 

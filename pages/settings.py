@@ -5,6 +5,9 @@ import pandas as pd
 from datetime import date
 import io
 import time
+import tempfile
+import zipfile
+from pathlib import Path
 
 from core.db import init_supabase, load_dimension_mapping
 from core.utils import clear_cache_on_page_change
@@ -12,6 +15,7 @@ from core.app_config import load_carousel_config, save_carousel_config, upload_c
 from core.settings_panels import render_account_management, render_mapping_management
 from core.theme import page_header
 from core.promotion import completed_week_starts, parse_promotion_file, save_promotion_rows, week_label
+from core.live_analytics import import_live_folder, preview_live_folder
 
 st.set_page_config(page_title="系统设置", layout="wide")
 clear_cache_on_page_change("settings")
@@ -146,6 +150,82 @@ with tab_upload:
                         st.write(f"✅ {uploaded.name}：{count} 条")
                     if total:
                         callbacks["mark_data_changed"]()
+
+    st.markdown("### 直播数据上传")
+    with st.container(border=True):
+        st.caption("上传采集工具导出的 ZIP。系统会先预检，不会自动写入；确认预检结果后再点击正式导入。")
+        with st.expander("ZIP 中需要包含哪些文件？", expanded=True):
+            st.markdown("""
+            **必须包含：**
+
+            1. `database/直播数据.db`：保存直播场次和平台指标。
+            2. 每场直播对应的 `{场次ID}_商品明细.xlsx`：保存该场全部商品的平台表现。
+
+            商品明细可以放在 ZIP 内任意子文件夹，系统会按场次 ID 自动查找。原始 JSON、完整页面数据、截图和导出的 CSV 均不需要上传。
+            """)
+        live_archive = st.file_uploader(
+            "直播采集数据 ZIP",
+            type=["zip"],
+            key="settings_live_archive",
+            help="建议只压缩 database 文件夹和所有 *_商品明细.xlsx，减少上传体积。",
+        )
+        if live_archive is not None:
+            try:
+                if live_archive.size > 500 * 1024 * 1024:
+                    raise ValueError("ZIP 超过 500MB，请只保留直播数据库和商品明细 Excel。")
+                with tempfile.TemporaryDirectory(prefix="lunkuo_live_preview_") as temp_dir:
+                    extract_root = Path(temp_dir)
+                    with zipfile.ZipFile(io.BytesIO(live_archive.getvalue())) as archive:
+                        members = archive.infolist()
+                        if len(members) > 5000:
+                            raise ValueError("ZIP 内文件过多，请只保留必要文件。")
+                        total_size = sum(member.file_size for member in members)
+                        if total_size > 1024 * 1024 * 1024:
+                            raise ValueError("ZIP 解压后超过 1GB，已停止处理。")
+                        root_resolved = extract_root.resolve()
+                        for member in members:
+                            target = (extract_root / member.filename).resolve()
+                            if target != root_resolved and root_resolved not in target.parents:
+                                raise ValueError(f"ZIP 包含不安全路径：{member.filename}")
+                        archive.extractall(extract_root)
+
+                    preview = preview_live_folder(extract_root)
+                    preview_cols = st.columns(4)
+                    preview_cols[0].metric("识别场次", preview["sessions"])
+                    preview_cols[1].metric("平台指标", preview["metrics"])
+                    preview_cols[2].metric("商品明细文件", preview["product_files"])
+                    preview_cols[3].metric("商品明细行数", preview["product_rows"])
+                    st.write(f"**主播账号：** {', '.join(preview['anchors']) or '未识别'}")
+                    st.write(f"**数据时间：** {preview['start_time']:%Y-%m-%d %H:%M} 至 {preview['end_time']:%Y-%m-%d %H:%M}")
+                    st.write(f"**直播数据库：** `{preview['database_path']}`")
+                    if preview["missing_rooms"]:
+                        st.error(f"缺少 {len(preview['missing_rooms'])} 场商品明细，不能正式导入。")
+                        st.code("\n".join(preview["missing_rooms"][:30]))
+                    else:
+                        st.success("预检通过：每个场次都找到了对应商品明细。")
+                        confirm_live_import = st.checkbox(
+                            "我已核对主播、时间范围和场次数，确认写入直播数据库",
+                            key="confirm_live_import",
+                        )
+                        if st.button(
+                            "正式导入直播数据",
+                            type="primary",
+                            disabled=not confirm_live_import,
+                            key="settings_import_live_data",
+                        ):
+                            result = import_live_folder(extract_root)
+                            st.cache_data.clear()
+                            if callbacks:
+                                callbacks["mark_data_changed"]()
+                            st.success(
+                                f"导入完成：{result['sessions']} 场、{result['metrics']} 项指标、"
+                                f"{result['products']} 条商品记录；识别货号 {result['matched']} 条，"
+                                f"待确认 {result['unmatched']} 条。"
+                            )
+            except zipfile.BadZipFile:
+                st.error("文件不是有效的 ZIP 压缩包。")
+            except Exception as exc:
+                st.error(f"直播数据预检失败：{exc}")
 
     st.markdown("### 退差价归属")
     with st.container(border=True):
