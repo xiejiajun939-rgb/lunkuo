@@ -663,6 +663,7 @@ all_pages = {
     "🔀 商品销售对比": "pages/product_comparison.py",
     "📊 商品分析助手": "pages/product_assistant.py",   # 新增
     "🎤 主播分析": "pages/anchor.py",
+    "🎬 直播分析": "pages/live_analysis.py",
     "📈 销售分布与品牌": "pages/distribution.py",
     "🏬 抖音部门与阿米巴": "pages/douyin_amoeba.py",
     "🏢 组织与部门分析": "pages/org_dept.py",
