@@ -113,15 +113,66 @@ tabs = st.tabs(["经营总览", "对比分析", "场次分析", "商品分析", 
 with tabs[0]:
     left, right = st.columns([1.1, 0.9])
     with left:
-        st.subheader("直播流量与成交漏斗")
+        st.subheader("直播流量与成交转化")
         metric_lookup = metrics.groupby("metric_name")["metric_value"].sum() if not metrics.empty else pd.Series(dtype=float)
-        funnel = pd.DataFrame({"阶段": ["曝光人数", "进入直播间", "商品点击", "成交件数"], "数量": [
-            metric_lookup.get("直播间曝光人数", 0), metric_lookup.get("进入直播间人数", 0),
-            products["click_users"].sum(), products["sold_units"].sum(),
-        ]})
-        fig = go.Figure(go.Funnel(y=funnel["阶段"], x=funnel["数量"], textinfo="value+percent initial"))
-        fig.update_layout(height=330, margin=dict(l=20, r=20, t=20, b=20))
-        st.plotly_chart(fig, width="stretch")
+        exposure_users = float(metric_lookup.get("直播间曝光人数", 0) or 0)
+        room_users = float(metric_lookup.get("进入直播间人数", 0) or 0)
+        click_users = float(products["click_users"].sum() or 0)
+        buyer_users = float(metric_lookup.get("直播间成交人数", 0) or 0)
+        sold_units = float(products["sold_units"].sum() or 0)
+
+        def _rate(numerator, denominator):
+            return numerator / denominator * 100 if denominator else 0
+
+        stages = [
+            ("直播曝光", exposure_users, "人"),
+            ("进入直播间", room_users, "人"),
+            ("商品点击", click_users, "人次汇总"),
+            ("成交人数", buyer_users, "人"),
+        ]
+        rates = [
+            ("曝光→进房", _rate(room_users, exposure_users)),
+            ("进房→点击", _rate(click_users, room_users)),
+            ("点击→成交", _rate(buyer_users, click_users)),
+        ]
+        stage_html = []
+        for index, (label, value, unit) in enumerate(stages):
+            stage_html.append(
+                f"<div class='flow-stage'><div class='flow-label'>{label}</div>"
+                f"<div class='flow-value'>{value:,.0f}</div><div class='flow-unit'>{unit}</div></div>"
+            )
+            if index < len(rates):
+                rate_label, rate_value = rates[index]
+                stage_html.append(
+                    f"<div class='flow-arrow'><div>{rate_value:.2f}%</div>"
+                    f"<span>{rate_label}</span><b>→</b></div>"
+                )
+        st.markdown(
+            """
+            <style>
+            .live-flow{display:flex;align-items:stretch;gap:10px;padding:18px 16px 14px;
+                border:1px solid #d7e4ef;border-radius:18px;background:linear-gradient(135deg,#f8fbff,#eef7fb)}
+            .flow-stage{flex:1;min-width:105px;padding:20px 12px;border-radius:14px;background:#0b2843;
+                color:#fff;text-align:center;box-shadow:0 8px 20px rgba(8,42,72,.14)}
+            .flow-stage:last-child{background:linear-gradient(135deg,#087f8c,#15a8b5)}
+            .flow-label{font-size:13px;color:#d8e8f5}.flow-value{margin-top:7px;font-size:28px;font-weight:800;line-height:1.1}
+            .flow-unit{margin-top:5px;font-size:11px;color:#b9cedd}.flow-arrow{min-width:74px;display:flex;flex-direction:column;
+                align-items:center;justify-content:center;color:#0b6380;font-size:15px;font-weight:800;text-align:center}
+            .flow-arrow span{margin-top:3px;color:#607487;font-size:10px;font-weight:500}.flow-arrow b{font-size:24px;line-height:1;color:#36a9bd}
+            .flow-foot{display:flex;justify-content:space-between;gap:12px;margin-top:10px;padding:10px 14px;
+                border-radius:12px;background:#edf4f8;color:#334a5f;font-size:12px}.flow-foot strong{color:#0b6380}
+            @media(max-width:900px){.live-flow{flex-wrap:wrap}.flow-arrow{min-width:45px}.flow-stage{min-width:120px}}
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            f"<div class='live-flow'>{''.join(stage_html)}</div>"
+            f"<div class='flow-foot'><span>成交件数：<strong>{sold_units:,.0f} 件</strong></span>"
+            f"<span>件数 ÷ 点击人数：<strong>{_rate(sold_units, click_users):.2f}%</strong></span></div>",
+            unsafe_allow_html=True,
+        )
+        st.caption("成交转化率采用“直播间成交人数 ÷ 商品点击人数”；件数效率单独展示。商品点击人数为商品明细汇总口径，同一用户点击多个商品时可能重复计算。")
     with right:
         st.subheader("GMV与履约趋势")
         live_daily = products.assign(日期=pd.to_datetime(products["start_time"]).dt.date).groupby("日期", as_index=False)["paid_amount"].sum()
