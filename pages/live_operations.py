@@ -402,9 +402,55 @@ session_kpis["支付/投放消耗"] = session_kpis["商品支付金额"].div(
     session_kpis["投放消耗观察值"].replace(0, pd.NA)
 )
 
-decision_tab, selection_tab, review_tab, product_tab, compare_tab = st.tabs([
-    "决策总览", "开播选品", "单场复盘", "商品决策", "主播对比",
-])
+live_sections = {
+    "决策总览": "先看经营问题、机会和下一场建议",
+    "开播选品": "安排开场、极速流和稳定复销商品",
+    "单场复盘": "复盘单场链路并形成下场动作",
+    "商品决策": "查看单款表现、实销和主播适配",
+    "主播对比": "比较主播效率及同商品表现",
+}
+if st.session_state.get("live_operations_section") not in live_sections:
+    st.session_state["live_operations_section"] = "决策总览"
+
+navigation_column, content_column = st.columns([0.19, 0.81], gap="large")
+with navigation_column:
+    with st.container(border=True):
+        st.markdown('<div class="section-kicker">直播经营工作台</div>', unsafe_allow_html=True)
+        st.caption("选择一个任务进入分析")
+        for section_name, section_help in live_sections.items():
+            if st.button(
+                section_name,
+                key=f"live_section_{section_name}",
+                help=section_help,
+                type="primary" if st.session_state["live_operations_section"] == section_name else "secondary",
+                width="stretch",
+            ):
+                st.session_state["live_operations_section"] = section_name
+                st.rerun()
+
+active_section = st.session_state["live_operations_section"]
+with content_column:
+    st.markdown(
+        f'<div class="section-kicker">{active_section}</div><div class="section-help">{live_sections[active_section]}</div>',
+        unsafe_allow_html=True,
+    )
+
+hidden_section_holders = []
+
+
+def section_target(section_name):
+    if active_section == section_name:
+        return content_column.container()
+    holder = st.empty()
+    hidden_section_holders.append(holder)
+    return holder.container()
+
+
+decision_tab = section_target("决策总览")
+selection_tab = section_target("开播选品")
+review_tab = section_target("单场复盘")
+product_tab = section_target("商品决策")
+compare_tab = section_target("主播对比")
 
 with decision_tab:
     st.subheader("本周期经营结论")
@@ -1137,5 +1183,9 @@ with product_tab:
     st.subheader("逐场历史")
     show_table(item[["直播日期", "shop_name", "anchor_name", "talk_count", "click_users", "sold_units", "paid_amount", "pre_ship_refund_amount", "post_ship_refund_amount"]].sort_values("直播日期", ascending=False))
 
-csv = style_summary.to_csv(index=False).encode("utf-8-sig")
-st.download_button("下载当前商品分析", csv, f"直播经营商品分析_{start_date}_{end_date}.csv", "text/csv")
+with product_tab:
+    csv = style_summary.to_csv(index=False).encode("utf-8-sig")
+    st.download_button("下载当前商品分析", csv, f"直播经营商品分析_{start_date}_{end_date}.csv", "text/csv")
+
+for hidden_holder in hidden_section_holders:
+    hidden_holder.empty()
