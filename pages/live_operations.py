@@ -11,6 +11,46 @@ from core.theme import page_header
 from core.utils import clear_cache_on_page_change
 
 
+DISPLAY_COLUMN_NAMES = {
+    "live_room_id": "直播场次ID", "shop_name": "直播间／店铺", "anchor_name": "主播",
+    "start_time": "开播时间", "duration_seconds": "直播时长（秒）", "style_code": "货号",
+    "product_id": "商品ID", "product_name": "商品名称", "click_users": "商品点击人数",
+    "sold_units": "成交件数", "paid_amount": "平台支付", "talk_count": "讲解次数",
+    "pre_ship_refund_amount": "发货前退款", "post_ship_refund_amount": "发货后退款",
+    "module": "指标分组", "metric_name": "指标名称", "metric_value": "指标数值",
+    "raw_value": "原始值", "unit": "单位", "benchmark_value": "对标数值",
+    "benchmark_raw": "对标原始值", "comparison_display": "对比表现", "channel_name": "流量渠道",
+    "avg_watch_duration": "人均观看时长", "watch_count": "观看次数",
+    "watch_users": "观看人数", "order_count": "成交订单数", "avg_order_amount": "笔单价",
+    "watch_conversion_rate": "观看成交率", "shop_bound_spend": "店铺绑定投放消耗",
+    "shop_promoted_spend": "店铺被投投放消耗", "product_image_url": "商品主图",
+    "talk_start_epoch": "讲解开始时间戳", "talk_end_epoch": "讲解结束时间戳",
+    "talk_duration_seconds": "讲解时长（秒）", "viewer_change": "在线人数变化",
+    "avg_online_users": "平均在线人数", "session_start_utc": "开播时间",
+    "talk_start_time": "讲解开始时间", "ship_amount": "范围发货",
+    "return_amount": "范围退货", "net_amount": "范围实销", "sale_date": "销售日期",
+    "created_at": "记录时间", "updated_at": "更新时间", "imported_at": "导入时间",
+}
+
+
+def localize_table(frame: pd.DataFrame) -> pd.DataFrame:
+    """只调整页面展示：字段中文化，比例按两位小数显示。"""
+    if frame is None:
+        return pd.DataFrame()
+    display = frame.copy().rename(columns=DISPLAY_COLUMN_NAMES)
+    for column in display.columns:
+        if "率" not in str(column) and "占比" not in str(column):
+            continue
+        numeric = pd.to_numeric(display[column], errors="coerce")
+        if numeric.notna().any():
+            display[column] = numeric.map(lambda value: "—" if pd.isna(value) else f"{value:.2%}")
+    return display
+
+
+def show_table(frame: pd.DataFrame) -> None:
+    st.dataframe(localize_table(frame), width="stretch", hide_index=True)
+
+
 st.set_page_config(page_title="直播经营分析", layout="wide")
 clear_cache_on_page_change("live_operations")
 page_header("直播经营分析", "历史直播表现 × 数据罗盘履约实销", "LIVE OPERATIONS", "新版")
@@ -241,7 +281,7 @@ def classify_repeat_sales(row):
     if sold_sessions >= 3 and recent == 0:
         return "近期转弱", f"历史至少3场成交，但最近3场均未成交{risk_note}"
     if sold_units >= 5 and top_share >= 0.7:
-        return "单场爆发", f"累计成交至少5件，且最高单场贡献达到{top_share:.0%}{risk_note}"
+        return "单场爆发", f"累计成交至少5件，且最高单场贡献达到{top_share:.2%}{risk_note}"
     if sessions_count >= 5 and sold_sessions >= 3 and rate >= 0.6 and weeks >= 2 and recent >= 2:
         return "高置信稳定", f"至少5场、3场成交、成交率≥60%、跨2周且最近3场≥2场成交{risk_note}"
     if sessions_count >= 3 and sold_sessions >= 2 and rate >= 0.5 and recent >= 1:
@@ -279,7 +319,9 @@ with tabs[0]:
     st.plotly_chart(px.line(daily_platform.sort_values("直播日期"), x="直播日期", y=trend_columns, markers=True, title="历史经营趋势"), width="stretch")
 
 with tabs[1]:
-    labels = sessions.assign(场次=sessions["start_time"].dt.strftime("%m-%d %H:%M") + "｜" + sessions["shop_name"] + "｜" + sessions["anchor_name"])
+    labels = sessions.sort_values("start_time", ascending=False).assign(
+        场次=lambda frame: frame["start_time"].dt.strftime("%m-%d %H:%M") + "｜" + frame["shop_name"] + "｜" + frame["anchor_name"]
+    )
     selected_label = st.selectbox("选择直播场次", labels["场次"].tolist())
     room = str(labels.loc[labels["场次"] == selected_label, "live_room_id"].iloc[0])
     room_products = products[products["live_room_id"].astype(str) == room].copy()
@@ -292,13 +334,13 @@ with tabs[1]:
     cards[4].metric("平台支付", f"¥{room_products['paid_amount'].sum():,.0f}")
     detail_tabs = st.tabs(["商品平台表现", "商品讲解区间", "渠道流量", "全部直播指标"])
     with detail_tabs[0]:
-        st.dataframe(room_products[["style_code", "product_name", "click_users", "sold_units", "paid_amount", "pre_ship_refund_amount", "post_ship_refund_amount"]].sort_values("paid_amount", ascending=False), width="stretch", hide_index=True)
+        show_table(room_products[["style_code", "product_name", "click_users", "sold_units", "paid_amount", "pre_ship_refund_amount", "post_ship_refund_amount"]].sort_values("paid_amount", ascending=False))
     with detail_tabs[1]:
-        st.dataframe(talks[talks["live_room_id"].astype(str) == room].sort_values("talk_start_epoch") if not talks.empty else pd.DataFrame(), width="stretch", hide_index=True)
+        show_table(talks[talks["live_room_id"].astype(str) == room].sort_values("talk_start_epoch") if not talks.empty else pd.DataFrame())
     with detail_tabs[2]:
-        st.dataframe(channels[channels["live_room_id"].astype(str) == room].sort_values("paid_amount", ascending=False) if not channels.empty else pd.DataFrame(), width="stretch", hide_index=True)
+        show_table(channels[channels["live_room_id"].astype(str) == room].sort_values("paid_amount", ascending=False) if not channels.empty else pd.DataFrame())
     with detail_tabs[3]:
-        st.dataframe(metrics[metrics["live_room_id"].astype(str) == room][["module", "metric_name", "raw_value", "comparison_display"]], width="stretch", hide_index=True)
+        show_table(metrics[metrics["live_room_id"].astype(str) == room][["module", "metric_name", "raw_value", "comparison_display"]])
 
 with tabs[2]:
     room_compare = sessions.groupby(["shop_name", "anchor_name"], as_index=False).agg(场次=("live_room_id", "nunique"), 直播小时=("duration_seconds", lambda x: x.sum()/3600))
@@ -307,14 +349,14 @@ with tabs[2]:
     room_compare["场均支付"] = room_compare["平台支付"].div(room_compare["场次"].replace(0, pd.NA))
     room_compare["每小时支付"] = room_compare["平台支付"].div(room_compare["直播小时"].replace(0, pd.NA))
     room_compare["点击成交率"] = room_compare["成交件数"].div(room_compare["商品点击"].replace(0, pd.NA))
-    st.dataframe(room_compare.sort_values("平台支付", ascending=False), width="stretch", hide_index=True)
-    st.plotly_chart(px.bar(room_compare, x="shop_name", y="每小时支付", color="anchor_name", title="直播间每小时产出对比"), width="stretch")
+    show_table(room_compare.sort_values("平台支付", ascending=False))
+    st.plotly_chart(px.bar(room_compare, x="shop_name", y="每小时支付", color="anchor_name", title="直播间每小时产出对比", labels={"shop_name": "直播间／店铺", "anchor_name": "主播"}), width="stretch")
 
 with tabs[3]:
     session_pay = products.groupby(["live_room_id", "直播日期"], as_index=False).agg(平台支付=("paid_amount", "sum"), 商品点击=("click_users", "sum"), 成交件数=("sold_units", "sum"))
     session_pay = session_pay.merge(sessions[["live_room_id", "shop_name", "anchor_name"]], on="live_room_id", how="left")
     metric_name = st.selectbox("趋势指标", ["平台支付", "商品点击", "成交件数"])
-    st.plotly_chart(px.line(session_pay.sort_values("直播日期"), x="直播日期", y=metric_name, color="anchor_name", markers=True, hover_data=["shop_name", "live_room_id"]), width="stretch")
+    st.plotly_chart(px.line(session_pay.sort_values("直播日期"), x="直播日期", y=metric_name, color="anchor_name", markers=True, hover_data=["shop_name", "live_room_id"], labels={"anchor_name": "主播", "shop_name": "直播间／店铺", "live_room_id": "直播场次ID"}), width="stretch")
 
 with tabs[4]:
     search = st.text_input("搜索商品名称或货号")
@@ -326,7 +368,7 @@ with tabs[4]:
     table.loc[(table["上播场次"] >= 3) & (table["点击成交率"] >= .06), "诊断"] = "稳定转化"
     table.loc[(table["累计点击"] >= 100) & (table["点击成交率"] < .03), "诊断"] = "高点击低成交"
     table.loc[table["退款率"] >= .35, "诊断"] = "退款风险"
-    st.dataframe(table.rename(columns={"style_code": "货号", "ship_amount": "范围发货", "return_amount": "范围退货", "net_amount": "范围实销"}).sort_values("平台支付", ascending=False), width="stretch", hide_index=True)
+    show_table(table.sort_values("平台支付", ascending=False))
 
 with tabs[5]:
     st.subheader("开播前段商品销售排行")
@@ -428,7 +470,7 @@ with tabs[5]:
         summary_cards[0].metric(f"前{rank_window}分钟成交金额", f"¥{total_opening_pay:,.0f}")
         summary_cards[1].metric("成交件数", f"{total_opening_units:,.0f}")
         summary_cards[2].metric("有成交商品", f"{(opening_rank['前段成交件数'] > 0).sum():,}")
-        summary_cards[3].metric("前10商品金额占比", f"{top_ten_share:.1%}")
+        summary_cards[3].metric("前10商品金额占比", f"{top_ten_share:.2%}")
         summary_cards[4].metric("平均分钟产出", f"¥{total_opening_pay / total_talk_minutes:,.0f}" if total_talk_minutes else "—")
 
         unique_opening_styles = opening_room["style_code"].nunique()
@@ -450,7 +492,7 @@ with tabs[5]:
             "退款率": "整场退款率", "ship_amount": "范围发货", "return_amount": "范围退货",
             "net_amount": "范围实销",
         })
-        st.dataframe(display_rank, width="stretch", hide_index=True)
+        show_table(display_rank)
         st.download_button(
             f"下载前{rank_window}分钟商品销售排行",
             display_rank.to_csv(index=False).encode("utf-8-sig"),
@@ -469,7 +511,7 @@ with tabs[5]:
             evidence = analysis_room[analysis_room["style_code"].astype(str) == evidence_style].merge(
                 sessions[["live_room_id", "shop_name", "anchor_name"]], on="live_room_id", how="left"
             )
-            st.dataframe(evidence.sort_values("直播日期", ascending=False), width="stretch", hide_index=True)
+            show_table(evidence.sort_values("直播日期", ascending=False))
 
 with tabs[6]:
     opportunity = st.segmented_control(
@@ -533,7 +575,7 @@ with tabs[6]:
     elif opportunity == "退款风险": candidates = candidates.sort_values("退款率", ascending=False)
     if opportunity in ["讲解高效", "在线提升", "开播阶段"] and talks.empty:
         st.warning("当前范围没有新版商品讲解区间数据，上传新版直播工作簿后才能计算。")
-    st.dataframe(candidates.rename(columns={"style_code": "货号", "net_amount": "范围实销"}), width="stretch", hide_index=True)
+    show_table(candidates)
     if opportunity == "稳定复销":
         if candidates.empty:
             st.info(f"当前没有“{selected_stability_level}”商品。")
@@ -552,13 +594,7 @@ with tabs[6]:
             repeat_evidence["该场成交占比"] = repeat_evidence["场次成交件数"].div(
                 repeat_evidence["场次成交件数"].sum() or pd.NA
             )
-            st.dataframe(
-                repeat_evidence.sort_values("直播日期", ascending=False).rename(columns={
-                    "style_code": "货号", "live_room_id": "房间号", "shop_name": "直播间／店铺",
-                    "anchor_name": "主播",
-                }),
-                width="stretch", hide_index=True,
-            )
+            show_table(repeat_evidence.sort_values("直播日期", ascending=False))
 
 with tabs[7]:
     options = style_summary.sort_values("平台支付", ascending=False)["style_code"].astype(str).tolist()
@@ -567,8 +603,8 @@ with tabs[7]:
     summary_row = style_summary[style_summary["style_code"].astype(str) == selected_style].iloc[0]
     cards = st.columns(5)
     cards[0].metric("历史上播场次", f"{summary_row['上播场次']:.0f}")
-    cards[1].metric("成交场次率", f"{summary_row['成交场次率']:.1%}")
-    cards[2].metric("点击成交率", f"{summary_row['点击成交率']:.1%}")
+    cards[1].metric("成交场次率", f"{summary_row['成交场次率']:.2%}")
+    cards[2].metric("点击成交率", f"{summary_row['点击成交率']:.2%}")
     cards[3].metric("平台支付", f"¥{summary_row['平台支付']:,.0f}")
     cards[4].metric("范围实销", f"¥{summary_row['net_amount']:,.0f}")
     anchor_item = item.groupby("anchor_name", as_index=False).agg(场次=("live_room_id", "nunique"), 点击=("click_users", "sum"), 成交件数=("sold_units", "sum"), 平台支付=("paid_amount", "sum"))
@@ -576,7 +612,7 @@ with tabs[7]:
     anchor_item["该货号占主播成交"] = anchor_item.apply(lambda r: r["成交件数"] / products.loc[products["anchor_name"] == r["anchor_name"], "sold_units"].sum() if products.loc[products["anchor_name"] == r["anchor_name"], "sold_units"].sum() else pd.NA, axis=1)
     anchor_item["主播占该货号成交"] = anchor_item["成交件数"].div(anchor_item["成交件数"].sum() or pd.NA)
     st.subheader("主播适配与占比")
-    st.dataframe(anchor_item.sort_values("成交件数", ascending=False), width="stretch", hide_index=True)
+    show_table(anchor_item.sort_values("成交件数", ascending=False))
     st.subheader("讲解效率与在线变化")
     item_talks = talks[talks["style_code"].astype(str) == selected_style].copy() if not talks.empty else pd.DataFrame()
     if item_talks.empty:
@@ -588,14 +624,13 @@ with tabs[7]:
         efficiency[1].metric("场均讲解时长", f"{talk_minutes / item_talks['live_room_id'].nunique():,.1f}分钟")
         efficiency[2].metric("支付/讲解分钟", f"¥{item_talks['paid_amount'].sum() / talk_minutes:,.0f}" if talk_minutes else "—")
         efficiency[3].metric("平均在线变化", f"{item_talks['viewer_change'].mean():+,.1f}")
-        efficiency[4].metric("在线上升区间占比", f"{item_talks['在线上升'].mean():.1%}")
-        st.dataframe(
+        efficiency[4].metric("在线上升区间占比", f"{item_talks['在线上升'].mean():.2%}")
+        show_table(
             item_talks[["live_room_id", "开播后分钟", "讲解分钟", "paid_amount", "sold_units", "viewer_change", "avg_online_users"]]
-            .sort_values(["live_room_id", "开播后分钟"]),
-            width="stretch", hide_index=True,
+            .sort_values(["live_room_id", "开播后分钟"])
         )
     st.subheader("逐场历史")
-    st.dataframe(item[["直播日期", "shop_name", "anchor_name", "talk_count", "click_users", "sold_units", "paid_amount", "pre_ship_refund_amount", "post_ship_refund_amount"]].sort_values("直播日期", ascending=False), width="stretch", hide_index=True)
+    show_table(item[["直播日期", "shop_name", "anchor_name", "talk_count", "click_users", "sold_units", "paid_amount", "pre_ship_refund_amount", "post_ship_refund_amount"]].sort_values("直播日期", ascending=False))
 
 csv = style_summary.to_csv(index=False).encode("utf-8-sig")
 st.download_button("下载当前商品分析", csv, f"直播经营商品分析_{start_date}_{end_date}.csv", "text/csv")
