@@ -145,7 +145,8 @@ if not product_master.empty and "style_code" in product_master.columns:
         master_meta["品类"] = None
     for source, target in [("brand", "品牌"), ("year", "年份")]:
         master_meta[target] = master_meta[source] if source in master_meta.columns else None
-    master_meta = master_meta[["style_code", "品牌", "年份", "品类"]].drop_duplicates("style_code")
+    master_meta["上新日期"] = master_meta["launch_date"] if "launch_date" in master_meta.columns else None
+    master_meta = master_meta[["style_code", "品牌", "年份", "品类", "上新日期"]].drop_duplicates("style_code")
     style_summary = style_summary.merge(master_meta, on="style_code", how="left")
 talk_columns = [
     "讲解场次", "讲解区间数", "累计讲解分钟", "讲解区间支付", "讲解区间成交件数",
@@ -296,7 +297,7 @@ with tabs[4]:
 
 with tabs[5]:
     st.subheader("开播前段商品销售排行")
-    rank_cols = st.columns([1.2, 1.2, 1.4])
+    rank_cols = st.columns([1.2, 1.2, 1.4, 1.5])
     with rank_cols[0]:
         rank_window = st.segmented_control(
             "统计范围", [15, 30, 60, 90], default=60,
@@ -308,19 +309,47 @@ with tabs[5]:
         )
     with rank_cols[2]:
         minimum_room_count = st.slider("最少出现直播场次", 1, 10, 1, key="opening_min_rooms")
+    with rank_cols[3]:
+        launch_day_mode = st.selectbox(
+            "上新当天口径", ["全部销售", "排除上新当天", "只看上新当天"],
+            key="opening_launch_day_mode",
+        )
 
     opening_talks = talks[talks["开播后分钟"] <= rank_window].copy() if not talks.empty else pd.DataFrame()
     if opening_talks.empty:
         st.warning("当前范围没有商品讲解区间数据，上传新版直播工作簿后才能生成排行。")
     else:
         opening_room = opening_talks.groupby(["style_code", "live_room_id"], as_index=False).agg(
+            直播日期=("session_start_utc", lambda values: values.iloc[0].date() if len(values) else None),
             讲解次数=("product_id", "size"), 讲解分钟=("讲解分钟", "sum"),
             前段成交金额=("paid_amount", "sum"), 前段成交件数=("sold_units", "sum"),
             在线净变化=("viewer_change", "sum"), 分均在线人数=("avg_online_users", "mean"),
         )
         opening_room["有成交"] = opening_room["前段成交件数"] > 0
         opening_room["在线上升"] = opening_room["在线净变化"] > 0
-        opening_rank = opening_room.groupby("style_code", as_index=False).agg(
+        launch_lookup = style_summary[["style_code", "上新日期"]].drop_duplicates("style_code") if "上新日期" in style_summary else pd.DataFrame(columns=["style_code", "上新日期"])
+        opening_room = opening_room.merge(launch_lookup, on="style_code", how="left")
+        opening_room["上新日期"] = pd.to_datetime(opening_room["上新日期"], errors="coerce").dt.date
+        opening_room["上新当天"] = opening_room["上新日期"].notna() & (opening_room["直播日期"] == opening_room["上新日期"])
+        opening_room["日期异常"] = opening_room["上新日期"].notna() & (opening_room["直播日期"] < opening_room["上新日期"])
+
+        launch_effect = opening_room.groupby("style_code", as_index=False).agg(
+            原始前段成交金额=("前段成交金额", "sum"),
+            上新当天成交金额=("前段成交金额", lambda values: values[opening_room.loc[values.index, "上新当天"]].sum()),
+            原始前段成交件数=("前段成交件数", "sum"),
+            上新当天成交件数=("前段成交件数", lambda values: values[opening_room.loc[values.index, "上新当天"]].sum()),
+        )
+        launch_effect["排除后成交金额"] = launch_effect["原始前段成交金额"] - launch_effect["上新当天成交金额"]
+        launch_effect["排除后成交件数"] = launch_effect["原始前段成交件数"] - launch_effect["上新当天成交件数"]
+        launch_effect["上新当天金额占比"] = launch_effect["上新当天成交金额"].div(launch_effect["原始前段成交金额"].replace(0, pd.NA))
+
+        analysis_room = opening_room[~opening_room["日期异常"]].copy()
+        if launch_day_mode == "排除上新当天":
+            analysis_room = analysis_room[~analysis_room["上新当天"]]
+        elif launch_day_mode == "只看上新当天":
+            analysis_room = analysis_room[analysis_room["上新当天"]]
+
+        opening_rank = analysis_room.groupby("style_code", as_index=False).agg(
             前段出现场次=("live_room_id", "nunique"), 前段成交场次=("有成交", "sum"),
             前段讲解次数=("讲解次数", "sum"), 前段讲解分钟=("讲解分钟", "sum"),
             前段成交金额=("前段成交金额", "sum"), 前段成交件数=("前段成交件数", "sum"),
@@ -332,10 +361,12 @@ with tabs[5]:
         opening_rank["成交件数/讲解分钟"] = opening_rank["前段成交件数"].div(opening_rank["前段讲解分钟"].replace(0, pd.NA))
         context_column_names = [
             "style_code", "商品名称", "累计点击", "平台退款", "退款率",
-            "ship_amount", "return_amount", "net_amount", "品牌", "年份", "品类",
+            "ship_amount", "return_amount", "net_amount", "品牌", "年份", "品类", "上新日期",
         ]
         context_columns = style_summary[[column for column in context_column_names if column in style_summary.columns]]
-        opening_rank = opening_rank.merge(context_columns, on="style_code", how="left")
+        opening_rank = opening_rank.merge(context_columns, on="style_code", how="left").merge(
+            launch_effect, on="style_code", how="left"
+        )
         dimension_cols = st.columns(3)
         selected_brands = dimension_cols[0].multiselect(
             "品牌", sorted(opening_rank["品牌"].dropna().astype(str).unique()), key="opening_brands"
@@ -367,9 +398,19 @@ with tabs[5]:
         summary_cards[3].metric("前10商品金额占比", f"{top_ten_share:.1%}")
         summary_cards[4].metric("平均分钟产出", f"¥{total_opening_pay / total_talk_minutes:,.0f}" if total_talk_minutes else "—")
 
+        unique_opening_styles = opening_room["style_code"].nunique()
+        dated_opening_styles = opening_room.loc[opening_room["上新日期"].notna(), "style_code"].nunique()
+        launch_day_pay = opening_room.loc[opening_room["上新当天"], "前段成交金额"].sum()
+        launch_cards = st.columns(3)
+        launch_cards[0].metric("上新日期识别覆盖", f"{dated_opening_styles}/{unique_opening_styles}款")
+        launch_cards[1].metric("上新当天前段成交", f"¥{launch_day_pay:,.0f}")
+        launch_cards[2].metric("排除后前段成交", f"¥{opening_room['前段成交金额'].sum() - launch_day_pay:,.0f}")
+
         st.caption(
             f"“前{rank_window}分钟”按讲解开始时间归入；跨越边界的讲解区间整段计入。"
-            "累计点击、平台退款为整场指标；范围发货、退货和实销为所选日期范围履约数据。"
+            f"当前上新口径：{launch_day_mode}。直播日期等于商品上新日期时判定为上新当天；"
+            "上新日期晚于直播日期的数据标记异常并排除。累计点击、平台退款为整场指标；"
+            "范围发货、退货和实销为所选日期范围履约数据。"
         )
         display_rank = opening_rank.rename(columns={
             "style_code": "货号", "累计点击": "整场累计点击", "平台退款": "整场平台退款",
@@ -392,8 +433,8 @@ with tabs[5]:
                 format_func=lambda code: f"{code}｜{opening_rank.loc[opening_rank['style_code'].astype(str) == code, '商品名称'].iloc[0]}",
                 key="opening_evidence_style",
             )
-            evidence = opening_room[opening_room["style_code"].astype(str) == evidence_style].merge(
-                sessions[["live_room_id", "直播日期", "shop_name", "anchor_name"]], on="live_room_id", how="left"
+            evidence = analysis_room[analysis_room["style_code"].astype(str) == evidence_style].merge(
+                sessions[["live_room_id", "shop_name", "anchor_name"]], on="live_room_id", how="left"
             )
             st.dataframe(evidence.sort_values("直播日期", ascending=False), width="stretch", hide_index=True)
 
