@@ -983,11 +983,33 @@ with selection_tab:
             show_table(evidence.sort_values("直播日期", ascending=False))
 
 with selection_tab:
-    opportunity = st.segmented_control(
-        "机会类型",
-        ["开播阶段", "讲解高效", "在线提升", "高转化", "高引流", "稳定复销", "高点击低成交", "退款风险"],
-        default="开播阶段",
-    )
+    st.markdown("#### 商品机会类型")
+    opportunity_help = {
+        "开播阶段": "查看开播后前15／30／60／90分钟内表现较好的商品，辅助安排开场和前段排品。",
+        "讲解高效": "主要参考讲解时长、支付金额和成交件数，识别单位讲解时间产出较高的商品。",
+        "在线提升": "观察商品讲解期间在线人数变化，识别更容易稳住或提升直播间在线人数的商品。",
+        "高转化": "主要参考商品点击人数与成交件数，识别点击后成交效率较高的商品。",
+        "高引流": "主要参考商品累计点击人数，识别更容易吸引用户点击和了解的商品。",
+        "稳定复销": "判断商品是否在多场、跨周持续成交，并结合成交场次率和最近3场表现，避免把单场爆发误判为稳定款。",
+        "高点击低成交": "商品获得较多点击但成交率偏低，通常需要检查价格、利益点、尺码说明或讲解方式。",
+        "退款风险": "按平台退款率排序，辅助识别成交后退款风险较高、需要核查商品或讲解问题的款式。",
+    }
+    opportunity_types = list(opportunity_help)
+    if st.session_state.get("live_opportunity_type") not in opportunity_types:
+        st.session_state["live_opportunity_type"] = "开播阶段"
+    opportunity_buttons = st.columns(len(opportunity_types))
+    for button_column, opportunity_name in zip(opportunity_buttons, opportunity_types):
+        with button_column:
+            if st.button(
+                f"{opportunity_name}  ⓘ",
+                key=f"opportunity_{opportunity_name}",
+                help=opportunity_help[opportunity_name],
+                type="primary" if st.session_state["live_opportunity_type"] == opportunity_name else "secondary",
+                width="stretch",
+            ):
+                st.session_state["live_opportunity_type"] = opportunity_name
+                st.rerun()
+    opportunity = st.session_state["live_opportunity_type"]
     min_sessions = st.slider("最少上播场次", 1, 10, 3)
     min_clicks = st.slider("最少累计点击", 0, 1000, 50, 10)
     candidates = style_summary.copy()
