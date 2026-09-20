@@ -229,6 +229,10 @@ def parse_douyin_live_workbook(source):
                 "comparison_display": None,
             })
     core = pd.read_excel(book, sheet_name="核心指标")
+    # 导出表用合并单元格表示分组，pandas 只会在分组首行读到值。
+    # 向下继承后，“互动/新增粉丝数”和“人群/新增粉丝数”会作为两项独立指标保留。
+    if "分组" in core.columns:
+        core["分组"] = core["分组"].ffill()
     for row in core.fillna("").to_dict("records"):
         name = str(row.get("指标") or "").strip()
         if not name:
@@ -244,6 +248,11 @@ def parse_douyin_live_workbook(source):
             "benchmark_raw": _text_or_none(row.get("上期值")),
             "comparison_display": _text_or_none(row.get("较上期")),
         })
+    # 店铺后台导出会偶尔重复同一分组下的同名指标；唯一键写库前只保留最后一条。
+    metric_records = list({
+        (record["live_room_id"], record["module"], record["metric_name"]): record
+        for record in metric_records
+    }.values())
 
     master = load_product_master()
     known_styles = set(master.get("style_code", pd.Series(dtype=str)).astype(str).str.strip().str.upper())
@@ -337,15 +346,20 @@ def import_douyin_live_workbook(source):
         (record["shop_name"], record["product_id"]): record
         for record in parsed["mappings"]
     }.values())
-    upsert_batches("live_sessions", [session], "live_room_id")
-    upsert_batches("live_product_mappings", mappings, "shop_name,product_id")
-    # 同一房间号上传了内容更新后的文件时，按整场替换，避免旧商品或旧指标残留。
-    for table_name in ["live_metrics", "live_products", "live_channels", "live_product_talks"]:
-        supabase.table(table_name).delete().eq("live_room_id", session["live_room_id"]).execute()
-    upsert_batches("live_products", parsed["products"], "live_room_id,product_id")
-    upsert_batches("live_metrics", parsed["metrics"], "live_room_id,module,metric_name")
-    upsert_batches("live_channels", parsed["channels"], "live_room_id,channel_name")
-    upsert_batches("live_product_talks", parsed["talks"], "live_room_id,product_id,talk_start_epoch")
+    try:
+        upsert_batches("live_sessions", [session], "live_room_id")
+        # 同一房间号上传了内容更新后的文件时，按整场替换，避免旧商品或旧指标残留。
+        for table_name in ["live_metrics", "live_products", "live_channels", "live_product_talks"]:
+            supabase.table(table_name).delete().eq("live_room_id", session["live_room_id"]).execute()
+        upsert_batches("live_products", parsed["products"], "live_room_id,product_id")
+        upsert_batches("live_metrics", parsed["metrics"], "live_room_id,module,metric_name")
+        upsert_batches("live_channels", parsed["channels"], "live_room_id,channel_name")
+        upsert_batches("live_product_talks", parsed["talks"], "live_room_id,product_id,talk_start_epoch")
+        upsert_batches("live_product_mappings", mappings, "shop_name,product_id")
+    except Exception:
+        # PostgREST 多表写入不是一个事务；任一步失败都删除该场，避免半导入数据污染分析。
+        supabase.table("live_sessions").delete().eq("live_room_id", session["live_room_id"]).execute()
+        raise
     return {**_parsed_workbook_summary(parsed), "skipped": False}
 
 

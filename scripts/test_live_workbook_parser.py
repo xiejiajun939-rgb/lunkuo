@@ -16,6 +16,9 @@ def main():
     parsed = parse_douyin_live_workbook(SAMPLE)
     session = parsed["session"]
     metrics = {row["metric_name"]: row["metric_value"] for row in parsed["metrics"]}
+    fan_growth_modules = {
+        row["module"] for row in parsed["metrics"] if row["metric_name"] == "新增粉丝数"
+    }
     products = parsed["products"]
 
     assert session["live_room_id"] == "7686655427714616107"
@@ -29,6 +32,7 @@ def main():
     assert sum(row["pre_ship_refund_amount"] for row in products) == 7827
     assert len(parsed["channels"]) == 13
     assert len(parsed["talks"]) == 10
+    assert fan_growth_modules == {"互动", "人群"}
     assert all(row["style_code"] for row in products)
     print(
         "PASS",
