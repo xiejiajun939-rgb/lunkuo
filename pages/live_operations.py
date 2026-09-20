@@ -24,7 +24,7 @@ DISPLAY_COLUMN_NAMES = {
     "avg_watch_duration": "人均观看时长", "watch_count": "观看次数",
     "watch_users": "观看人数", "order_count": "成交订单数", "avg_order_amount": "笔单价",
     "watch_conversion_rate": "观看成交率", "shop_bound_spend": "店铺绑定投放消耗",
-    "shop_promoted_spend": "店铺被投投放消耗", "product_image_url": "商品主图",
+    "shop_promoted_spend": "店铺被投投放消耗", "product_image_url": "商品图片",
     "talk_start_epoch": "讲解开始时间戳", "talk_end_epoch": "讲解结束时间戳",
     "talk_duration_seconds": "讲解时长（秒）", "viewer_change": "在线人数变化",
     "avg_online_users": "平均在线人数", "session_start_utc": "开播时间",
@@ -38,7 +38,20 @@ def localize_table(frame: pd.DataFrame) -> pd.DataFrame:
     """只调整页面展示：字段中文化，比例按两位小数显示。"""
     if frame is None:
         return pd.DataFrame()
-    display = frame.copy().rename(columns=DISPLAY_COLUMN_NAMES)
+    display = frame.copy()
+    style_column = "style_code" if "style_code" in display.columns else "货号" if "货号" in display.columns else None
+    image_column_exists = "product_image_url" in display.columns or "商品图片" in display.columns
+    image_lookup = globals().get("style_image_lookup", {})
+    if style_column and not image_column_exists and image_lookup:
+        display["商品图片"] = display[style_column].astype(str).str.strip().str.upper().map(image_lookup)
+    display = display.rename(columns=DISPLAY_COLUMN_NAMES)
+    if "商品图片" in display.columns:
+        display["商品图片"] = display["商品图片"].replace([0, "0", "", "nan", "None"], pd.NA)
+    if "货号" in display.columns and "商品图片" in display.columns:
+        ordered_columns = list(display.columns)
+        ordered_columns.remove("商品图片")
+        ordered_columns.insert(ordered_columns.index("货号") + 1, "商品图片")
+        display = display[ordered_columns]
     for column in display.columns:
         if "率" not in str(column) and "占比" not in str(column):
             continue
@@ -49,7 +62,11 @@ def localize_table(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def show_table(frame: pd.DataFrame) -> None:
-    st.dataframe(localize_table(frame), width="stretch", hide_index=True)
+    display = localize_table(frame)
+    column_config = {}
+    if "商品图片" in display.columns:
+        column_config["商品图片"] = st.column_config.ImageColumn("商品图片", width="small")
+    st.dataframe(display, width="stretch", hide_index=True, column_config=column_config)
 
 
 def safe_number(value, default=0.0) -> float:
@@ -166,6 +183,8 @@ products = products.merge(
 )
 for column in ["paid_amount", "sold_units", "click_users", "talk_count", "pre_ship_refund_amount", "post_ship_refund_amount"]:
     products[column] = pd.to_numeric(products.get(column), errors="coerce").fillna(0)
+if "product_image_url" not in products.columns:
+    products["product_image_url"] = None
 
 # 商品讲解区间：计算相对开播分钟、讲解效率和在线人数变化。
 talk_summary = pd.DataFrame(columns=[
@@ -216,7 +235,8 @@ if not actuals.empty and "style_code" in actuals:
     )
 
 style_summary = products[products["style_code"].notna()].groupby("style_code", as_index=False).agg(
-    商品名称=("product_name", "first"), 上播场次=("live_room_id", "nunique"),
+    商品名称=("product_name", "first"), 商品图片=("product_image_url", "first"),
+    上播场次=("live_room_id", "nunique"),
     讲解次数=("talk_count", "sum"), 累计点击=("click_users", "sum"),
     成交件数=("sold_units", "sum"), 平台支付=("paid_amount", "sum"),
     平台退款=("pre_ship_refund_amount", "sum"),
@@ -234,9 +254,16 @@ if not product_master.empty and "style_code" in product_master.columns:
         master_meta["品类"] = None
     for source, target in [("brand", "品牌"), ("year", "年份")]:
         master_meta[target] = master_meta[source] if source in master_meta.columns else None
+    master_meta["资料库图片"] = master_meta["image_url"] if "image_url" in master_meta.columns else None
     master_meta["上新日期"] = master_meta["launch_date"] if "launch_date" in master_meta.columns else None
-    master_meta = master_meta[["style_code", "品牌", "年份", "品类", "上新日期"]].drop_duplicates("style_code")
+    master_meta = master_meta[["style_code", "品牌", "年份", "品类", "上新日期", "资料库图片"]].drop_duplicates("style_code")
     style_summary = style_summary.merge(master_meta, on="style_code", how="left")
+    style_summary["商品图片"] = style_summary["商品图片"].replace([0, "0", ""], pd.NA).fillna(style_summary["资料库图片"])
+    style_summary = style_summary.drop(columns="资料库图片")
+style_image_lookup = (
+    style_summary.assign(style_code=style_summary["style_code"].astype(str).str.strip().str.upper())
+    .set_index("style_code")["商品图片"].dropna().to_dict()
+)
 talk_columns = [
     "讲解场次", "讲解区间数", "累计讲解分钟", "讲解区间支付", "讲解区间成交件数",
     "在线净变化", "平均在线变化", "在线上升场次占比", "分均在线人数",
