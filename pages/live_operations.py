@@ -437,8 +437,13 @@ with tabs[6]:
         ).drop(columns="复销排序")
         level_counts = candidates["复销分级"].value_counts()
         level_cols = st.columns(5)
-        for column, label in zip(level_cols, ["稳定复销", "有复销潜力", "单场爆发", "近期转弱", "样本不足"]):
+        stability_levels = ["稳定复销", "有复销潜力", "单场爆发", "近期转弱", "样本不足"]
+        for column, label in zip(level_cols, stability_levels):
             column.metric(label, int(level_counts.get(label, 0)))
+        selected_stability_level = st.segmented_control(
+            "查看具体款式", stability_levels, default="稳定复销", key="stability_level_filter"
+        )
+        candidates = candidates[candidates["复销分级"] == selected_stability_level].copy()
         st.caption(
             "稳定复销标准：至少5场、成交场次率≥60%、跨至少2个自然周、最近3场至少2场成交、"
             "最高单场成交占比≤50%，且退款率不高于同品类平均。"
@@ -448,6 +453,31 @@ with tabs[6]:
     if opportunity in ["讲解高效", "在线提升", "开播阶段"] and talks.empty:
         st.warning("当前范围没有新版商品讲解区间数据，上传新版直播工作簿后才能计算。")
     st.dataframe(candidates.rename(columns={"style_code": "货号", "net_amount": "范围实销"}), width="stretch", hide_index=True)
+    if opportunity == "稳定复销":
+        if candidates.empty:
+            st.info(f"当前没有“{selected_stability_level}”商品。")
+        else:
+            repeat_style = st.selectbox(
+                "选择货号查看逐场证据",
+                candidates["style_code"].astype(str).tolist(),
+                format_func=lambda code: (
+                    f"{code}｜{candidates.loc[candidates['style_code'].astype(str) == code, '商品名称'].iloc[0]}"
+                ),
+                key="repeat_sales_evidence_style",
+            )
+            repeat_evidence = session_style[session_style["style_code"].astype(str) == repeat_style].merge(
+                sessions[["live_room_id", "shop_name", "anchor_name"]], on="live_room_id", how="left"
+            )
+            repeat_evidence["该场成交占比"] = repeat_evidence["场次成交件数"].div(
+                repeat_evidence["场次成交件数"].sum() or pd.NA
+            )
+            st.dataframe(
+                repeat_evidence.sort_values("直播日期", ascending=False).rename(columns={
+                    "style_code": "货号", "live_room_id": "房间号", "shop_name": "直播间／店铺",
+                    "anchor_name": "主播",
+                }),
+                width="stretch", hide_index=True,
+            )
 
 with tabs[7]:
     options = style_summary.sort_values("平台支付", ascending=False)["style_code"].astype(str).tolist()
