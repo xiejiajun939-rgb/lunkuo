@@ -15,24 +15,55 @@ st.set_page_config(page_title="直播经营分析", layout="wide")
 clear_cache_on_page_change("live_operations")
 page_header("直播经营分析", "历史直播表现 × 数据罗盘履约实销", "LIVE OPERATIONS", "新版")
 
-st.info("平台支付按直播发生时间统计；发货、退货按仓库发生时间统计。两种口径并列观察，不进行逐日强制对账。")
+st.markdown("""
+<style>
+/* 直播经营分析设计系统：覆盖全站旧样式，统一密度与节奏。 */
+.main .block-container{max-width:1560px!important;padding:24px 26px 52px!important}
+.main div[data-testid="stVerticalBlock"]{gap:12px}
+.main div[data-testid="stHorizontalBlock"]{gap:12px}
+.main .page-hero{margin:0 0 16px!important;padding:20px 22px!important;border-radius:16px!important;box-shadow:0 6px 24px rgba(12,44,73,.055)!important}
+.main .page-hero__title{font-size:26px!important}.main .page-hero__subtitle{font-size:13px!important}
+.scope-note{margin:0 0 16px;padding:11px 14px;border:1px solid #d7e4ee;border-radius:10px;background:#f7fafc;color:#526579;font-size:12px;line-height:1.65}
+.section-kicker{margin:0 0 2px;color:#10263d;font-size:14px;font-weight:760}.section-help{margin:0 0 10px;color:#6e7e8e;font-size:11px}
+.main div[data-testid="stVerticalBlockBorderWrapper"]{border:1px solid #dfe7ee!important;border-radius:14px!important;background:#fff!important;box-shadow:0 6px 22px rgba(16,48,82,.045)!important}
+.main div[data-testid="stVerticalBlockBorderWrapper"]>div{padding:16px!important}
+.main div[data-testid="stMetric"]{min-height:98px!important;padding:14px 15px!important;border-radius:12px!important;box-shadow:0 4px 16px rgba(16,48,82,.045)!important}
+.main div[data-testid="stMetricLabel"]{font-size:12px!important}.main div[data-testid="stMetricValue"]{font-size:23px!important}
+.main div[data-testid="stTabs"] [data-baseweb="tab-list"]{width:100%!important;gap:3px!important;padding:4px!important;border-radius:11px!important;background:#eaf0f5!important}
+.main div[data-testid="stTabs"] [data-baseweb="tab-list"]>div{overflow-x:auto!important;scrollbar-width:thin}
+.main div[data-testid="stTabs"] button[role="tab"]{height:36px!important;padding:0 12px!important;border-radius:8px!important;font-size:12px!important;white-space:nowrap!important}
+.main div[data-testid="stTabs"] button[role="tab"][aria-selected="true"]{color:#0a567d!important;box-shadow:0 2px 7px rgba(12,44,73,.1)!important}
+.main [data-testid="stWidgetLabel"] p{font-size:11px!important;font-weight:650!important;color:#647589!important}
+.main div[data-baseweb="select"]>div,.main div[data-baseweb="input"]>div{min-height:38px!important;border-radius:8px!important}
+.main [data-testid="stSegmentedControl"]{margin-bottom:2px}.main [data-testid="stSegmentedControl"] button{min-height:34px!important;font-size:11px!important}
+.main div[data-testid="stDataFrame"]{border-radius:11px!important;box-shadow:none!important;border-color:#dfe7ee!important}
+.main div[data-testid="stPlotlyChart"]{padding:8px;border-radius:12px!important;box-shadow:none!important}
+.main .stDownloadButton>button{height:38px!important;border-radius:8px!important;font-size:12px!important}
+.main h3{margin-top:12px!important;margin-bottom:6px!important;font-size:17px!important}
+.main [data-testid="stCaptionContainer"]{margin:2px 0 6px!important}
+@media(max-width:900px){.main .block-container{padding:16px 12px 36px!important}.main .page-hero{padding:16px!important}}
+</style>
+<div class="scope-note">平台支付按直播发生时间统计；发货、退货按仓库发生时间统计。两种口径并列观察，不进行逐日强制对账。</div>
+""", unsafe_allow_html=True)
 
 today = date.today()
-quick = st.segmented_control("分析周期", ["近7天", "近15天", "近30天", "本月", "自定义"], default="近30天")
-if quick == "近7天":
-    default_start = today - timedelta(days=6)
-elif quick == "近15天":
-    default_start = today - timedelta(days=14)
-elif quick == "本月":
-    default_start = today.replace(day=1)
-else:
-    default_start = today - timedelta(days=29)
+with st.container(border=True):
+    st.markdown('<div class="section-kicker">分析周期</div><div class="section-help">选择快捷周期，或使用自定义日期。</div>', unsafe_allow_html=True)
+    quick = st.segmented_control("分析周期", ["近7天", "近15天", "近30天", "本月", "自定义"], default="近30天", label_visibility="collapsed")
+    if quick == "近7天":
+        default_start = today - timedelta(days=6)
+    elif quick == "近15天":
+        default_start = today - timedelta(days=14)
+    elif quick == "本月":
+        default_start = today.replace(day=1)
+    else:
+        default_start = today - timedelta(days=29)
 
-date_cols = st.columns(2)
-with date_cols[0]:
-    start_date = st.date_input("开始日期", default_start, disabled=quick != "自定义")
-with date_cols[1]:
-    end_date = st.date_input("结束日期", today, disabled=quick != "自定义")
+    date_cols = st.columns(2)
+    with date_cols[0]:
+        start_date = st.date_input("开始日期", default_start, disabled=quick != "自定义")
+    with date_cols[1]:
+        end_date = st.date_input("结束日期", today, disabled=quick != "自定义")
 if start_date > end_date:
     st.error("开始日期不能晚于结束日期。")
     st.stop()
@@ -51,13 +82,15 @@ sessions = sessions.copy()
 sessions["start_time"] = pd.to_datetime(sessions["start_time"], errors="coerce")
 sessions["直播日期"] = sessions["start_time"].dt.date
 
-filter_cols = st.columns(2)
 all_shops = sorted(sessions["shop_name"].dropna().astype(str).unique())
 all_anchors = sorted(sessions["anchor_name"].dropna().astype(str).unique())
-with filter_cols[0]:
-    selected_shops = st.multiselect("直播间／店铺", all_shops, default=all_shops)
-with filter_cols[1]:
-    selected_anchors = st.multiselect("主播", all_anchors, default=all_anchors)
+with st.container(border=True):
+    st.markdown('<div class="section-kicker">分析对象</div><div class="section-help">筛选需要比较的直播间与主播。</div>', unsafe_allow_html=True)
+    filter_cols = st.columns(2)
+    with filter_cols[0]:
+        selected_shops = st.multiselect("直播间／店铺", all_shops, default=all_shops)
+    with filter_cols[1]:
+        selected_anchors = st.multiselect("主播", all_anchors, default=all_anchors)
 
 sessions = sessions[sessions["shop_name"].isin(selected_shops) & sessions["anchor_name"].isin(selected_anchors)]
 room_ids = sessions["live_room_id"].astype(str)
@@ -482,13 +515,14 @@ with tabs[6]:
             ["复销排序", "复销成交场次率", "复销上播场次"], ascending=[True, False, False]
         ).drop(columns="复销排序")
         level_counts = candidates["复销分级"].value_counts()
-        level_cols = st.columns(7)
         stability_levels = ["高置信稳定", "稳定复销", "有复销潜力", "单场爆发", "近期转弱", "待观察", "样本不足"]
-        for column, label in zip(level_cols, stability_levels):
-            column.metric(label, int(level_counts.get(label, 0)))
-        selected_stability_level = st.segmented_control(
-            "查看具体款式", stability_levels, default="稳定复销", key="stability_level_filter"
+        level_options = [f"{label} · {int(level_counts.get(label, 0))}" for label in stability_levels]
+        selected_level_option = st.segmented_control(
+            "复销分类（点击查看具体款式）", level_options,
+            default=f"稳定复销 · {int(level_counts.get('稳定复销', 0))}",
+            key="stability_level_filter",
         )
+        selected_stability_level = selected_level_option.rsplit(" · ", 1)[0]
         candidates = candidates[candidates["复销分级"] == selected_stability_level].copy()
         st.caption(
             "稳定复销：至少3场、至少2场成交、成交场次率≥50%，且最近3场仍有成交。"
