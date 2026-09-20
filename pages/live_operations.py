@@ -159,6 +159,64 @@ style_summary["点击成交率"] = style_summary["成交件数"].div(style_summa
 style_summary["成交场次率"] = products.assign(成交=products["sold_units"] > 0).groupby("style_code")["成交"].mean().reindex(style_summary["style_code"]).values
 style_summary["退款率"] = style_summary["平台退款"].div(style_summary["平台支付"].replace(0, pd.NA))
 
+# 稳定复销不是单纯的成交场次率排行：同时判断跨周持续性、单场依赖、近期表现和退款健康度。
+session_style = products[products["style_code"].notna()].groupby(
+    ["style_code", "live_room_id", "直播日期"], as_index=False
+).agg(场次成交件数=("sold_units", "sum"), 场次支付=("paid_amount", "sum"))
+session_style["有成交"] = session_style["场次成交件数"] > 0
+session_style["自然周"] = pd.to_datetime(session_style["直播日期"]).dt.to_period("W-SAT").astype(str)
+stability_records = []
+for style_code, history in session_style.groupby("style_code"):
+    history = history.sort_values("直播日期")
+    session_count = history["live_room_id"].nunique()
+    sold_sessions = int(history["有成交"].sum())
+    sold_units = history["场次成交件数"].sum()
+    top_session_share = history["场次成交件数"].max() / sold_units if sold_units else 0
+    recent_three_sales = int(history.tail(3)["有成交"].sum())
+    stability_records.append({
+        "style_code": style_code,
+        "复销上播场次": session_count,
+        "复销成交场次": sold_sessions,
+        "复销成交场次率": sold_sessions / session_count if session_count else 0,
+        "成交自然周数": history.loc[history["有成交"], "自然周"].nunique(),
+        "最高单场成交占比": top_session_share,
+        "最近3场成交场次": recent_three_sales,
+    })
+style_summary = style_summary.merge(pd.DataFrame(stability_records), on="style_code", how="left")
+if "品类" in style_summary.columns:
+    category_refund = style_summary.groupby("品类", dropna=False)["退款率"].transform("mean")
+else:
+    category_refund = pd.Series(style_summary["退款率"].mean(), index=style_summary.index)
+style_summary["同品类平均退款率"] = category_refund.fillna(style_summary["退款率"].mean()).fillna(0)
+
+def classify_repeat_sales(row):
+    sessions_count = int(row.get("复销上播场次", 0) or 0)
+    rate = float(row.get("复销成交场次率", 0) or 0)
+    weeks = int(row.get("成交自然周数", 0) or 0)
+    top_share = float(row.get("最高单场成交占比", 0) or 0)
+    recent = int(row.get("最近3场成交场次", 0) or 0)
+    clicks = float(row.get("累计点击", 0) or 0)
+    refund = row.get("退款率")
+    refund_benchmark = float(row.get("同品类平均退款率", 0) or 0)
+    refund_healthy = pd.isna(refund) or float(refund) <= refund_benchmark
+    if sessions_count >= 5 and rate >= 0.6 and recent < 2:
+        return "近期转弱", "历史重复成交尚可，但最近3场成交不足2场"
+    if sessions_count >= 3 and top_share > 0.5:
+        return "单场爆发", "超过一半成交集中在表现最好的一场"
+    if sessions_count >= 5 and clicks >= 50 and rate >= 0.6 and weeks >= 2 and recent >= 2 and refund_healthy:
+        return "稳定复销", "至少5场、成交率≥60%、跨2周、最近3场≥2场成交且退款健康"
+    if sessions_count >= 3 and rate >= 0.6:
+        gaps = []
+        if sessions_count < 5: gaps.append("场次不足5场")
+        if weeks < 2: gaps.append("尚未跨2个自然周")
+        if recent < 2: gaps.append("最近3场成交不足2场")
+        if not refund_healthy: gaps.append("退款率高于同品类平均")
+        return "有复销潜力", "；".join(gaps) or "重复成交较好，继续积累样本"
+    return "样本不足", "上播不足3场或成交场次率低于60%"
+
+repeat_classification = style_summary.apply(classify_repeat_sales, axis=1, result_type="expand")
+style_summary[["复销分级", "复销判断依据"]] = repeat_classification
+
 metric_wide = metrics.pivot_table(index="live_room_id", columns="metric_name", values="metric_value", aggfunc="sum") if not metrics.empty else pd.DataFrame()
 
 tabs = st.tabs([
@@ -365,12 +423,26 @@ with tabs[6]:
             )
         st.caption(f"只统计商品讲解开始时间位于开播后前{opening_window}分钟的区间。")
     else:
-        candidates = candidates[(candidates["上播场次"] >= min_sessions) & (candidates["累计点击"] >= min_clicks)]
+        if opportunity != "稳定复销":
+            candidates = candidates[(candidates["上播场次"] >= min_sessions) & (candidates["累计点击"] >= min_clicks)]
     if opportunity == "讲解高效": candidates = candidates.sort_values(["支付/讲解分钟", "成交件数/讲解分钟"], ascending=False)
     elif opportunity == "在线提升": candidates = candidates.sort_values(["在线上升场次占比", "平均在线变化"], ascending=False)
     elif opportunity == "高转化": candidates = candidates.sort_values("点击成交率", ascending=False)
     elif opportunity == "高引流": candidates = candidates.sort_values("累计点击", ascending=False)
-    elif opportunity == "稳定复销": candidates = candidates.sort_values(["成交场次率", "上播场次"], ascending=False)
+    elif opportunity == "稳定复销":
+        stability_order = {"稳定复销": 0, "有复销潜力": 1, "单场爆发": 2, "近期转弱": 3, "样本不足": 4}
+        candidates["复销排序"] = candidates["复销分级"].map(stability_order).fillna(9)
+        candidates = candidates.sort_values(
+            ["复销排序", "复销成交场次率", "复销上播场次"], ascending=[True, False, False]
+        ).drop(columns="复销排序")
+        level_counts = candidates["复销分级"].value_counts()
+        level_cols = st.columns(5)
+        for column, label in zip(level_cols, ["稳定复销", "有复销潜力", "单场爆发", "近期转弱", "样本不足"]):
+            column.metric(label, int(level_counts.get(label, 0)))
+        st.caption(
+            "稳定复销标准：至少5场、成交场次率≥60%、跨至少2个自然周、最近3场至少2场成交、"
+            "最高单场成交占比≤50%，且退款率不高于同品类平均。"
+        )
     elif opportunity == "高点击低成交": candidates = candidates[candidates["点击成交率"] < .03].sort_values("累计点击", ascending=False)
     elif opportunity == "退款风险": candidates = candidates.sort_values("退款率", ascending=False)
     if opportunity in ["讲解高效", "在线提升", "开播阶段"] and talks.empty:
