@@ -196,23 +196,25 @@ def classify_repeat_sales(row):
     top_share = float(row.get("最高单场成交占比", 0) or 0)
     recent = int(row.get("最近3场成交场次", 0) or 0)
     clicks = float(row.get("累计点击", 0) or 0)
+    sold_sessions = int(row.get("复销成交场次", 0) or 0)
+    sold_units = float(row.get("成交件数", 0) or 0)
     refund = row.get("退款率")
     refund_benchmark = float(row.get("同品类平均退款率", 0) or 0)
-    refund_healthy = pd.isna(refund) or float(refund) <= refund_benchmark
-    if sessions_count >= 5 and rate >= 0.6 and recent < 2:
-        return "近期转弱", "历史重复成交尚可，但最近3场成交不足2场"
-    if sessions_count >= 3 and top_share > 0.5:
-        return "单场爆发", "超过一半成交集中在表现最好的一场"
-    if sessions_count >= 5 and clicks >= 50 and rate >= 0.6 and weeks >= 2 and recent >= 2 and refund_healthy:
-        return "稳定复销", "至少5场、成交率≥60%、跨2周、最近3场≥2场成交且退款健康"
-    if sessions_count >= 3 and rate >= 0.6:
-        gaps = []
-        if sessions_count < 5: gaps.append("场次不足5场")
-        if weeks < 2: gaps.append("尚未跨2个自然周")
-        if recent < 2: gaps.append("最近3场成交不足2场")
-        if not refund_healthy: gaps.append("退款率高于同品类平均")
-        return "有复销潜力", "；".join(gaps) or "重复成交较好，继续积累样本"
-    return "样本不足", "上播不足3场或成交场次率低于60%"
+    refund_risk = not pd.isna(refund) and float(refund) > refund_benchmark
+    risk_note = "；退款率高于同品类平均" if refund_risk else ""
+    if sessions_count < 2 or clicks < 20:
+        return "样本不足", "上播少于2场或累计点击少于20"
+    if sold_sessions >= 3 and recent == 0:
+        return "近期转弱", f"历史至少3场成交，但最近3场均未成交{risk_note}"
+    if sold_units >= 5 and top_share >= 0.7:
+        return "单场爆发", f"累计成交至少5件，且最高单场贡献达到{top_share:.0%}{risk_note}"
+    if sessions_count >= 5 and sold_sessions >= 3 and rate >= 0.6 and weeks >= 2 and recent >= 2:
+        return "高置信稳定", f"至少5场、3场成交、成交率≥60%、跨2周且最近3场≥2场成交{risk_note}"
+    if sessions_count >= 3 and sold_sessions >= 2 and rate >= 0.5 and recent >= 1:
+        return "稳定复销", f"至少3场、2场成交、成交率≥50%且最近3场仍有成交{risk_note}"
+    if sessions_count >= 2 and sold_sessions >= 1:
+        return "有复销潜力", f"至少上播2场并产生过成交，继续积累重复成交样本{risk_note}"
+    return "待观察", f"已有一定样本，但尚未形成重复成交{risk_note}"
 
 repeat_classification = style_summary.apply(classify_repeat_sales, axis=1, result_type="expand")
 style_summary[["复销分级", "复销判断依据"]] = repeat_classification
@@ -430,14 +432,17 @@ with tabs[6]:
     elif opportunity == "高转化": candidates = candidates.sort_values("点击成交率", ascending=False)
     elif opportunity == "高引流": candidates = candidates.sort_values("累计点击", ascending=False)
     elif opportunity == "稳定复销":
-        stability_order = {"稳定复销": 0, "有复销潜力": 1, "单场爆发": 2, "近期转弱": 3, "样本不足": 4}
+        stability_order = {
+            "高置信稳定": 0, "稳定复销": 1, "有复销潜力": 2,
+            "单场爆发": 3, "近期转弱": 4, "待观察": 5, "样本不足": 6,
+        }
         candidates["复销排序"] = candidates["复销分级"].map(stability_order).fillna(9)
         candidates = candidates.sort_values(
             ["复销排序", "复销成交场次率", "复销上播场次"], ascending=[True, False, False]
         ).drop(columns="复销排序")
         level_counts = candidates["复销分级"].value_counts()
-        level_cols = st.columns(5)
-        stability_levels = ["稳定复销", "有复销潜力", "单场爆发", "近期转弱", "样本不足"]
+        level_cols = st.columns(7)
+        stability_levels = ["高置信稳定", "稳定复销", "有复销潜力", "单场爆发", "近期转弱", "待观察", "样本不足"]
         for column, label in zip(level_cols, stability_levels):
             column.metric(label, int(level_counts.get(label, 0)))
         selected_stability_level = st.segmented_control(
@@ -445,8 +450,9 @@ with tabs[6]:
         )
         candidates = candidates[candidates["复销分级"] == selected_stability_level].copy()
         st.caption(
-            "稳定复销标准：至少5场、成交场次率≥60%、跨至少2个自然周、最近3场至少2场成交、"
-            "最高单场成交占比≤50%，且退款率不高于同品类平均。"
+            "稳定复销：至少3场、至少2场成交、成交场次率≥50%，且最近3场仍有成交。"
+            "高置信稳定：至少5场、至少3场成交、成交场次率≥60%、跨2周，且最近3场至少2场成交。"
+            "退款率仅作为风险提示，不再否决复销分级。"
         )
     elif opportunity == "高点击低成交": candidates = candidates[candidates["点击成交率"] < .03].sort_values("累计点击", ascending=False)
     elif opportunity == "退款风险": candidates = candidates.sort_values("退款率", ascending=False)
