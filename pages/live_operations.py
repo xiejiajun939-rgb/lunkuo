@@ -51,6 +51,21 @@ def show_table(frame: pd.DataFrame) -> None:
     st.dataframe(localize_table(frame), width="stretch", hide_index=True)
 
 
+def safe_number(value, default=0.0) -> float:
+    """将数据库空值安全转换为数值，避免 pd.NA 参与布尔判断。"""
+    try:
+        return default if pd.isna(value) else float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def safe_text(value, default="") -> str:
+    try:
+        return default if pd.isna(value) else str(value)
+    except (TypeError, ValueError):
+        return default
+
+
 st.set_page_config(page_title="直播经营分析", layout="wide")
 clear_cache_on_page_change("live_operations")
 page_header("直播经营分析", "历史直播表现 × 数据罗盘履约实销", "LIVE OPERATIONS", "新版")
@@ -229,6 +244,8 @@ talk_columns = [
 for column in talk_columns:
     if column in style_summary:
         style_summary[column] = pd.to_numeric(style_summary[column], errors="coerce").fillna(0)
+    else:
+        style_summary[column] = 0.0
 style_summary["点击成交率"] = style_summary["成交件数"].div(style_summary["累计点击"].replace(0, pd.NA))
 style_summary["成交场次率"] = products.assign(成交=products["sold_units"] > 0).groupby("style_code")["成交"].mean().reindex(style_summary["style_code"]).values
 style_summary["退款率"] = style_summary["平台退款"].div(style_summary["平台支付"].replace(0, pd.NA))
@@ -295,12 +312,122 @@ style_summary[["复销分级", "复销判断依据"]] = repeat_classification
 
 metric_wide = metrics.pivot_table(index="live_room_id", columns="metric_name", values="metric_value", aggfunc="sum") if not metrics.empty else pd.DataFrame()
 
-tabs = st.tabs([
-    "经营总览", "单场复盘", "直播间对比", "趋势分析", "完整商品分析",
-    "前段销售排行", "商品机会", "单款历史档案",
+decision_tab, selection_tab, review_tab, product_tab, compare_tab = st.tabs([
+    "决策总览", "开播选品", "单场复盘", "商品决策", "主播对比",
 ])
 
-with tabs[0]:
+with decision_tab:
+    st.subheader("本周期经营结论")
+    decision_records = []
+    median_talk_output = style_summary.loc[
+        style_summary["累计讲解分钟"] > 0, "支付/讲解分钟"
+    ].median() if "支付/讲解分钟" in style_summary else 0
+    median_talk_output = float(median_talk_output) if pd.notna(median_talk_output) else 0
+    for _, row in style_summary.iterrows():
+        code = safe_text(row.get("style_code"))
+        name = safe_text(row.get("商品名称"))
+        sessions_count = int(safe_number(row.get("上播场次")))
+        clicks = safe_number(row.get("累计点击"))
+        conversion = safe_number(row.get("点击成交率"))
+        refund_rate = safe_number(row.get("退款率"))
+        repeat_level = safe_text(row.get("复销分级"))
+        talk_minutes = safe_number(row.get("累计讲解分钟"))
+        talk_output = safe_number(row.get("支付/讲解分钟"))
+        online_change = safe_number(row.get("平均在线变化"))
+        talk_intervals = int(safe_number(row.get("讲解区间数")))
+        confidence = "高可信" if sessions_count >= 5 else "中可信" if sessions_count >= 3 else "待验证"
+        if clicks >= 100 and conversion < .03:
+            decision_records.append({
+                "优先级": "高", "类型": "高点击低成交", "货号": code, "商品名称": name,
+                "发现": f"累计点击{clicks:,.0f}，点击成交率仅{conversion:.2%}",
+                "建议动作": "下一场缩短讲解并重点测试价格、利益点和尺码说明",
+                "可信度": confidence, "上播场次": sessions_count,
+            })
+        if refund_rate >= .35:
+            decision_records.append({
+                "优先级": "高", "类型": "退款风险", "货号": code, "商品名称": name,
+                "发现": f"平台退款率达到{refund_rate:.2%}",
+                "建议动作": "核查退款原因，确认商品问题前暂缓作为主推款",
+                "可信度": confidence, "上播场次": sessions_count,
+            })
+        if repeat_level in {"高置信稳定", "稳定复销"}:
+            decision_records.append({
+                "优先级": "机会", "类型": "稳定复销", "货号": code, "商品名称": name,
+                "发现": f"{repeat_level}，成交场次率{safe_number(row.get('复销成交场次率')):.2%}",
+                "建议动作": "加入下一场常规排品，并优先放入前60分钟测试",
+                "可信度": "高可信" if repeat_level == "高置信稳定" else confidence,
+                "上播场次": sessions_count,
+            })
+        if talk_intervals >= 3 and talk_minutes >= 15 and median_talk_output and talk_output < median_talk_output * .5:
+            decision_records.append({
+                "优先级": "中", "类型": "讲解效率偏低", "货号": code, "商品名称": name,
+                "发现": f"累计讲解{talk_minutes:.1f}分钟，分钟产出¥{talk_output:,.0f}",
+                "建议动作": "减少单次讲解时长，调整讲解顺序后再测试",
+                "可信度": confidence, "上播场次": sessions_count,
+            })
+        if talk_intervals >= 3 and online_change < 0:
+            decision_records.append({
+                "优先级": "中", "类型": "在线人数流失", "货号": code, "商品名称": name,
+                "发现": f"讲解期间平均在线人数变化{online_change:+.1f}",
+                "建议动作": "避免放在流量高峰，先调整话术或搭配方式",
+                "可信度": confidence, "上播场次": sessions_count,
+            })
+
+    decisions = pd.DataFrame(decision_records)
+    priority_order = {"高": 0, "中": 1, "机会": 2}
+    if not decisions.empty:
+        decisions["优先级排序"] = decisions["优先级"].map(priority_order).fillna(9)
+        decisions = decisions.sort_values(["优先级排序", "上播场次"], ascending=[True, False]).drop(columns="优先级排序")
+        issue_count = int(decisions["优先级"].isin(["高", "中"]).sum())
+        opportunity_count = int((decisions["优先级"] == "机会").sum())
+    else:
+        issue_count = opportunity_count = 0
+
+    decision_cards = st.columns(4)
+    decision_cards[0].metric("待处理问题", f"{issue_count}项")
+    decision_cards[1].metric("可放大机会", f"{opportunity_count}项")
+    decision_cards[2].metric("稳定复销商品", f"{(style_summary['复销分级'].isin(['高置信稳定', '稳定复销'])).sum()}款")
+    decision_cards[3].metric("高点击低成交", f"{((style_summary['累计点击'] >= 100) & (style_summary['点击成交率'] < .03)).sum()}款")
+
+    if decisions.empty:
+        st.info("当前周期暂未识别到达到规则阈值的问题或机会，可扩大日期范围继续观察。")
+    else:
+        st.markdown("#### 优先处理清单")
+        show_table(decisions.head(12))
+        evidence_options = decisions["货号"].drop_duplicates().tolist()
+        evidence_code = st.selectbox(
+            "查看判断证据", evidence_options,
+            format_func=lambda code: f"{code}｜{decisions.loc[decisions['货号'] == code, '商品名称'].iloc[0]}",
+            key="decision_evidence_style",
+        )
+        evidence_rows = session_style[session_style["style_code"].astype(str) == str(evidence_code)].merge(
+            sessions[["live_room_id", "shop_name", "anchor_name", "start_time"]],
+            on="live_room_id", how="left",
+        )
+        with st.expander("展开逐场证据"):
+            show_table(evidence_rows.sort_values("start_time", ascending=False))
+
+    st.markdown("#### 下一场建议优先测试")
+    next_session_candidates = style_summary[
+        style_summary["复销分级"].isin(["高置信稳定", "稳定复销", "有复销潜力"])
+    ].copy()
+    if not next_session_candidates.empty:
+        next_session_candidates["建议分"] = (
+            next_session_candidates["复销成交场次率"].fillna(0) * 45
+            + next_session_candidates["点击成交率"].fillna(0).clip(upper=.2) / .2 * 25
+            + next_session_candidates["在线上升场次占比"].fillna(0) * 15
+            + (1 - next_session_candidates["退款率"].fillna(0).clip(upper=1)) * 15
+        )
+        next_display = next_session_candidates.sort_values("建议分", ascending=False).head(8)[[
+            "style_code", "商品名称", "复销分级", "上播场次", "成交场次率", "点击成交率",
+            "支付/讲解分钟", "在线上升场次占比", "退款率", "建议分",
+        ]]
+        show_table(next_display)
+        st.caption("建议分用于排序，不作为业务目标；由复销稳定性、转化、在线变化和退款健康度共同组成。")
+    else:
+        st.info("当前还没有达到复销候选条件的商品。")
+
+    st.markdown("#### 经营结果概览")
     total_ship = actual_by_style["ship_amount"].sum()
     total_return = actual_by_style["return_amount"].sum()
     cards = st.columns(5)
@@ -318,7 +445,7 @@ with tabs[0]:
     trend_columns = [x for x in ["平台支付", "发货", "退货", "实销"] if x in daily_platform]
     st.plotly_chart(px.line(daily_platform.sort_values("直播日期"), x="直播日期", y=trend_columns, markers=True, title="历史经营趋势"), width="stretch")
 
-with tabs[1]:
+with review_tab:
     labels = sessions.sort_values("start_time", ascending=False).assign(
         场次=lambda frame: frame["start_time"].dt.strftime("%m-%d %H:%M") + "｜" + frame["shop_name"] + "｜" + frame["anchor_name"]
     )
@@ -332,6 +459,47 @@ with tabs[1]:
     cards[2].metric("成交人数", f"{float(room_metrics.get('直播间成交人数', 0) or 0):,.0f}")
     cards[3].metric("成交件数", f"{room_products['sold_units'].sum():,.0f}")
     cards[4].metric("平台支付", f"¥{room_products['paid_amount'].sum():,.0f}")
+    st.markdown("#### 本场诊断与下场动作")
+    room_actions = []
+    room_clicks = float(room_products["click_users"].sum())
+    room_units = float(room_products["sold_units"].sum())
+    room_conversion = room_units / room_clicks if room_clicks else 0
+    room_refunds = float(room_products["pre_ship_refund_amount"].sum() + room_products["post_ship_refund_amount"].sum())
+    room_paid = float(room_products["paid_amount"].sum())
+    room_refund_rate = room_refunds / room_paid if room_paid else 0
+    if room_clicks >= 100 and room_conversion < .03:
+        room_actions.append({
+            "优先级": "高", "本场发现": f"点击成交率仅{room_conversion:.2%}",
+            "下场动作": "优先复盘价格机制、利益点表达和尺码说明，不直接增加讲解时长",
+        })
+    if room_refund_rate >= .35:
+        room_actions.append({
+            "优先级": "高", "本场发现": f"平台退款占支付{room_refund_rate:.2%}",
+            "下场动作": "核查退款集中货号，未确认原因前不作为主推款",
+        })
+    room_talks = talks[talks["live_room_id"].astype(str) == room].copy() if not talks.empty else pd.DataFrame()
+    if not room_talks.empty:
+        declining = room_talks.groupby("style_code", as_index=False).agg(
+            讲解分钟=("讲解分钟", "sum"), 平台支付=("paid_amount", "sum"),
+            在线人数变化=("viewer_change", "sum"), 成交件数=("sold_units", "sum"),
+        )
+        declining["分钟产出"] = declining["平台支付"].div(declining["讲解分钟"].replace(0, pd.NA))
+        for _, action_row in declining[(declining["讲解分钟"] >= 5) & (declining["在线人数变化"] < 0)].head(3).iterrows():
+            room_actions.append({
+                "优先级": "中", "本场发现": f"{action_row['style_code']}讲解{action_row['讲解分钟']:.1f}分钟，在线人数净变化{action_row['在线人数变化']:+.0f}",
+                "下场动作": "缩短讲解或后移至非流量高峰，并重新测试话术",
+            })
+    if not room_products.empty:
+        best_product = room_products.sort_values("paid_amount", ascending=False).iloc[0]
+        if float(best_product.get("paid_amount", 0) or 0) > 0:
+            room_actions.append({
+                "优先级": "机会", "本场发现": f"{best_product.get('style_code') or '未识别货号'}为本场支付最高商品，平台支付¥{float(best_product['paid_amount']):,.0f}",
+                "下场动作": "保留该商品并测试提前上场，结合多场稳定性决定是否进入固定排品",
+            })
+    if room_actions:
+        show_table(pd.DataFrame(room_actions))
+    else:
+        st.info("本场未触发高优先级规则，可进入商品明细继续检查。")
     detail_tabs = st.tabs(["商品平台表现", "商品讲解区间", "渠道流量", "全部直播指标"])
     with detail_tabs[0]:
         show_table(room_products[["style_code", "product_name", "click_users", "sold_units", "paid_amount", "pre_ship_refund_amount", "post_ship_refund_amount"]].sort_values("paid_amount", ascending=False))
@@ -342,7 +510,7 @@ with tabs[1]:
     with detail_tabs[3]:
         show_table(metrics[metrics["live_room_id"].astype(str) == room][["module", "metric_name", "raw_value", "comparison_display"]])
 
-with tabs[2]:
+with compare_tab:
     room_compare = sessions.groupby(["shop_name", "anchor_name"], as_index=False).agg(场次=("live_room_id", "nunique"), 直播小时=("duration_seconds", lambda x: x.sum()/3600))
     performance = products.groupby(["shop_name", "anchor_name"], as_index=False).agg(商品点击=("click_users", "sum"), 成交件数=("sold_units", "sum"), 平台支付=("paid_amount", "sum"))
     room_compare = room_compare.merge(performance, on=["shop_name", "anchor_name"], how="left")
@@ -351,14 +519,34 @@ with tabs[2]:
     room_compare["点击成交率"] = room_compare["成交件数"].div(room_compare["商品点击"].replace(0, pd.NA))
     show_table(room_compare.sort_values("平台支付", ascending=False))
     st.plotly_chart(px.bar(room_compare, x="shop_name", y="每小时支付", color="anchor_name", title="直播间每小时产出对比", labels={"shop_name": "直播间／店铺", "anchor_name": "主播"}), width="stretch")
+    st.markdown("#### 同一商品的主播适配")
+    compare_style_options = style_summary.sort_values("平台支付", ascending=False)["style_code"].astype(str).tolist()
+    if compare_style_options:
+        compare_style = st.selectbox("选择货号进行公平对比", compare_style_options, key="anchor_compare_style")
+        compare_product = products[products["style_code"].astype(str) == compare_style].copy()
+        same_product_compare = compare_product.groupby(["anchor_name", "shop_name"], as_index=False).agg(
+            上播场次=("live_room_id", "nunique"), 商品点击=("click_users", "sum"),
+            成交件数=("sold_units", "sum"), 平台支付=("paid_amount", "sum"),
+        )
+        same_product_compare["点击成交率"] = same_product_compare["成交件数"].div(
+            same_product_compare["商品点击"].replace(0, pd.NA)
+        )
+        same_product_compare["场均支付"] = same_product_compare["平台支付"].div(
+            same_product_compare["上播场次"].replace(0, pd.NA)
+        )
+        same_product_compare["主播占该货号成交"] = same_product_compare["成交件数"].div(
+            same_product_compare["成交件数"].sum() or pd.NA
+        )
+        show_table(same_product_compare.sort_values(["点击成交率", "场均支付"], ascending=False))
+        st.caption("同货号对比优先看点击成交率和场均支付，避免仅用总销售额评价主播。")
 
-with tabs[3]:
+with decision_tab:
     session_pay = products.groupby(["live_room_id", "直播日期"], as_index=False).agg(平台支付=("paid_amount", "sum"), 商品点击=("click_users", "sum"), 成交件数=("sold_units", "sum"))
     session_pay = session_pay.merge(sessions[["live_room_id", "shop_name", "anchor_name"]], on="live_room_id", how="left")
     metric_name = st.selectbox("趋势指标", ["平台支付", "商品点击", "成交件数"])
     st.plotly_chart(px.line(session_pay.sort_values("直播日期"), x="直播日期", y=metric_name, color="anchor_name", markers=True, hover_data=["shop_name", "live_room_id"], labels={"anchor_name": "主播", "shop_name": "直播间／店铺", "live_room_id": "直播场次ID"}), width="stretch")
 
-with tabs[4]:
+with product_tab:
     search = st.text_input("搜索商品名称或货号")
     table = style_summary.copy()
     if search:
@@ -370,7 +558,7 @@ with tabs[4]:
     table.loc[table["退款率"] >= .35, "诊断"] = "退款风险"
     show_table(table.sort_values("平台支付", ascending=False))
 
-with tabs[5]:
+with selection_tab:
     st.subheader("开播前段商品销售排行")
     rank_cols = st.columns([1.2, 1.2, 1.4, 1.5])
     with rank_cols[0]:
@@ -442,6 +630,34 @@ with tabs[5]:
         opening_rank = opening_rank.merge(context_columns, on="style_code", how="left").merge(
             launch_effect, on="style_code", how="left"
         )
+        opening_output_median = opening_rank.loc[
+            opening_rank["前段讲解分钟"] > 0, "支付/讲解分钟"
+        ].median()
+        opening_output_median = float(opening_output_median) if pd.notna(opening_output_median) else 0
+
+        def opening_recommendation(row):
+            room_count = int(safe_number(row.get("前段出现场次")))
+            conversion_rooms = safe_number(row.get("成交场次率"))
+            online_up = safe_number(row.get("在线上升场次占比"))
+            output = safe_number(row.get("支付/讲解分钟"))
+            refund = safe_number(row.get("退款率"))
+            confidence = "高可信" if room_count >= 5 else "中可信" if room_count >= 3 else "待验证"
+            if refund >= .35:
+                return pd.Series(["暂缓主推", "退款风险较高，先核查原因", confidence])
+            if conversion_rooms >= .6 and online_up >= .5:
+                return pd.Series([f"前{rank_window}分钟主力", "多场成交且在线承接稳定", confidence])
+            if opening_output_median and output >= opening_output_median * 1.3:
+                return pd.Series(["极速流承接", "讲解分钟产出高，适合流量到来时快速承接", confidence])
+            if conversion_rooms >= .4:
+                return pd.Series(["常规测试", "已有重复成交，继续积累样本", confidence])
+            return pd.Series(["观察／后移", "前段成交稳定性不足，暂不占用核心时段", confidence])
+
+        if opening_rank.empty:
+            opening_rank[["推荐场景", "建议依据", "可信度"]] = pd.DataFrame(
+                columns=["推荐场景", "建议依据", "可信度"], index=opening_rank.index
+            )
+        else:
+            opening_rank[["推荐场景", "建议依据", "可信度"]] = opening_rank.apply(opening_recommendation, axis=1)
         dimension_cols = st.columns(3)
         selected_brands = dimension_cols[0].multiselect(
             "品牌", sorted(opening_rank["品牌"].dropna().astype(str).unique()), key="opening_brands"
@@ -513,7 +729,7 @@ with tabs[5]:
             )
             show_table(evidence.sort_values("直播日期", ascending=False))
 
-with tabs[6]:
+with selection_tab:
     opportunity = st.segmented_control(
         "机会类型",
         ["开播阶段", "讲解高效", "在线提升", "高转化", "高引流", "稳定复销", "高点击低成交", "退款风险"],
@@ -596,7 +812,7 @@ with tabs[6]:
             )
             show_table(repeat_evidence.sort_values("直播日期", ascending=False))
 
-with tabs[7]:
+with product_tab:
     options = style_summary.sort_values("平台支付", ascending=False)["style_code"].astype(str).tolist()
     selected_style = st.selectbox("选择货号", options)
     item = products[products["style_code"].astype(str) == selected_style].copy()
@@ -607,6 +823,20 @@ with tabs[7]:
     cards[2].metric("点击成交率", f"{summary_row['点击成交率']:.2%}")
     cards[3].metric("平台支付", f"¥{summary_row['平台支付']:,.0f}")
     cards[4].metric("范围实销", f"¥{summary_row['net_amount']:,.0f}")
+    product_level = safe_text(summary_row.get("复销分级"), "样本不足")
+    product_refund = safe_number(summary_row.get("退款率"))
+    product_conversion = safe_number(summary_row.get("点击成交率"))
+    if product_refund >= .35:
+        product_decision = "暂缓主推：退款风险较高，先核查退款原因和商品反馈。"
+    elif product_level in {"高置信稳定", "稳定复销"}:
+        product_decision = f"建议保留在常规排品：当前判定为{product_level}，可继续测试提前上场。"
+    elif product_conversion < .03 and safe_number(summary_row.get("累计点击")) >= 100:
+        product_decision = "建议优化后复测：点击充足但成交偏弱，重点检查价格、利益点和讲解表达。"
+    elif product_level == "单场爆发":
+        product_decision = "暂不判断为稳定款：成交依赖少数场次，需要继续验证复销能力。"
+    else:
+        product_decision = "继续积累样本：目前不足以形成明确主推或淘汰结论。"
+    st.info(f"商品决策：{product_decision}")
     anchor_item = item.groupby("anchor_name", as_index=False).agg(场次=("live_room_id", "nunique"), 点击=("click_users", "sum"), 成交件数=("sold_units", "sum"), 平台支付=("paid_amount", "sum"))
     anchor_item["点击成交率"] = anchor_item["成交件数"].div(anchor_item["点击"].replace(0, pd.NA))
     anchor_item["该货号占主播成交"] = anchor_item.apply(lambda r: r["成交件数"] / products.loc[products["anchor_name"] == r["anchor_name"], "sold_units"].sum() if products.loc[products["anchor_name"] == r["anchor_name"], "sold_units"].sum() else pd.NA, axis=1)
