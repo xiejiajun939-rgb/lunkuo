@@ -91,7 +91,9 @@ page_header("直播经营分析", "历史直播表现 × 数据罗盘履约实�
 st.markdown("""
 <style>
 /* 直播经营分析设计系统：覆盖全站旧样式，统一密度与节奏。 */
-.main .block-container{max-width:1560px!important;padding:24px 26px 52px!important}
+section[data-testid="stSidebar"]{display:none!important}
+[data-testid="stSidebarCollapsedControl"],[data-testid="collapsedControl"]{display:none!important}
+.main .block-container{max-width:1780px!important;padding:24px 30px 52px!important}
 .main div[data-testid="stVerticalBlock"]{gap:12px}
 .main div[data-testid="stHorizontalBlock"]{gap:12px}
 .main .page-hero{margin:0 0 16px!important;padding:20px 22px!important;border-radius:16px!important;box-shadow:0 6px 24px rgba(12,44,73,.055)!important}
@@ -415,6 +417,9 @@ if st.session_state.get("live_operations_section") not in live_sections:
 navigation_column, content_column = st.columns([0.19, 0.81], gap="large")
 with navigation_column:
     with st.container(border=True):
+        if st.button("← 返回数据罗盘", key="back_to_data_compass", width="stretch"):
+            st.switch_page("pages/dashboard.py")
+        st.divider()
         st.markdown('<div class="section-kicker">直播经营工作台</div>', unsafe_allow_html=True)
         st.caption("选择一个任务进入分析")
         for section_name, section_help in live_sections.items():
