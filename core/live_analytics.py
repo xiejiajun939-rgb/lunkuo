@@ -339,6 +339,9 @@ def import_douyin_live_workbook(source):
     }.values())
     upsert_batches("live_sessions", [session], "live_room_id")
     upsert_batches("live_product_mappings", mappings, "shop_name,product_id")
+    # 同一房间号上传了内容更新后的文件时，按整场替换，避免旧商品或旧指标残留。
+    for table_name in ["live_metrics", "live_products", "live_channels", "live_product_talks"]:
+        supabase.table(table_name).delete().eq("live_room_id", session["live_room_id"]).execute()
     upsert_batches("live_products", parsed["products"], "live_room_id,product_id")
     upsert_batches("live_metrics", parsed["metrics"], "live_room_id,module,metric_name")
     upsert_batches("live_channels", parsed["channels"], "live_room_id,channel_name")

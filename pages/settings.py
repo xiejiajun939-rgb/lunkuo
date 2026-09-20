@@ -5,9 +5,6 @@ import pandas as pd
 from datetime import date
 import io
 import time
-import tempfile
-import zipfile
-from pathlib import Path
 
 from core.db import init_supabase, load_dimension_mapping
 from core.utils import clear_cache_on_page_change
@@ -17,9 +14,7 @@ from core.theme import page_header
 from core.promotion import completed_week_starts, parse_promotion_file, save_promotion_rows, week_label
 from core.live_analytics import (
     import_douyin_live_workbook,
-    import_live_folder,
     preview_douyin_live_workbook,
-    preview_live_folder,
 )
 
 st.set_page_config(page_title="系统设置", layout="wide")
@@ -38,6 +33,7 @@ all_pages = {
     "📑 商品月度复盘": "pages/product_monthly_report.py",
     "🔀 商品销售对比": "pages/product_comparison.py",
     "📊 商品分析助手": "pages/product_assistant.py",
+    "📡 直播经营分析": "pages/live_operations.py",
     "📈 销售分布与品牌": "pages/distribution.py",
     "🏬 抖音部门与阿米巴": "pages/douyin_amoeba.py",
     "🏢 组织与部门分析": "pages/org_dept.py",
@@ -158,20 +154,8 @@ with tab_upload:
 
     st.markdown("### 直播数据上传")
     with st.container(border=True):
-        st.caption("上传采集工具导出的 ZIP。系统会先预检，不会自动写入；确认预检结果后再点击正式导入。")
-        with st.expander("ZIP 中需要包含哪些文件？", expanded=True):
-            st.markdown("""
-            **必须包含：**
-
-            1. `直播基础数据/场次N.json`：保存主播、场次 ID、开播时间和直播时长。
-            2. `流量转化/场次N.json`：保存流量和成交指标。
-            3. `商品数据/场次N.xlsx`：保存该场全部商品的平台表现。
-
-            **建议同时包含：** `互动/场次N.json`、`人群/场次N.json`。`完整页面数据/场次N.json`可以保留，系统会自动去重。
-
-            请直接压缩采集工具生成的整个“主播_日期”文件夹，不需要改目录或文件名。旧版包含 `database/直播数据.db` 和 `{场次ID}_商品明细.xlsx` 的 ZIP 也继续兼容。
-            """)
         st.markdown("#### 抖音店铺后台直播工作簿")
+        st.caption("仅支持抖音店铺后台导出的新版直播数据 Excel，不再接收巨量百应 ZIP 旧格式。")
         st.caption(
             "上传“罗盘_账号_时间_房间号.xlsx”。系统读取场次概览、核心指标、渠道流量、"
             "货品明细和商品讲解，通过商品名称识别货号，再与数据罗盘实销关联。"
@@ -231,14 +215,8 @@ with tab_upload:
                         f"待确认 {totals['unmatched']} 条。"
                     )
 
-        st.divider()
-        st.markdown("#### 巨量百应采集包（兼容旧格式）")
-        live_archive = st.file_uploader(
-            "直播采集数据 ZIP",
-            type=["zip"],
-            key="settings_live_archive",
-            help="建议只压缩 database 文件夹和所有 *_商品明细.xlsx，减少上传体积。",
-        )
+        # 旧版巨量百应 ZIP 上传已停用；保留下面的历史解析代码但不再渲染入口。
+        live_archive = None
         if live_archive is not None:
             try:
                 if live_archive.size > 500 * 1024 * 1024:

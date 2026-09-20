@@ -98,7 +98,6 @@ cols = st.columns(4)
 cards = [
     ("📊", "经营驾驶舱", "查看核心经营指标、趋势和异常提醒", "pages/dashboard.py"),
     ("📦", "商品分析", "按本月数据分析商品表现与退货风险", "pages/product_page.py"),
-    ("🎬", "直播分析", "串联直播表现与商品实销，支持主播和店铺对比", "pages/live_analysis.py"),
     ("📡", "直播经营分析", "新版历史分析、单场复盘、直播间对比与商品机会", "pages/live_operations.py"),
     ("🏢", "组织与部门", "查看组织、部门与店铺的经营贡献", "pages/org_dept.py"),
 ]
