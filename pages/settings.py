@@ -200,12 +200,16 @@ with tab_upload:
                 ):
                     imported, skipped = 0, 0
                     totals = {"products": 0, "matched": 0, "unmatched": 0}
+                    failed = []
                     for uploaded in douyin_live_files:
-                        result = import_douyin_live_workbook(uploaded)
-                        skipped += int(bool(result.get("skipped")))
-                        imported += int(not result.get("skipped"))
-                        for key in totals:
-                            totals[key] += int(result.get(key, 0))
+                        try:
+                            result = import_douyin_live_workbook(uploaded)
+                            skipped += int(bool(result.get("skipped")))
+                            imported += int(not result.get("skipped"))
+                            for key in totals:
+                                totals[key] += int(result.get(key, 0))
+                        except Exception as exc:
+                            failed.append(f"{uploaded.name}：{exc}")
                     st.cache_data.clear()
                     if callbacks:
                         callbacks["mark_data_changed"]()
@@ -214,6 +218,8 @@ with tab_upload:
                         f"商品 {totals['products']} 条，已识别货号 {totals['matched']} 条，"
                         f"待确认 {totals['unmatched']} 条。"
                     )
+                    for message in failed:
+                        st.error(message)
 
         # 旧版巨量百应 ZIP 上传已停用；保留下面的历史解析代码但不再渲染入口。
         live_archive = None

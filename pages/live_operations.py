@@ -78,6 +78,36 @@ products = products.merge(
 for column in ["paid_amount", "sold_units", "click_users", "talk_count", "pre_ship_refund_amount", "post_ship_refund_amount"]:
     products[column] = pd.to_numeric(products.get(column), errors="coerce").fillna(0)
 
+# 商品讲解区间：计算相对开播分钟、讲解效率和在线人数变化。
+talk_summary = pd.DataFrame(columns=[
+    "style_code", "讲解场次", "讲解区间数", "累计讲解分钟", "讲解区间支付",
+    "讲解区间成交件数", "在线净变化", "平均在线变化", "在线上升场次占比", "分均在线人数",
+])
+if not talks.empty:
+    talks["style_code"] = talks["style_code"].fillna("").astype(str).str.strip().str.upper()
+    talks = talks[talks["style_code"] != ""].copy()
+    talk_session_times = sessions[["live_room_id", "start_time"]].copy()
+    talk_session_times["live_room_id"] = talk_session_times["live_room_id"].astype(str)
+    talk_session_times["session_start_utc"] = pd.to_datetime(talk_session_times["start_time"], utc=True, errors="coerce")
+    talks["live_room_id"] = talks["live_room_id"].astype(str)
+    talks = talks.merge(talk_session_times[["live_room_id", "session_start_utc"]], on="live_room_id", how="left")
+    talks["talk_start_time"] = pd.to_datetime(talks["talk_start_epoch"], unit="s", utc=True, errors="coerce")
+    talks["开播后分钟"] = ((talks["talk_start_time"] - talks["session_start_utc"]).dt.total_seconds() / 60).clip(lower=0)
+    for column in ["talk_duration_seconds", "paid_amount", "sold_units", "viewer_change", "avg_online_users"]:
+        talks[column] = pd.to_numeric(talks.get(column), errors="coerce").fillna(0)
+    talks["讲解分钟"] = talks["talk_duration_seconds"] / 60
+    talks["在线上升"] = talks["viewer_change"] > 0
+    talk_summary = talks.groupby("style_code", as_index=False).agg(
+        讲解场次=("live_room_id", "nunique"), 讲解区间数=("product_id", "size"),
+        累计讲解分钟=("讲解分钟", "sum"), 讲解区间支付=("paid_amount", "sum"),
+        讲解区间成交件数=("sold_units", "sum"), 在线净变化=("viewer_change", "sum"),
+        平均在线变化=("viewer_change", "mean"), 在线上升场次占比=("在线上升", "mean"),
+        分均在线人数=("avg_online_users", "mean"),
+    )
+    talk_summary["支付/讲解分钟"] = talk_summary["讲解区间支付"].div(talk_summary["累计讲解分钟"].replace(0, pd.NA))
+    talk_summary["成交件数/讲解分钟"] = talk_summary["讲解区间成交件数"].div(talk_summary["累计讲解分钟"].replace(0, pd.NA))
+    talk_summary["每次讲解平均产出"] = talk_summary["讲解区间支付"].div(talk_summary["讲解区间数"].replace(0, pd.NA))
+
 actual_scope = "店铺＋主播＋货号"
 actual_by_style = pd.DataFrame(columns=["style_code", "ship_amount", "return_amount", "net_amount"])
 if not actuals.empty and "style_code" in actuals:
@@ -103,6 +133,15 @@ style_summary = products[products["style_code"].notna()].groupby("style_code", a
     平台退款=("pre_ship_refund_amount", "sum"),
 )
 style_summary = style_summary.merge(actual_by_style, on="style_code", how="left").fillna(0)
+style_summary = style_summary.merge(talk_summary, on="style_code", how="left")
+talk_columns = [
+    "讲解场次", "讲解区间数", "累计讲解分钟", "讲解区间支付", "讲解区间成交件数",
+    "在线净变化", "平均在线变化", "在线上升场次占比", "分均在线人数",
+    "支付/讲解分钟", "成交件数/讲解分钟", "每次讲解平均产出",
+]
+for column in talk_columns:
+    if column in style_summary:
+        style_summary[column] = pd.to_numeric(style_summary[column], errors="coerce").fillna(0)
 style_summary["点击成交率"] = style_summary["成交件数"].div(style_summary["累计点击"].replace(0, pd.NA))
 style_summary["成交场次率"] = products.assign(成交=products["sold_units"] > 0).groupby("style_code")["成交"].mean().reindex(style_summary["style_code"]).values
 style_summary["退款率"] = style_summary["平台退款"].div(style_summary["平台支付"].replace(0, pd.NA))
@@ -180,15 +219,43 @@ with tabs[4]:
     st.dataframe(table.rename(columns={"style_code": "货号", "ship_amount": "范围发货", "return_amount": "范围退货", "net_amount": "范围实销"}).sort_values("平台支付", ascending=False), width="stretch", hide_index=True)
 
 with tabs[5]:
-    opportunity = st.segmented_control("机会类型", ["高转化", "高引流", "稳定复销", "高点击低成交", "退款风险"], default="高转化")
+    opportunity = st.segmented_control(
+        "机会类型",
+        ["开播阶段", "讲解高效", "在线提升", "高转化", "高引流", "稳定复销", "高点击低成交", "退款风险"],
+        default="开播阶段",
+    )
     min_sessions = st.slider("最少上播场次", 1, 10, 3)
     min_clicks = st.slider("最少累计点击", 0, 1000, 50, 10)
-    candidates = style_summary[(style_summary["上播场次"] >= min_sessions) & (style_summary["累计点击"] >= min_clicks)].copy()
-    if opportunity == "高转化": candidates = candidates.sort_values("点击成交率", ascending=False)
+    candidates = style_summary.copy()
+    if opportunity == "开播阶段":
+        opening_window = st.segmented_control("开播后范围", [15, 30, 60, 90], default=60, format_func=lambda value: f"前{value}分钟")
+        opening_talks = talks[talks["开播后分钟"] <= opening_window].copy() if not talks.empty else pd.DataFrame()
+        if opening_talks.empty:
+            candidates = candidates.iloc[0:0]
+        else:
+            opening = opening_talks.groupby("style_code", as_index=False).agg(
+                开播阶段场次=("live_room_id", "nunique"), 开播阶段讲解次数=("product_id", "size"),
+                开播阶段讲解分钟=("讲解分钟", "sum"), 开播阶段支付=("paid_amount", "sum"),
+                开播阶段成交件数=("sold_units", "sum"), 开播阶段在线净变化=("viewer_change", "sum"),
+                开播阶段平均在线变化=("viewer_change", "mean"), 开播阶段在线上升占比=("在线上升", "mean"),
+            )
+            opening["开播阶段分钟产出"] = opening["开播阶段支付"].div(opening["开播阶段讲解分钟"].replace(0, pd.NA))
+            candidates = candidates.merge(opening, on="style_code", how="inner")
+            candidates = candidates[candidates["开播阶段场次"] >= min_sessions].sort_values(
+                ["开播阶段分钟产出", "开播阶段在线上升占比"], ascending=False
+            )
+        st.caption(f"只统计商品讲解开始时间位于开播后前{opening_window}分钟的区间。")
+    else:
+        candidates = candidates[(candidates["上播场次"] >= min_sessions) & (candidates["累计点击"] >= min_clicks)]
+    if opportunity == "讲解高效": candidates = candidates.sort_values(["支付/讲解分钟", "成交件数/讲解分钟"], ascending=False)
+    elif opportunity == "在线提升": candidates = candidates.sort_values(["在线上升场次占比", "平均在线变化"], ascending=False)
+    elif opportunity == "高转化": candidates = candidates.sort_values("点击成交率", ascending=False)
     elif opportunity == "高引流": candidates = candidates.sort_values("累计点击", ascending=False)
     elif opportunity == "稳定复销": candidates = candidates.sort_values(["成交场次率", "上播场次"], ascending=False)
     elif opportunity == "高点击低成交": candidates = candidates[candidates["点击成交率"] < .03].sort_values("累计点击", ascending=False)
-    else: candidates = candidates.sort_values("退款率", ascending=False)
+    elif opportunity == "退款风险": candidates = candidates.sort_values("退款率", ascending=False)
+    if opportunity in ["讲解高效", "在线提升", "开播阶段"] and talks.empty:
+        st.warning("当前范围没有新版商品讲解区间数据，上传新版直播工作簿后才能计算。")
     st.dataframe(candidates.rename(columns={"style_code": "货号", "net_amount": "范围实销"}), width="stretch", hide_index=True)
 
 with tabs[6]:
@@ -208,6 +275,23 @@ with tabs[6]:
     anchor_item["主播占该货号成交"] = anchor_item["成交件数"].div(anchor_item["成交件数"].sum() or pd.NA)
     st.subheader("主播适配与占比")
     st.dataframe(anchor_item.sort_values("成交件数", ascending=False), width="stretch", hide_index=True)
+    st.subheader("讲解效率与在线变化")
+    item_talks = talks[talks["style_code"].astype(str) == selected_style].copy() if not talks.empty else pd.DataFrame()
+    if item_talks.empty:
+        st.info("该货号暂无新版商品讲解区间数据。")
+    else:
+        efficiency = st.columns(5)
+        talk_minutes = item_talks["讲解分钟"].sum()
+        efficiency[0].metric("累计讲解时长", f"{talk_minutes:,.1f}分钟")
+        efficiency[1].metric("场均讲解时长", f"{talk_minutes / item_talks['live_room_id'].nunique():,.1f}分钟")
+        efficiency[2].metric("支付/讲解分钟", f"¥{item_talks['paid_amount'].sum() / talk_minutes:,.0f}" if talk_minutes else "—")
+        efficiency[3].metric("平均在线变化", f"{item_talks['viewer_change'].mean():+,.1f}")
+        efficiency[4].metric("在线上升区间占比", f"{item_talks['在线上升'].mean():.1%}")
+        st.dataframe(
+            item_talks[["live_room_id", "开播后分钟", "讲解分钟", "paid_amount", "sold_units", "viewer_change", "avg_online_users"]]
+            .sort_values(["live_room_id", "开播后分钟"]),
+            width="stretch", hide_index=True,
+        )
     st.subheader("逐场历史")
     st.dataframe(item[["直播日期", "shop_name", "anchor_name", "talk_count", "click_users", "sold_units", "paid_amount", "pre_ship_refund_amount", "post_ship_refund_amount"]].sort_values("直播日期", ascending=False), width="stretch", hide_index=True)
 
