@@ -6,7 +6,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
-from core.live_analytics import load_live_actuals, load_live_dataset
+from core.live_analytics import load_live_actuals, load_live_auxiliary, load_live_dataset
 from core.db import load_product_master
 from core.theme import page_header
 from core.utils import clear_cache_on_page_change
@@ -56,6 +56,8 @@ if sessions.empty:
     st.warning("所选日期范围没有直播数据。当前已导入数据可尝试选择2026年9月1日至10日。")
     st.stop()
 
+channels, talks = load_live_auxiliary(tuple(sessions["live_room_id"].astype(str).tolist()))
+
 products = products.merge(
     sessions[["live_room_id", "shop_name", "anchor_name", "start_time", "end_time", "duration_seconds"]],
     on="live_room_id", how="left", validate="many_to_one",
@@ -79,6 +81,10 @@ with filter_cols[2]:
 sessions = sessions[sessions["shop_name"].isin(selected_shops) & sessions["anchor_name"].isin(selected_anchors)]
 products = products[products["live_room_id"].isin(sessions["live_room_id"])]
 metrics = metrics[metrics["live_room_id"].isin(sessions["live_room_id"])]
+if not channels.empty:
+    channels = channels[channels["live_room_id"].astype(str).isin(sessions["live_room_id"].astype(str))]
+if not talks.empty:
+    talks = talks[talks["live_room_id"].astype(str).isin(sessions["live_room_id"].astype(str))]
 if match_filter == "已识别货号":
     products = products[products["style_code"].notna()]
 elif match_filter == "待确认":
@@ -89,6 +95,7 @@ if products.empty:
     st.stop()
 
 actual_by_style = pd.DataFrame(columns=["style_code", "ship_amount", "return_amount", "net_amount"])
+actual_scope_text = "店铺＋主播＋货号"
 if not actuals.empty and "style_code" in actuals.columns:
     actuals = actuals.copy()
     actuals["shop_key"] = actuals["shop_name"].astype(str).str.strip().str.upper()
@@ -96,10 +103,12 @@ if not actuals.empty and "style_code" in actuals.columns:
     actuals["anchor_key"] = anchor_source.fillna("").astype(str).str.strip().str.upper()
     selected_shop_keys = {str(x).strip().upper() for x in selected_shops}
     selected_anchor_keys = {str(x).strip().upper() for x in selected_anchors}
-    actuals = actuals[
-        actuals["shop_key"].isin(selected_shop_keys)
-        & actuals["anchor_key"].isin(selected_anchor_keys)
-    ]
+    actuals = actuals[actuals["shop_key"].isin(selected_shop_keys)]
+    anchor_matches = actuals["anchor_key"].isin(selected_anchor_keys)
+    if anchor_matches.any():
+        actuals = actuals[anchor_matches]
+    else:
+        actual_scope_text = "店铺＋货号（实销数据无法可靠区分主播）"
     actuals["style_code"] = actuals["style_code"].astype(str).str.strip().str.upper()
     actual_by_style = actuals.groupby("style_code", as_index=False).agg(
         ship_amount=("ship_amount", "sum"), return_amount=("return_amount", "sum"), net_amount=("net_amount", "sum")
@@ -135,7 +144,10 @@ fulfillment_cols[0].metric("发货金额", f"¥{selected_ship:,.0f}")
 fulfillment_cols[1].metric("退货金额", f"¥{selected_return:,.0f}")
 fulfillment_cols[2].metric("实销金额", f"¥{selected_net:,.0f}")
 fulfillment_cols[3].metric("退货率", f"{selected_return_rate:.1%}")
-st.caption("数据罗盘口径：按当前日期、店铺和主播范围汇总；商品明细再按货号关联。实销金额＝发货金额－退货金额。")
+st.caption(
+    f"数据罗盘口径：当前关联层级为“{actual_scope_text}”；商品明细按货号关联。"
+    "实销金额＝发货金额－退货金额，不能称为单场实销。"
+)
 
 tabs = st.tabs(["经营总览", "对比分析", "场次分析", "商品分析", "单货品分析", "待确认商品"])
 
@@ -232,6 +244,57 @@ with tabs[1]:
                  column_config={"支付GMV": st.column_config.NumberColumn(format="¥ %.0f"), "平台退款": st.column_config.NumberColumn(format="¥ %.0f"), "点击成交率": st.column_config.NumberColumn(format="%.1%%"), "成交件数/讲解": st.column_config.NumberColumn(format="%.2f")})
     chart = px.bar(grouped, x=dimension, y=["成交件数", "讲解次数"], barmode="group", title="成交件数与讲解次数")
     st.plotly_chart(chart, width="stretch")
+
+    st.markdown("#### 直播间效率横向对比")
+    comparison_metrics = [
+        "直播间曝光人数", "直播间观看人数", "进入直播间人数",
+        "商品点击人数", "直播间成交人数",
+    ]
+    metric_wide = pd.DataFrame(index=sessions["live_room_id"].astype(str).unique())
+    if not metrics.empty:
+        metric_source = metrics[metrics["metric_name"].isin(comparison_metrics)].copy()
+        metric_source["metric_value"] = pd.to_numeric(metric_source["metric_value"], errors="coerce").fillna(0)
+        metric_source = metric_source.drop_duplicates(["live_room_id", "metric_name"], keep="first")
+        metric_wide = metric_source.pivot(index="live_room_id", columns="metric_name", values="metric_value")
+    room_compare = sessions[["live_room_id", dimension, "duration_seconds"]].copy()
+    room_compare["live_room_id"] = room_compare["live_room_id"].astype(str)
+    room_compare = room_compare.merge(metric_wide, left_on="live_room_id", right_index=True, how="left")
+    room_product = products.groupby("live_room_id", as_index=False).agg(
+        平台支付=("paid_amount", "sum"), 成交件数=("sold_units", "sum")
+    )
+    room_product["live_room_id"] = room_product["live_room_id"].astype(str)
+    room_compare = room_compare.merge(room_product, on="live_room_id", how="left")
+    for column in comparison_metrics + ["平台支付", "成交件数", "duration_seconds"]:
+        if column not in room_compare.columns:
+            room_compare[column] = 0
+        room_compare[column] = pd.to_numeric(room_compare[column], errors="coerce").fillna(0)
+    if room_compare["直播间观看人数"].sum() == 0:
+        room_compare["直播间观看人数"] = room_compare["进入直播间人数"]
+    efficiency = room_compare.groupby(dimension, as_index=False).agg(
+        场次=("live_room_id", "nunique"), 直播时长秒=("duration_seconds", "sum"),
+        曝光人数=("直播间曝光人数", "sum"), 观看人数=("直播间观看人数", "sum"),
+        商品点击人数=("商品点击人数", "sum"), 成交人数=("直播间成交人数", "sum"),
+        成交件数=("成交件数", "sum"), 平台支付=("平台支付", "sum"),
+    )
+    efficiency["场均支付"] = efficiency["平台支付"].div(efficiency["场次"].replace(0, pd.NA))
+    efficiency["观看进入率"] = efficiency["观看人数"].div(efficiency["曝光人数"].replace(0, pd.NA))
+    efficiency["商品点击率"] = efficiency["商品点击人数"].div(efficiency["观看人数"].replace(0, pd.NA))
+    efficiency["点击成交率"] = efficiency["成交人数"].div(efficiency["商品点击人数"].replace(0, pd.NA))
+    efficiency["千次观看支付"] = efficiency["平台支付"].div(efficiency["观看人数"].replace(0, pd.NA)) * 1000
+    efficiency["直播时长"] = efficiency["直播时长秒"].map(format_duration)
+    st.dataframe(
+        efficiency.drop(columns=["直播时长秒"]).rename(columns={dimension: compare_dimension}),
+        width="stretch", hide_index=True,
+        column_config={
+            "平台支付": st.column_config.NumberColumn(format="¥ %.0f"),
+            "场均支付": st.column_config.NumberColumn(format="¥ %.0f"),
+            "千次观看支付": st.column_config.NumberColumn(format="¥ %.0f"),
+            "观看进入率": st.column_config.NumberColumn(format="%.2f%%"),
+            "商品点击率": st.column_config.NumberColumn(format="%.2f%%"),
+            "点击成交率": st.column_config.NumberColumn(format="%.2f%%"),
+        },
+    )
+    st.caption("总量和效率同时展示。商品点击人数采用整场去重指标，不累加商品明细点击人次。")
 
 with tabs[0]:
     st.subheader("平台指标场次趋势")
@@ -385,7 +448,9 @@ with tabs[2]:
     detail_cols[4].metric("支付GMV（原始）", f"¥{room_products['paid_amount'].sum():,.0f}")
     st.caption(f"店铺：{room['shop_name']}　主播：{room['anchor_name']}　场次ID：{selected_room}")
 
-    metric_tab, product_tab = st.tabs(["直播核心指标", "全部商品平台表现"])
+    metric_tab, product_tab, channel_tab, talk_tab = st.tabs([
+        "直播核心指标", "全部商品平台表现", "渠道流量", "商品讲解区间"
+    ])
     with metric_tab:
         if room_metrics.empty:
             st.info("该场次暂无直播指标。")
@@ -467,6 +532,67 @@ with tabs[2]:
                 "post_ship_refund_users": "发货后退款人数", "post_ship_refund_rate": "发货后退款率",
             }).sort_values(["用户支付金额", "成交件数"], ascending=False)
             st.dataframe(product_detail, width="stretch", hide_index=True)
+    with channel_tab:
+        room_channels = channels[
+            channels["live_room_id"].astype(str) == selected_room
+        ].copy() if not channels.empty else pd.DataFrame()
+        if room_channels.empty:
+            st.info("该场次没有渠道流量数据；旧版巨量百应文件不会提供此明细。")
+        else:
+            for column in ["watch_count", "watch_users", "paid_amount", "order_count", "avg_order_amount", "watch_conversion_rate"]:
+                room_channels[column] = pd.to_numeric(room_channels.get(column), errors="coerce").fillna(0)
+            channel_table = room_channels.rename(columns={
+                "channel_name": "渠道", "avg_watch_duration": "人均观看时长",
+                "watch_count": "观看次数", "watch_users": "观看人数",
+                "paid_amount": "用户支付金额", "order_count": "成交订单数",
+                "avg_order_amount": "笔单价", "watch_conversion_rate": "观看成交率",
+                "shop_bound_spend": "店铺绑定投放", "shop_promoted_spend": "店铺被投消耗",
+            })
+            channel_table = channel_table[
+                [column for column in [
+                    "渠道", "人均观看时长", "观看次数", "观看人数", "用户支付金额",
+                    "成交订单数", "笔单价", "观看成交率", "店铺绑定投放", "店铺被投消耗",
+                ] if column in channel_table.columns]
+            ].sort_values("用户支付金额", ascending=False)
+            st.dataframe(
+                channel_table, width="stretch", hide_index=True,
+                column_config={
+                    "用户支付金额": st.column_config.NumberColumn(format="¥ %.0f"),
+                    "笔单价": st.column_config.NumberColumn(format="¥ %.0f"),
+                    "观看成交率": st.column_config.NumberColumn(format="%.2f%%"),
+                },
+            )
+    with talk_tab:
+        room_talks = talks[
+            talks["live_room_id"].astype(str) == selected_room
+        ].copy() if not talks.empty else pd.DataFrame()
+        if room_talks.empty:
+            st.info("该场次没有商品讲解区间数据；旧版巨量百应文件不会提供此明细。")
+        else:
+            room_talks["讲解开始"] = pd.to_datetime(
+                room_talks["talk_start_epoch"], unit="s", utc=True
+            ).dt.tz_convert("Asia/Shanghai")
+            room_talks["讲解结束"] = pd.to_datetime(
+                room_talks["talk_end_epoch"], unit="s", utc=True
+            ).dt.tz_convert("Asia/Shanghai")
+            talk_table = room_talks.rename(columns={
+                "style_code": "货号", "product_name": "商品名称",
+                "talk_duration_seconds": "讲解秒数", "paid_amount": "区间支付金额",
+                "sold_units": "区间成交件数", "viewer_change": "起止人数变化",
+                "avg_online_users": "分均在线人数",
+            })
+            st.dataframe(
+                talk_table[[
+                    "货号", "商品名称", "讲解开始", "讲解结束", "讲解秒数",
+                    "区间支付金额", "区间成交件数", "起止人数变化", "分均在线人数",
+                ]].sort_values("讲解开始"),
+                width="stretch", hide_index=True,
+                column_config={
+                    "讲解开始": st.column_config.DatetimeColumn(format="HH:mm:ss"),
+                    "讲解结束": st.column_config.DatetimeColumn(format="HH:mm:ss"),
+                    "区间支付金额": st.column_config.NumberColumn(format="¥ %.0f"),
+                },
+            )
 
 with tabs[3]:
     st.subheader("商品经营表现")
@@ -517,9 +643,28 @@ with tabs[4]:
     )
     anchor_item["成交件数/讲解"] = anchor_item["成交件数"].div(anchor_item["讲解次数"].replace(0, pd.NA))
     anchor_item["点击成交率"] = anchor_item["成交件数"].div(anchor_item["点击人数"].replace(0, pd.NA))
+    anchor_all_units = products.groupby("anchor_name")["sold_units"].sum()
+    anchor_item["该货号占主播成交件数"] = anchor_item.apply(
+        lambda row: row["成交件数"] / anchor_all_units.get(row["anchor_name"], 0)
+        if anchor_all_units.get(row["anchor_name"], 0) else pd.NA,
+        axis=1,
+    )
+    item_total_units = anchor_item["成交件数"].sum()
+    anchor_item["主播占该货号成交件数"] = (
+        anchor_item["成交件数"] / item_total_units if item_total_units else pd.NA
+    )
     st.markdown("#### 主播对比")
-    st.dataframe(anchor_item.rename(columns={"anchor_name": "主播"}), width="stretch", hide_index=True)
-    st.caption("GMV仅显示原始金额，不计算商品占主播、平台或公司的GMV比例。")
+    st.dataframe(
+        anchor_item.rename(columns={"anchor_name": "主播"}),
+        width="stretch", hide_index=True,
+        column_config={
+            "该货号占主播成交件数": st.column_config.NumberColumn(format="%.1f%%"),
+            "主播占该货号成交件数": st.column_config.NumberColumn(format="%.1f%%"),
+            "点击成交率": st.column_config.NumberColumn(format="%.1f%%"),
+            "支付GMV原始值": st.column_config.NumberColumn(format="¥ %.0f"),
+        },
+    )
+    st.caption("占比先采用成交件数计算；GMV覆盖不完整时不输出主播、平台或公司层面的GMV占比。")
 
 with tabs[5]:
     review = products[products["style_code"].isna() | products["match_status"].isin(["unmatched", "catalog_missing"])][

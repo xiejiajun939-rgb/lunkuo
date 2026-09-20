@@ -15,7 +15,12 @@ from core.app_config import load_carousel_config, save_carousel_config, upload_c
 from core.settings_panels import render_account_management, render_mapping_management
 from core.theme import page_header
 from core.promotion import completed_week_starts, parse_promotion_file, save_promotion_rows, week_label
-from core.live_analytics import import_live_folder, preview_live_folder
+from core.live_analytics import (
+    import_douyin_live_workbook,
+    import_live_folder,
+    preview_douyin_live_workbook,
+    preview_live_folder,
+)
 
 st.set_page_config(page_title="系统设置", layout="wide")
 clear_cache_on_page_change("settings")
@@ -166,6 +171,68 @@ with tab_upload:
 
             请直接压缩采集工具生成的整个“主播_日期”文件夹，不需要改目录或文件名。旧版包含 `database/直播数据.db` 和 `{场次ID}_商品明细.xlsx` 的 ZIP 也继续兼容。
             """)
+        st.markdown("#### 抖音店铺后台直播工作簿")
+        st.caption(
+            "上传“罗盘_账号_时间_房间号.xlsx”。系统读取场次概览、核心指标、渠道流量、"
+            "货品明细和商品讲解，通过商品名称识别货号，再与数据罗盘实销关联。"
+        )
+        douyin_live_files = st.file_uploader(
+            "抖音直播间数据 Excel",
+            type=["xlsx"],
+            accept_multiple_files=True,
+            key="settings_douyin_live_workbooks",
+        )
+        if douyin_live_files:
+            previews = []
+            preview_failed = False
+            for uploaded in douyin_live_files:
+                try:
+                    preview = preview_douyin_live_workbook(uploaded)
+                    preview["文件"] = uploaded.name
+                    previews.append(preview)
+                except Exception as exc:
+                    preview_failed = True
+                    st.error(f"{uploaded.name}：{exc}")
+            if previews:
+                preview_df = pd.DataFrame(previews).rename(columns={
+                    "room_id": "房间号", "shop_name": "反查店铺", "anchor_name": "主播账号",
+                    "start_time": "开播时间", "end_time": "关播时间", "metrics": "指标数",
+                    "products": "商品数", "channels": "渠道数", "talks": "讲解区间数",
+                    "matched": "已识别货号", "unmatched": "待确认货号",
+                })
+                st.dataframe(preview_df, width="stretch", hide_index=True)
+                if any(row["shop_name"] == "待维护店铺" for row in previews):
+                    st.warning("存在无法从主播映射反查店铺的文件，请先到“映射关系”维护后再导入。")
+                    preview_failed = True
+                confirm_douyin_import = st.checkbox(
+                    "我已核对房间号、主播账号、反查店铺和货号识别结果",
+                    key="confirm_douyin_live_import",
+                )
+                if st.button(
+                    "正式导入抖音直播工作簿",
+                    type="primary",
+                    disabled=preview_failed or not confirm_douyin_import,
+                    key="settings_import_douyin_live_workbooks",
+                ):
+                    imported, skipped = 0, 0
+                    totals = {"products": 0, "matched": 0, "unmatched": 0}
+                    for uploaded in douyin_live_files:
+                        result = import_douyin_live_workbook(uploaded)
+                        skipped += int(bool(result.get("skipped")))
+                        imported += int(not result.get("skipped"))
+                        for key in totals:
+                            totals[key] += int(result.get(key, 0))
+                    st.cache_data.clear()
+                    if callbacks:
+                        callbacks["mark_data_changed"]()
+                    st.success(
+                        f"导入完成：新增或更新 {imported} 场，重复文件跳过 {skipped} 场；"
+                        f"商品 {totals['products']} 条，已识别货号 {totals['matched']} 条，"
+                        f"待确认 {totals['unmatched']} 条。"
+                    )
+
+        st.divider()
+        st.markdown("#### 巨量百应采集包（兼容旧格式）")
         live_archive = st.file_uploader(
             "直播采集数据 ZIP",
             type=["zip"],

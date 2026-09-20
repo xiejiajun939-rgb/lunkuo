@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import re
 import json
+import hashlib
+import io
 from datetime import date, datetime
 from pathlib import Path
 
@@ -120,6 +122,230 @@ def _iso_shanghai(value):
     return parsed.isoformat()
 
 
+def _duration_seconds(value):
+    """解析“2小时3分17秒”及 pandas 时间差为秒。"""
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return 0
+    if isinstance(value, pd.Timedelta):
+        return int(value.total_seconds())
+    text = str(value).strip()
+    match = re.search(r"(?:(\d+)小时)?(?:(\d+)分)?(?:(\d+)秒)?", text)
+    if not match or not any(match.groups()):
+        return 0
+    hours, minutes, seconds = (int(part or 0) for part in match.groups())
+    return hours * 3600 + minutes * 60 + seconds
+
+
+def _read_workbook(source):
+    """读取上传对象、字节或本地路径，不改变调用方文件指针。"""
+    if isinstance(source, (str, Path)):
+        return pd.ExcelFile(source), Path(source).name, Path(source).read_bytes()
+    if isinstance(source, bytes):
+        payload = source
+        name = "直播罗盘.xlsx"
+    else:
+        if hasattr(source, "getvalue"):
+            payload = source.getvalue()
+        else:
+            position = source.tell() if hasattr(source, "tell") else None
+            payload = source.read()
+            if position is not None and hasattr(source, "seek"):
+                source.seek(position)
+        name = getattr(source, "name", "直播罗盘.xlsx")
+    buffer = io.BytesIO(payload)
+    return pd.ExcelFile(buffer), name, payload
+
+
+def _overview_values(book):
+    frame = pd.read_excel(book, sheet_name="场次概览", header=None)
+    values = {}
+    for row in frame.iloc[:, :2].fillna("").itertuples(index=False, name=None):
+        key = str(row[0]).strip()
+        if key and not key.startswith("【"):
+            values[key] = row[1]
+    return values
+
+
+def _mapping_context(anchor_name):
+    """用数据库映射反查主播所属店铺；不从文件账号名臆测店铺。"""
+    rows = supabase.table("mapping").select("shop_name,anchor_name").execute().data or []
+    target = str(anchor_name or "").strip().upper()
+    shops = {
+        str(row.get("shop_name") or "").strip()
+        for row in rows
+        if str(row.get("anchor_name") or "").strip().upper() == target
+        and str(row.get("shop_name") or "").strip()
+    }
+    return next(iter(shops)) if len(shops) == 1 else "待维护店铺"
+
+
+def parse_douyin_live_workbook(source):
+    """解析抖音店铺后台导出的单场直播工作簿，不写数据库。"""
+    book, source_name, payload = _read_workbook(source)
+    required_sheets = {"场次概览", "核心指标", "渠道流量", "货品明细", "商品讲解"}
+    missing = sorted(required_sheets.difference(book.sheet_names))
+    if missing:
+        raise ValueError(f"不是支持的抖音直播工作簿，缺少工作表：{', '.join(missing)}")
+
+    overview = _overview_values(book)
+    room_id = str(overview.get("房间号（room_id）") or overview.get("房间号") or "").split(".")[0].strip()
+    if not room_id:
+        filename_match = re.search(r"_(\d{16,})\.xlsx$", source_name, re.IGNORECASE)
+        room_id = filename_match.group(1) if filename_match else ""
+    if not room_id:
+        raise ValueError("工作簿中未找到房间号")
+
+    anchor_name = str(overview.get("达人昵称") or overview.get("店铺/账号") or "").strip()
+    shop_name = _mapping_context(anchor_name)
+    start_time = overview.get("开播时间")
+    end_time = overview.get("关播时间")
+    session = {
+        "live_room_id": room_id,
+        "shop_name": shop_name,
+        "anchor_name": anchor_name or "未维护主播",
+        "live_title": _text_or_none(overview.get("直播间标题")),
+        "start_time": _iso_shanghai(start_time),
+        "end_time": _iso_shanghai(end_time),
+        "duration_seconds": _duration_seconds(overview.get("直播时长")),
+        "source_url": None,
+        "source_collected_at": _iso_shanghai(overview.get("数据抓取时间")),
+        "source_format": "douyin_shop_workbook",
+        "source_file_name": source_name,
+        "source_file_hash": hashlib.sha256(payload).hexdigest(),
+    }
+
+    metric_records = []
+    overview_metric_names = {
+        "直播间成交金额", "直播间用户支付金额", "退款金额",
+        "投放消耗（店铺绑定）", "投放消耗（店铺被投）",
+        "千次观看用户支付金额", "指示器用户支付金额",
+    }
+    for name in overview_metric_names:
+        if name in overview:
+            metric_records.append({
+                "live_room_id": room_id, "module": "场次概览", "metric_name": name,
+                "metric_value": _number(overview.get(name)), "raw_value": _text_or_none(overview.get(name)),
+                "unit": "元", "benchmark_value": None, "benchmark_raw": None,
+                "comparison_display": None,
+            })
+    core = pd.read_excel(book, sheet_name="核心指标")
+    for row in core.fillna("").to_dict("records"):
+        name = str(row.get("指标") or "").strip()
+        if not name:
+            continue
+        metric_records.append({
+            "live_room_id": room_id,
+            "module": str(row.get("分组") or "核心指标").strip() or "核心指标",
+            "metric_name": name,
+            "metric_value": _number(row.get("本期值")),
+            "raw_value": _text_or_none(row.get("本期值")),
+            "unit": None,
+            "benchmark_value": _number(row.get("上期值")),
+            "benchmark_raw": _text_or_none(row.get("上期值")),
+            "comparison_display": _text_or_none(row.get("较上期")),
+        })
+
+    master = load_product_master()
+    known_styles = set(master.get("style_code", pd.Series(dtype=str)).astype(str).str.strip().str.upper())
+    products_frame = pd.read_excel(book, sheet_name="货品明细")
+    product_records, mapping_records = product_records_from_frame(
+        products_frame, room_id, shop_name, known_styles
+    )
+    image_by_product = {
+        str(row.get("商品ID") or "").split(".")[0].strip(): _text_or_none(row.get("商品主图"))
+        for row in products_frame.fillna("").to_dict("records")
+    }
+    for record in product_records:
+        record["product_image_url"] = image_by_product.get(record["product_id"])
+
+    channels = []
+    channel_frame = pd.read_excel(book, sheet_name="渠道流量")
+    for row in channel_frame.fillna("").to_dict("records"):
+        channel_name = str(row.get("渠道名称") or "").strip()
+        if not channel_name:
+            continue
+        channels.append({
+            "live_room_id": room_id,
+            "channel_name": channel_name,
+            "avg_watch_duration": _text_or_none(row.get("人均观看时长")),
+            "watch_count": int(_number(row.get("观看次数")) or 0),
+            "watch_users": int(_number(row.get("观看人数")) or 0),
+            "paid_amount": _number(row.get("用户支付金额")) or 0,
+            "order_count": int(_number(row.get("成交订单数")) or 0),
+            "avg_order_amount": _number(row.get("笔单价")) or 0,
+            "watch_conversion_rate": _number(row.get("观看-成交率(次数)"), True),
+            "shop_bound_spend": _number(row.get("投放消耗(店铺绑定)")) or 0,
+            "shop_promoted_spend": _number(row.get("投放消耗(店铺被投)")) or 0,
+        })
+
+    talks = []
+    talk_frame = pd.read_excel(book, sheet_name="商品讲解")
+    for row in talk_frame.fillna("").to_dict("records"):
+        product_id = str(row.get("商品ID") or "").split(".")[0].strip()
+        start_epoch = int(_number(row.get("讲解开始时间戳")) or 0)
+        end_epoch = int(_number(row.get("讲解结束时间戳")) or 0)
+        if not product_id or not start_epoch:
+            continue
+        name = str(row.get("商品名称") or "").strip()
+        talks.append({
+            "live_room_id": room_id, "product_id": product_id,
+            "product_name": name, "style_code": extract_style_code(name),
+            "product_image_url": _text_or_none(row.get("商品主图")),
+            "talk_start_epoch": start_epoch, "talk_end_epoch": end_epoch,
+            "talk_duration_seconds": max(0, end_epoch - start_epoch),
+            "paid_amount": _number(row.get("用户支付金额(元)")) or 0,
+            "sold_units": int(_number(row.get("成交件数")) or 0),
+            "viewer_change": int(_number(row.get("起止人数变化")) or 0),
+            "avg_online_users": int(_number(row.get("分均在线人数")) or 0),
+        })
+
+    return {
+        "session": session, "metrics": metric_records, "products": product_records,
+        "mappings": mapping_records, "channels": channels, "talks": talks,
+    }
+
+
+def preview_douyin_live_workbook(source):
+    parsed = parse_douyin_live_workbook(source)
+    return _parsed_workbook_summary(parsed)
+
+
+def _parsed_workbook_summary(parsed):
+    session = parsed["session"]
+    return {
+        "room_id": session["live_room_id"], "shop_name": session["shop_name"],
+        "anchor_name": session["anchor_name"], "start_time": session["start_time"],
+        "end_time": session["end_time"], "metrics": len(parsed["metrics"]),
+        "products": len(parsed["products"]), "channels": len(parsed["channels"]),
+        "talks": len(parsed["talks"]),
+        "matched": sum(record.get("style_code") is not None for record in parsed["products"]),
+        "unmatched": sum(record.get("style_code") is None for record in parsed["products"]),
+    }
+
+
+def import_douyin_live_workbook(source):
+    """导入抖音店铺后台单场工作簿；同一房间号重复上传时安全更新。"""
+    parsed = parse_douyin_live_workbook(source)
+    session = parsed["session"]
+    existing = (
+        supabase.table("live_sessions").select("source_file_hash")
+        .eq("live_room_id", session["live_room_id"]).limit(1).execute().data or []
+    )
+    if existing and existing[0].get("source_file_hash") == session["source_file_hash"]:
+        return {**_parsed_workbook_summary(parsed), "skipped": True}
+    mappings = list({
+        (record["shop_name"], record["product_id"]): record
+        for record in parsed["mappings"]
+    }.values())
+    upsert_batches("live_sessions", [session], "live_room_id")
+    upsert_batches("live_product_mappings", mappings, "shop_name,product_id")
+    upsert_batches("live_products", parsed["products"], "live_room_id,product_id")
+    upsert_batches("live_metrics", parsed["metrics"], "live_room_id,module,metric_name")
+    upsert_batches("live_channels", parsed["channels"], "live_room_id,channel_name")
+    upsert_batches("live_product_talks", parsed["talks"], "live_room_id,product_id,talk_start_epoch")
+    return {**_parsed_workbook_summary(parsed), "skipped": False}
+
+
 def product_records_from_frame(frame, live_room_id, shop_name, known_styles):
     records = []
     mappings = []
@@ -150,24 +376,41 @@ def product_records_from_frame(frame, live_room_id, shop_name, known_styles):
             "product_name": product_name, "style_code": style_code,
             "match_status": match_status,
             "talk_count": int(_number(row.get("讲解次数")) or 0),
-            "first_listed_at": _iso_shanghai(row.get("首次上架时间")),
-            "live_price": _number(row.get("直播间价格")) or 0,
+            "first_listed_at": _iso_shanghai(row.get("首次上架时间") or row.get("挂载时间")),
+            "live_price": _number(row.get("直播间价格") or row.get("商品价格")) or 0,
             "paid_amount": _number(row.get("用户支付金额")) or 0,
             "sold_units": int(_number(row.get("成交件数")) or 0),
             "presale_orders": int(_number(row.get("预售订单数")) or 0),
             "click_users": int(_number(row.get("商品点击人数")) or 0),
-            "exposure_click_rate": _number(row.get("商品曝光-点击率（人数）"), True),
-            "click_conversion_rate": _number(row.get("商品点击-成交转化率（人数）"), True),
-            "gmv_per_1000_exposure": _number(row.get("千次曝光用户支付金额")) or 0,
-            "pre_ship_refund_orders": int(_number(row.get("发货前退款订单数")) or 0),
-            "pre_ship_refund_amount": _number(row.get("发货前退款金额")) or 0,
+            "exposure_click_rate": _number(
+                row.get("商品曝光-点击率（人数）") or row.get("商品曝光-点击率(人数)"), True
+            ),
+            "click_conversion_rate": _number(
+                row.get("商品点击-成交转化率（人数）") or row.get("商品点击-成交转化率(人数)"), True
+            ),
+            "gmv_per_1000_exposure": _number(
+                row.get("千次曝光用户支付金额") or row.get("千次观看成交额")
+            ) or 0,
+            "pre_ship_refund_orders": int(_number(
+                row.get("发货前退款订单数") or row.get("售中退款件数")
+            ) or 0),
+            "pre_ship_refund_amount": _number(
+                row.get("发货前退款金额") or row.get("售中退款金额")
+            ) or 0,
             "pre_ship_refund_users": int(_number(row.get("发货前退款人数")) or 0),
             "pre_ship_refund_rate": _number(row.get("发货前订单退款率"), True),
-            "post_ship_refund_orders": int(_number(row.get("发货后退款订单数")) or 0),
-            "post_ship_refund_amount": _number(row.get("发货后退款金额")) or 0,
+            "post_ship_refund_orders": int(_number(
+                row.get("发货后退款订单数") or row.get("售后退款件数")
+            ) or 0),
+            "post_ship_refund_amount": _number(
+                row.get("发货后退款金额") or row.get("售后退款金额")
+            ) or 0,
             "post_ship_refund_users": int(_number(row.get("发货后退款人数")) or 0),
             "post_ship_refund_rate": _number(row.get("发货后订单退款率"), True),
         })
+    # 抖音导出偶尔会重复同一商品 ID；场次内同商品只保留一条，避免双算。
+    records = list({record["product_id"]: record for record in records}.values())
+    mappings = list({record["product_id"]: record for record in mappings}.values())
     return records, mappings
 
 
@@ -323,6 +566,28 @@ def load_live_dataset(start_date: date, end_date: date):
         if column in session_df.columns:
             session_df[column] = pd.to_datetime(session_df[column], utc=True, errors="coerce").dt.tz_convert("Asia/Shanghai")
     return session_df, pd.DataFrame(products), pd.DataFrame(metrics)
+
+
+@st.cache_data(ttl=120, show_spinner=False)
+def load_live_auxiliary(room_ids_key):
+    """读取新抖音工作簿提供的渠道和商品讲解数据。"""
+    room_ids = [str(value) for value in room_ids_key if str(value).strip()]
+    if not room_ids:
+        return pd.DataFrame(), pd.DataFrame()
+    channels, talks = [], []
+    for start in range(0, len(room_ids), 50):
+        room_batch = room_ids[start:start + 50]
+        try:
+            channels.extend(_fetch_all(
+                "live_channels", "*", lambda q, ids=room_batch: q.in_("live_room_id", ids)
+            ))
+            talks.extend(_fetch_all(
+                "live_product_talks", "*", lambda q, ids=room_batch: q.in_("live_room_id", ids)
+            ))
+        except Exception:
+            # 数据库迁移部署前保持旧直播页面可用。
+            return pd.DataFrame(), pd.DataFrame()
+    return pd.DataFrame(channels), pd.DataFrame(talks)
 
 
 @st.cache_data(ttl=120, show_spinner=False)
