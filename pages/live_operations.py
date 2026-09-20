@@ -1,5 +1,6 @@
 """新版直播经营分析：历史直播表现 × 数据罗盘履约实销。"""
 from datetime import date, timedelta
+from urllib.parse import quote
 
 import pandas as pd
 import plotly.express as px
@@ -93,7 +94,18 @@ st.markdown("""
 /* 直播经营分析设计系统：覆盖全站旧样式，统一密度与节奏。 */
 section[data-testid="stSidebar"]{display:none!important}
 [data-testid="stSidebarCollapsedControl"],[data-testid="collapsedControl"]{display:none!important}
-.main .block-container{max-width:1780px!important;padding:24px 30px 52px!important}
+.main .block-container{max-width:none!important;padding:24px 30px 52px 294px!important}
+.live-workspace-nav{position:fixed;z-index:999;inset:0 auto 0 0;width:258px;padding:22px 16px;background:linear-gradient(180deg,#061a2e 0%,#08243b 55%,#071c30 100%);border-right:1px solid rgba(89,211,239,.18);box-shadow:10px 0 30px rgba(4,22,39,.12);color:#eaf7fb}
+.live-workspace-nav__brand{padding:4px 10px 20px;border-bottom:1px solid rgba(148,204,220,.15)}
+.live-workspace-nav__eyebrow{margin-bottom:6px;color:#49d7ee;font-size:10px;font-weight:800;letter-spacing:1.5px}
+.live-workspace-nav__title{color:#fff;font-size:20px;font-weight:800;letter-spacing:.2px}.live-workspace-nav__sub{margin-top:5px;color:#8baabd;font-size:11px}
+.live-workspace-nav__back{display:flex;align-items:center;gap:8px;margin:16px 4px 20px;padding:10px 11px;border:1px solid rgba(135,202,221,.2);border-radius:8px;color:#b9d4df!important;font-size:12px;font-weight:650;text-decoration:none!important;transition:.18s ease}
+.live-workspace-nav__back:hover{border-color:rgba(75,211,235,.48);background:rgba(68,201,229,.08);color:#fff!important}
+.live-workspace-nav__label{margin:0 10px 8px;color:#6f94a7;font-size:10px;font-weight:750;letter-spacing:1px}
+.live-workspace-nav__item{position:relative;display:block;margin:4px 0;padding:12px 13px 11px 16px;border-radius:8px;color:#b8d0dc!important;text-decoration:none!important;transition:.18s ease}
+.live-workspace-nav__item:hover{background:rgba(83,206,232,.09);color:#fff!important}.live-workspace-nav__item.active{background:linear-gradient(90deg,rgba(31,193,221,.23),rgba(31,193,221,.08));color:#fff!important;box-shadow:inset 3px 0 0 #36d4eb}
+.live-workspace-nav__name{display:block;font-size:13px;font-weight:760}.live-workspace-nav__help{display:block;margin-top:4px;color:#7196a9;font-size:10px;line-height:1.45}.live-workspace-nav__item.active .live-workspace-nav__help{color:#a8d5df}
+@media(max-width:900px){.main .block-container{padding-left:24px!important}.live-workspace-nav{position:relative;inset:auto;width:auto;height:auto;margin:-10px 0 18px;border-radius:12px}.live-workspace-nav__item{display:inline-block;width:calc(50% - 6px);vertical-align:top}}
 .main div[data-testid="stVerticalBlock"]{gap:12px}
 .main div[data-testid="stHorizontalBlock"]{gap:12px}
 .main .page-hero{margin:0 0 16px!important;padding:20px 22px!important;border-radius:16px!important;box-shadow:0 6px 24px rgba(12,44,73,.055)!important}
@@ -411,41 +423,44 @@ live_sections = {
     "商品决策": "查看单款表现、实销和主播适配",
     "主播对比": "比较主播效率及同商品表现",
 }
+requested_section = st.query_params.get("live_section", "")
+if requested_section in live_sections:
+    st.session_state["live_operations_section"] = requested_section
 if st.session_state.get("live_operations_section") not in live_sections:
     st.session_state["live_operations_section"] = "决策总览"
 
-navigation_column, content_column = st.columns([0.19, 0.81], gap="large")
-with navigation_column:
-    with st.container(border=True):
-        if st.button("← 返回数据罗盘", key="back_to_data_compass", width="stretch"):
-            st.switch_page("pages/dashboard.py")
-        st.divider()
-        st.markdown('<div class="section-kicker">直播经营工作台</div>', unsafe_allow_html=True)
-        st.caption("选择一个任务进入分析")
-        for section_name, section_help in live_sections.items():
-            if st.button(
-                section_name,
-                key=f"live_section_{section_name}",
-                help=section_help,
-                type="primary" if st.session_state["live_operations_section"] == section_name else "secondary",
-                width="stretch",
-            ):
-                st.session_state["live_operations_section"] = section_name
-                st.rerun()
-
 active_section = st.session_state["live_operations_section"]
-with content_column:
-    st.markdown(
-        f'<div class="section-kicker">{active_section}</div><div class="section-help">{live_sections[active_section]}</div>',
-        unsafe_allow_html=True,
-    )
+navigation_items = "".join(
+    f'<a class="live-workspace-nav__item{" active" if section_name == active_section else ""}" '
+    f'href="?live_section={quote(section_name)}" target="_self">'
+    f'<span class="live-workspace-nav__name">{section_name}</span>'
+    f'<span class="live-workspace-nav__help">{section_help}</span></a>'
+    for section_name, section_help in live_sections.items()
+)
+st.markdown(
+    f'''<nav class="live-workspace-nav">
+        <div class="live-workspace-nav__brand">
+            <div class="live-workspace-nav__eyebrow">LIVE OPERATIONS</div>
+            <div class="live-workspace-nav__title">直播经营工作台</div>
+            <div class="live-workspace-nav__sub">从数据表现走向下一场动作</div>
+        </div>
+        <a class="live-workspace-nav__back" href="/" target="_self">←&nbsp; 返回数据罗盘</a>
+        <div class="live-workspace-nav__label">分析任务</div>
+        {navigation_items}
+    </nav>''',
+    unsafe_allow_html=True,
+)
+st.markdown(
+    f'<div class="section-kicker">{active_section}</div><div class="section-help">{live_sections[active_section]}</div>',
+    unsafe_allow_html=True,
+)
 
 hidden_section_holders = []
 
 
 def section_target(section_name):
     if active_section == section_name:
-        return content_column.container()
+        return st.container()
     holder = st.empty()
     hidden_section_holders.append(holder)
     return holder.container()
