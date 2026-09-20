@@ -134,6 +134,19 @@ style_summary = products[products["style_code"].notna()].groupby("style_code", a
 )
 style_summary = style_summary.merge(actual_by_style, on="style_code", how="left").fillna(0)
 style_summary = style_summary.merge(talk_summary, on="style_code", how="left")
+if not product_master.empty and "style_code" in product_master.columns:
+    master_meta = product_master.copy()
+    master_meta["style_code"] = master_meta["style_code"].astype(str).str.strip().str.upper()
+    if "master_category" in master_meta.columns:
+        master_meta["品类"] = master_meta["master_category"]
+    elif "product_category" in master_meta.columns:
+        master_meta["品类"] = master_meta["product_category"]
+    else:
+        master_meta["品类"] = None
+    for source, target in [("brand", "品牌"), ("year", "年份")]:
+        master_meta[target] = master_meta[source] if source in master_meta.columns else None
+    master_meta = master_meta[["style_code", "品牌", "年份", "品类"]].drop_duplicates("style_code")
+    style_summary = style_summary.merge(master_meta, on="style_code", how="left")
 talk_columns = [
     "讲解场次", "讲解区间数", "累计讲解分钟", "讲解区间支付", "讲解区间成交件数",
     "在线净变化", "平均在线变化", "在线上升场次占比", "分均在线人数",
@@ -148,7 +161,10 @@ style_summary["退款率"] = style_summary["平台退款"].div(style_summary["�
 
 metric_wide = metrics.pivot_table(index="live_room_id", columns="metric_name", values="metric_value", aggfunc="sum") if not metrics.empty else pd.DataFrame()
 
-tabs = st.tabs(["经营总览", "单场复盘", "直播间对比", "趋势分析", "完整商品分析", "商品机会", "单款历史档案"])
+tabs = st.tabs([
+    "经营总览", "单场复盘", "直播间对比", "趋势分析", "完整商品分析",
+    "前段销售排行", "商品机会", "单款历史档案",
+])
 
 with tabs[0]:
     total_ship = actual_by_style["ship_amount"].sum()
@@ -219,6 +235,109 @@ with tabs[4]:
     st.dataframe(table.rename(columns={"style_code": "货号", "ship_amount": "范围发货", "return_amount": "范围退货", "net_amount": "范围实销"}).sort_values("平台支付", ascending=False), width="stretch", hide_index=True)
 
 with tabs[5]:
+    st.subheader("开播前段商品销售排行")
+    rank_cols = st.columns([1.2, 1.2, 1.4])
+    with rank_cols[0]:
+        rank_window = st.segmented_control(
+            "统计范围", [15, 30, 60, 90], default=60,
+            format_func=lambda value: f"前{value}分钟", key="opening_sales_window",
+        )
+    with rank_cols[1]:
+        rank_by = st.selectbox(
+            "排序指标", ["前段成交金额", "前段成交件数", "成交场次率", "支付/讲解分钟", "在线上升场次占比"]
+        )
+    with rank_cols[2]:
+        minimum_room_count = st.slider("最少出现直播场次", 1, 10, 1, key="opening_min_rooms")
+
+    opening_talks = talks[talks["开播后分钟"] <= rank_window].copy() if not talks.empty else pd.DataFrame()
+    if opening_talks.empty:
+        st.warning("当前范围没有商品讲解区间数据，上传新版直播工作簿后才能生成排行。")
+    else:
+        opening_room = opening_talks.groupby(["style_code", "live_room_id"], as_index=False).agg(
+            讲解次数=("product_id", "size"), 讲解分钟=("讲解分钟", "sum"),
+            前段成交金额=("paid_amount", "sum"), 前段成交件数=("sold_units", "sum"),
+            在线净变化=("viewer_change", "sum"), 分均在线人数=("avg_online_users", "mean"),
+        )
+        opening_room["有成交"] = opening_room["前段成交件数"] > 0
+        opening_room["在线上升"] = opening_room["在线净变化"] > 0
+        opening_rank = opening_room.groupby("style_code", as_index=False).agg(
+            前段出现场次=("live_room_id", "nunique"), 前段成交场次=("有成交", "sum"),
+            前段讲解次数=("讲解次数", "sum"), 前段讲解分钟=("讲解分钟", "sum"),
+            前段成交金额=("前段成交金额", "sum"), 前段成交件数=("前段成交件数", "sum"),
+            在线净变化=("在线净变化", "sum"), 平均在线变化=("在线净变化", "mean"),
+            在线上升场次占比=("在线上升", "mean"), 分均在线人数=("分均在线人数", "mean"),
+        )
+        opening_rank["成交场次率"] = opening_rank["前段成交场次"].div(opening_rank["前段出现场次"].replace(0, pd.NA))
+        opening_rank["支付/讲解分钟"] = opening_rank["前段成交金额"].div(opening_rank["前段讲解分钟"].replace(0, pd.NA))
+        opening_rank["成交件数/讲解分钟"] = opening_rank["前段成交件数"].div(opening_rank["前段讲解分钟"].replace(0, pd.NA))
+        context_column_names = [
+            "style_code", "商品名称", "累计点击", "平台退款", "退款率",
+            "ship_amount", "return_amount", "net_amount", "品牌", "年份", "品类",
+        ]
+        context_columns = style_summary[[column for column in context_column_names if column in style_summary.columns]]
+        opening_rank = opening_rank.merge(context_columns, on="style_code", how="left")
+        dimension_cols = st.columns(3)
+        selected_brands = dimension_cols[0].multiselect(
+            "品牌", sorted(opening_rank["品牌"].dropna().astype(str).unique()), key="opening_brands"
+        ) if "品牌" in opening_rank else []
+        selected_categories = dimension_cols[1].multiselect(
+            "品类", sorted(opening_rank["品类"].dropna().astype(str).unique()), key="opening_categories"
+        ) if "品类" in opening_rank else []
+        selected_years = dimension_cols[2].multiselect(
+            "年份", sorted(opening_rank["年份"].dropna().astype(str).unique()), key="opening_years"
+        ) if "年份" in opening_rank else []
+        if selected_brands:
+            opening_rank = opening_rank[opening_rank["品牌"].astype(str).isin(selected_brands)]
+        if selected_categories:
+            opening_rank = opening_rank[opening_rank["品类"].astype(str).isin(selected_categories)]
+        if selected_years:
+            opening_rank = opening_rank[opening_rank["年份"].astype(str).isin(selected_years)]
+        opening_rank = opening_rank[opening_rank["前段出现场次"] >= minimum_room_count]
+        opening_rank = opening_rank.sort_values(rank_by, ascending=False).reset_index(drop=True)
+        opening_rank.insert(0, "排名", opening_rank.index + 1)
+
+        total_opening_pay = opening_rank["前段成交金额"].sum()
+        total_opening_units = opening_rank["前段成交件数"].sum()
+        top_ten_share = opening_rank.head(10)["前段成交金额"].sum() / total_opening_pay if total_opening_pay else 0
+        total_talk_minutes = opening_rank["前段讲解分钟"].sum()
+        summary_cards = st.columns(5)
+        summary_cards[0].metric(f"前{rank_window}分钟成交金额", f"¥{total_opening_pay:,.0f}")
+        summary_cards[1].metric("成交件数", f"{total_opening_units:,.0f}")
+        summary_cards[2].metric("有成交商品", f"{(opening_rank['前段成交件数'] > 0).sum():,}")
+        summary_cards[3].metric("前10商品金额占比", f"{top_ten_share:.1%}")
+        summary_cards[4].metric("平均分钟产出", f"¥{total_opening_pay / total_talk_minutes:,.0f}" if total_talk_minutes else "—")
+
+        st.caption(
+            f"“前{rank_window}分钟”按讲解开始时间归入；跨越边界的讲解区间整段计入。"
+            "累计点击、平台退款为整场指标；范围发货、退货和实销为所选日期范围履约数据。"
+        )
+        display_rank = opening_rank.rename(columns={
+            "style_code": "货号", "累计点击": "整场累计点击", "平台退款": "整场平台退款",
+            "退款率": "整场退款率", "ship_amount": "范围发货", "return_amount": "范围退货",
+            "net_amount": "范围实销",
+        })
+        st.dataframe(display_rank, width="stretch", hide_index=True)
+        st.download_button(
+            f"下载前{rank_window}分钟商品销售排行",
+            display_rank.to_csv(index=False).encode("utf-8-sig"),
+            f"直播前{rank_window}分钟商品销售排行_{start_date}_{end_date}.csv",
+            "text/csv", key="download_opening_sales_rank",
+        )
+
+        if opening_rank.empty:
+            st.info("当前筛选条件下没有符合要求的商品。")
+        else:
+            evidence_style = st.selectbox(
+                "查看货号逐场证据", opening_rank["style_code"].astype(str).tolist(),
+                format_func=lambda code: f"{code}｜{opening_rank.loc[opening_rank['style_code'].astype(str) == code, '商品名称'].iloc[0]}",
+                key="opening_evidence_style",
+            )
+            evidence = opening_room[opening_room["style_code"].astype(str) == evidence_style].merge(
+                sessions[["live_room_id", "直播日期", "shop_name", "anchor_name"]], on="live_room_id", how="left"
+            )
+            st.dataframe(evidence.sort_values("直播日期", ascending=False), width="stretch", hide_index=True)
+
+with tabs[6]:
     opportunity = st.segmented_control(
         "机会类型",
         ["开播阶段", "讲解高效", "在线提升", "高转化", "高引流", "稳定复销", "高点击低成交", "退款风险"],
@@ -258,7 +377,7 @@ with tabs[5]:
         st.warning("当前范围没有新版商品讲解区间数据，上传新版直播工作簿后才能计算。")
     st.dataframe(candidates.rename(columns={"style_code": "货号", "net_amount": "范围实销"}), width="stretch", hide_index=True)
 
-with tabs[6]:
+with tabs[7]:
     options = style_summary.sort_values("平台支付", ascending=False)["style_code"].astype(str).tolist()
     selected_style = st.selectbox("选择货号", options)
     item = products[products["style_code"].astype(str) == selected_style].copy()

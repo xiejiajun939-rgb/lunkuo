@@ -1,6 +1,7 @@
 """本地回归：验证抖音店铺后台直播工作簿的关键口径。"""
 
 from pathlib import Path
+from datetime import datetime
 
 from core.live_analytics import parse_douyin_live_workbook
 
@@ -20,6 +21,10 @@ def main():
         row["module"] for row in parsed["metrics"] if row["metric_name"] == "新增粉丝数"
     }
     products = parsed["products"]
+    session_start_epoch = datetime.fromisoformat(session["start_time"]).timestamp()
+    talk_start_minutes = [
+        (row["talk_start_epoch"] - session_start_epoch) / 60 for row in parsed["talks"]
+    ]
 
     assert session["live_room_id"] == "7686655427714616107"
     assert session["anchor_name"] == "轮廓官方旗舰店"
@@ -33,6 +38,8 @@ def main():
     assert len(parsed["channels"]) == 13
     assert len(parsed["talks"]) == 10
     assert fan_growth_modules == {"互动", "人群"}
+    assert all(value >= 0 for value in talk_start_minutes)
+    assert any(value <= 60 for value in talk_start_minutes)
     assert all(row["style_code"] for row in products)
     print(
         "PASS",
