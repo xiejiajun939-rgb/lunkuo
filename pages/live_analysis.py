@@ -6,7 +6,14 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
-from core.live_analytics import load_live_actuals, load_live_auxiliary, load_live_dataset
+from core.live_analytics import load_live_actuals, load_live_dataset
+
+try:
+    # Streamlit Cloud 热更新时，页面可能短暂引用尚未重载的旧模块。
+    from core.live_analytics import load_live_auxiliary
+except ImportError:
+    def load_live_auxiliary(_room_ids_key):
+        return pd.DataFrame(), pd.DataFrame()
 from core.db import load_product_master
 from core.theme import page_header
 from core.utils import clear_cache_on_page_change
