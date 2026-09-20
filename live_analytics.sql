@@ -157,6 +157,38 @@ grant usage, select on sequence public.live_products_id_seq to service_role;
 grant usage, select on sequence public.live_channels_id_seq to service_role;
 grant usage, select on sequence public.live_product_talks_id_seq to service_role;
 
+-- 当前网站使用自建账号登录，Supabase 请求身份仍为 anon。
+-- 页面权限由应用登录层控制，因此直播表需允许 anon 读写，同时保留 RLS。
+grant select, insert, update, delete on table public.live_sessions to anon;
+grant select, insert, update, delete on table public.live_metrics to anon;
+grant select, insert, update, delete on table public.live_product_mappings to anon;
+grant select, insert, update, delete on table public.live_products to anon;
+grant select, insert, update, delete on table public.live_channels to anon;
+grant select, insert, update, delete on table public.live_product_talks to anon;
+grant usage, select on sequence public.live_metrics_id_seq to anon;
+grant usage, select on sequence public.live_products_id_seq to anon;
+grant usage, select on sequence public.live_channels_id_seq to anon;
+grant usage, select on sequence public.live_product_talks_id_seq to anon;
+
+drop policy if exists live_sessions_app_access on public.live_sessions;
+create policy live_sessions_app_access on public.live_sessions for all to anon
+using (true) with check (true);
+drop policy if exists live_metrics_app_access on public.live_metrics;
+create policy live_metrics_app_access on public.live_metrics for all to anon
+using (true) with check (true);
+drop policy if exists live_product_mappings_app_access on public.live_product_mappings;
+create policy live_product_mappings_app_access on public.live_product_mappings for all to anon
+using (true) with check (true);
+drop policy if exists live_products_app_access on public.live_products;
+create policy live_products_app_access on public.live_products for all to anon
+using (true) with check (true);
+drop policy if exists live_channels_app_access on public.live_channels;
+create policy live_channels_app_access on public.live_channels for all to anon
+using (true) with check (true);
+drop policy if exists live_product_talks_app_access on public.live_product_talks;
+create policy live_product_talks_app_access on public.live_product_talks for all to anon
+using (true) with check (true);
+
 comment on table public.live_sessions is '直播场次，一场直播一行';
 comment on table public.live_metrics is '直播间整体指标，一场直播每项指标一行';
 comment on table public.live_products is '直播商品表现，一场直播每个商品一行';
