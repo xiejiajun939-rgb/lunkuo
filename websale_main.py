@@ -7,13 +7,17 @@
 
 import streamlit as st
 import pandas as pd
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime
 import io
 import hashlib
+import hmac
+import base64
+import json
 import math
 import time
 import re
 import numpy as np
+import extra_streamlit_components as stx
 from supabase import create_client
 import plotly.express as px
 import plotly.graph_objects as go
@@ -46,6 +50,10 @@ st.set_page_config(
         'About': None
     }
 )
+
+AUTH_COOKIE_NAME = "lunkuo_auth"
+AUTH_COOKIE_DAYS = 7
+cookie_manager = stx.CookieManager(key="auth_cookie_manager")
 
 # ========== 自定义CSS ==========
 st.markdown("""
@@ -185,6 +193,68 @@ def get_all_users():
             users[username] = info
     return users
 
+
+def _auth_token_signature(username, expires_at, password):
+    key = hashlib.sha256(f"lunkuo-auth-v1|{username}|{password}".encode("utf-8")).digest()
+    message = f"{username}|{expires_at}".encode("utf-8")
+    return hmac.new(key, message, hashlib.sha256).hexdigest()
+
+
+def create_auth_token(username, password):
+    expires_at = int(time.time()) + AUTH_COOKIE_DAYS * 24 * 60 * 60
+    payload = {
+        "u": username,
+        "exp": expires_at,
+        "sig": _auth_token_signature(username, expires_at, password),
+    }
+    encoded = base64.urlsafe_b64encode(
+        json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    ).decode("ascii")
+    return encoded.rstrip("=")
+
+
+def verify_auth_token(token):
+    if not token:
+        return None
+    try:
+        padded = token + "=" * (-len(token) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8"))
+        username = str(payload["u"])
+        expires_at = int(payload["exp"])
+        if expires_at <= int(time.time()):
+            return None
+        users = get_all_users()
+        user = users.get(username)
+        if not user:
+            return None
+        expected = _auth_token_signature(username, expires_at, user["password"])
+        if not hmac.compare_digest(str(payload.get("sig", "")), expected):
+            return None
+        return username, user
+    except (ValueError, TypeError, KeyError, json.JSONDecodeError):
+        return None
+
+
+def restore_login_from_cookie():
+    restored = verify_auth_token(cookie_manager.get(AUTH_COOKIE_NAME))
+    if not restored:
+        return False
+    username, user = restored
+    st.session_state.authenticated = True
+    st.session_state.username = username
+    st.session_state.role = user["role"]
+    st.session_state.table_suffix = "_all"
+    return True
+
+
+def clear_login_state():
+    if cookie_manager.get(AUTH_COOKIE_NAME):
+        cookie_manager.delete(AUTH_COOKIE_NAME, key="auth_cookie_delete")
+        st.session_state._skip_cookie_restore = True
+    st.session_state.authenticated = False
+    for key in ["username", "role", "table_suffix"]:
+        st.session_state.pop(key, None)
+
 def login():
     st.markdown("""
     <style>
@@ -199,6 +269,7 @@ def login():
     with st.form("login_form"):
         username = st.text_input("用户名")
         password = st.text_input("密码", type="password")
+        keep_login = st.checkbox("7天内保持登录", value=True)
         submitted = st.form_submit_button("登录工作台", type="primary")
         if submitted:
             users = get_all_users()
@@ -208,6 +279,19 @@ def login():
                 st.session_state.role = users[username]["role"]
                 # 系统现在只有一个统一数据源
                 st.session_state.table_suffix = "_all"
+                st.session_state.pop("_skip_cookie_restore", None)
+                if keep_login:
+                    cookie_manager.set(
+                        AUTH_COOKIE_NAME,
+                        create_auth_token(username, users[username]["password"]),
+                        key="auth_cookie_set",
+                        path="/",
+                        expires_at=datetime.now() + timedelta(days=AUTH_COOKIE_DAYS),
+                        secure=True,
+                        same_site="strict",
+                    )
+                elif cookie_manager.get(AUTH_COOKIE_NAME):
+                    cookie_manager.delete(AUTH_COOKIE_NAME, key="auth_cookie_forget")
                 st.cache_data.clear()
                 st.rerun()
             else:
@@ -218,6 +302,11 @@ if "sub_users" not in st.session_state:
     st.session_state.sub_users = load_sub_accounts_from_db()
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
+if st.session_state.get("_skip_cookie_restore"):
+    if not cookie_manager.get(AUTH_COOKIE_NAME):
+        st.session_state.pop("_skip_cookie_restore", None)
+elif not st.session_state.authenticated:
+    restore_login_from_cookie()
 if not st.session_state.authenticated:
     login()
     st.stop()
@@ -734,11 +823,9 @@ with st.sidebar:
     if True:
         # 管理功能已迁移到系统设置，侧栏仅保留退出登录
         if st.button("🚪 退出登录", key="logout_final"):
-            st.session_state.authenticated = False
-            for key in ["username", "role", "table_suffix"]:
-                if key in st.session_state:
-                    del st.session_state[key]
-            st.rerun()
+            clear_login_state()
+            st.info("正在安全退出……")
+            st.stop()
     else:
         # 管理员完整侧边栏
         st.sidebar.markdown("---")
@@ -926,11 +1013,9 @@ with st.sidebar:
 
         st.markdown("---")
         if st.button("🚪 退出登录", key="logout_admin"):
-            st.session_state.authenticated = False
-            for key in ["username", "role", "table_suffix"]:
-                if key in st.session_state:
-                    del st.session_state[key]
-            st.rerun()
+            clear_login_state()
+            st.info("正在安全退出……")
+            st.stop()
 
 # ========== 主内容区（根路径欢迎信息） ==========
 if False:  # 主页内容由 pages/home.py 负责

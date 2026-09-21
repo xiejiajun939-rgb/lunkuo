@@ -1,6 +1,5 @@
 """新版直播经营分析：历史直播表现 × 数据罗盘履约实销。"""
 from datetime import date, timedelta
-from urllib.parse import quote
 
 import pandas as pd
 import plotly.express as px
@@ -106,6 +105,10 @@ section[data-testid="stSidebar"] [data-testid="stSidebarNav"]{display:none!impor
 .live-workspace-nav__item{position:relative;display:block;margin:4px 0;padding:12px 13px 11px 16px;border-radius:8px;color:#b8d0dc!important;text-decoration:none!important;transition:.18s ease}
 .live-workspace-nav__item:hover{background:rgba(83,206,232,.09);color:#fff!important}.live-workspace-nav__item.active{background:linear-gradient(90deg,rgba(31,193,221,.23),rgba(31,193,221,.08));color:#fff!important;box-shadow:inset 3px 0 0 #36d4eb}
 .live-workspace-nav__name{display:block;font-size:13px;font-weight:760}.live-workspace-nav__help{display:block;margin-top:4px;color:#7196a9;font-size:10px;line-height:1.45}.live-workspace-nav__item.active .live-workspace-nav__help{color:#a8d5df}
+section[data-testid="stSidebar"] div[data-testid="stButton"] button{min-height:40px!important;border:1px solid rgba(135,202,221,.20)!important;border-radius:8px!important;background:rgba(7,31,51,.55)!important;color:#c4dbe5!important;box-shadow:none!important}
+section[data-testid="stSidebar"] div[data-testid="stButton"] button:hover{border-color:rgba(75,211,235,.50)!important;background:rgba(33,178,207,.13)!important;color:#fff!important}
+section[data-testid="stSidebar"] div[data-testid="stButton"] button[kind="primary"]{border-color:rgba(54,212,235,.48)!important;background:linear-gradient(90deg,rgba(31,193,221,.28),rgba(31,193,221,.12))!important;color:#fff!important;box-shadow:inset 3px 0 0 #36d4eb!important}
+section[data-testid="stSidebar"] div[data-testid="stButton"] button p{color:inherit!important;font-weight:700!important}
 @media(max-width:900px){.main .block-container{padding:18px 18px 40px!important}}
 .main div[data-testid="stVerticalBlock"]{gap:12px}
 .main div[data-testid="stHorizontalBlock"]{gap:12px}
@@ -424,20 +427,10 @@ live_sections = {
     "商品决策": "查看单款表现、实销和主播适配",
     "主播对比": "比较主播效率及同商品表现",
 }
-requested_section = st.query_params.get("live_section", "")
-if requested_section in live_sections:
-    st.session_state["live_operations_section"] = requested_section
 if st.session_state.get("live_operations_section") not in live_sections:
     st.session_state["live_operations_section"] = "决策总览"
 
 active_section = st.session_state["live_operations_section"]
-navigation_items = "".join(
-    f'<a class="live-workspace-nav__item{" active" if section_name == active_section else ""}" '
-    f'href="?live_section={quote(section_name)}" target="_self">'
-    f'<span class="live-workspace-nav__name">{section_name}</span>'
-    f'<span class="live-workspace-nav__help">{section_help}</span></a>'
-    for section_name, section_help in live_sections.items()
-)
 with st.sidebar:
     st.markdown(
         f'''<nav class="live-workspace-nav">
@@ -446,12 +439,22 @@ with st.sidebar:
                 <div class="live-workspace-nav__title">直播经营工作台</div>
                 <div class="live-workspace-nav__sub">从数据表现走向下一场动作</div>
             </div>
-            <a class="live-workspace-nav__back" href="/" target="_self">←&nbsp; 返回数据罗盘</a>
-            <div class="live-workspace-nav__label">分析任务</div>
-            {navigation_items}
         </nav>''',
         unsafe_allow_html=True,
     )
+    if st.button("← 返回数据罗盘", key="back_to_data_compass", width="stretch"):
+        st.switch_page("pages/dashboard.py")
+    st.markdown('<div class="live-workspace-nav__label">分析任务</div>', unsafe_allow_html=True)
+    for section_name, section_help in live_sections.items():
+        if st.button(
+            section_name,
+            key=f"live_section_{section_name}",
+            help=section_help,
+            type="primary" if section_name == active_section else "secondary",
+            width="stretch",
+        ):
+            st.session_state["live_operations_section"] = section_name
+            st.rerun()
 st.markdown(
     f'<div class="section-kicker">{active_section}</div><div class="section-help">{live_sections[active_section]}</div>',
     unsafe_allow_html=True,
