@@ -48,6 +48,12 @@ def _normalize_upload(df):
         "新人礼金": "has_newbie_coupon", "是否新人礼金": "has_newbie_coupon",
     }
     result = df.rename(columns={c: aliases.get(str(c).strip(), str(c).strip()) for c in df.columns}).copy()
+    # 记录源文件真正提供的字段。批量导入采用增量更新，不能把缺失列补成
+    # 空值后覆盖商品库中已经维护好的图片、品类和标签。
+    provided_fields = {
+        field for field in ["launch_date", "image_url", "category", "tags", "has_newbie_coupon"]
+        if field in result.columns
+    }
     if "style_code" not in result.columns:
         raise ValueError("文件中缺少货号列（style_code／货号／商品货号／款号）。")
     for col in ["image_url", "category", "launch_date"]:
@@ -67,10 +73,11 @@ def _normalize_upload(df):
     result["image_url"] = result["image_url"].fillna("").astype(str).str.strip()
     result["category"] = result["category"].fillna("").astype(str).str.strip()
     result["launch_date"] = pd.to_datetime(result["launch_date"], errors="coerce").dt.date
+    result.attrs["provided_fields"] = provided_fields
     return result
 
 
-def _upsert_records(records):
+def _upsert_records(records, provided_fields=None):
     now = datetime.now(timezone.utc).isoformat()
     existing = []
     incoming = []
@@ -78,18 +85,25 @@ def _upsert_records(records):
         style_code = str(record.get("style_code", "")).strip().upper()
         if not style_code:
             continue
-        payload = {
-            "style_code": style_code,
-            "image_url": str(record.get("image_url") or "").strip() or None,
-            "category": str(record.get("category") or "").strip() or None,
-            "launch_date": (
-                pd.to_datetime(record.get("launch_date"), errors="coerce").date().isoformat()
-                if pd.notna(pd.to_datetime(record.get("launch_date"), errors="coerce"))
-                else None
-            ),
-            "tags": normalize_product_tags(record.get("tags")),
-            "updated_at": now,
-        }
+        payload = {"style_code": style_code, "updated_at": now}
+        editable_fields = {"image_url", "category", "launch_date", "tags"}
+        fields_to_write = editable_fields if provided_fields is None else editable_fields & set(provided_fields)
+        if "image_url" in fields_to_write:
+            value = str(record.get("image_url") or "").strip()
+            if value:
+                payload["image_url"] = value
+        if "category" in fields_to_write:
+            value = str(record.get("category") or "").strip()
+            if value:
+                payload["category"] = value
+        if "launch_date" in fields_to_write:
+            value = pd.to_datetime(record.get("launch_date"), errors="coerce")
+            if pd.notna(value):
+                payload["launch_date"] = value.date().isoformat()
+        if "tags" in fields_to_write:
+            value = normalize_product_tags(record.get("tags"))
+            if value:
+                payload["tags"] = value
         if pd.notna(record.get("id")):
             payload["id"] = int(record["id"])
             existing.append(payload)
@@ -416,7 +430,10 @@ with tab_upload:
             st.info(f"识别到 {len(normalized_upload):,} 个有效货号。")
             st.dataframe(normalized_upload.head(20), width="stretch", hide_index=True)
             if st.button("📤 确认上传并更新商品库", type="primary"):
-                count = _upsert_records(normalized_upload.to_dict("records"))
+                count = _upsert_records(
+                    normalized_upload.to_dict("records"),
+                    provided_fields=normalized_upload.attrs.get("provided_fields", set()),
+                )
                 st.cache_data.clear()
                 st.success(f"上传完成，共处理 {count} 条商品信息。")
                 st.rerun()

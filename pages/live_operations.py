@@ -90,7 +90,9 @@ def localize_table(frame: pd.DataFrame) -> pd.DataFrame:
             continue
         numeric = pd.to_numeric(display[column], errors="coerce")
         if numeric.notna().any():
-            display[column] = numeric.map(lambda value: "—" if pd.isna(value) else f"{value:.2%}")
+            # 保持数值类型，交给表格显示层格式化；否则前端会按百分比文本
+            # 的首字符排序，例如错误地把 9% 排在 12% 前面。
+            display[column] = numeric
     return display
 
 
@@ -99,6 +101,10 @@ def show_table(frame: pd.DataFrame) -> None:
     column_config = {}
     if "商品图片" in display.columns:
         column_config["商品图片"] = st.column_config.ImageColumn("商品图片", width="small")
+    for column in display.columns:
+        if "率" in str(column) or "占比" in str(column):
+            if pd.api.types.is_numeric_dtype(display[column]):
+                column_config[column] = st.column_config.NumberColumn(column, format="percent")
     st.dataframe(display, width="stretch", hide_index=True, column_config=column_config)
 
 
@@ -282,9 +288,20 @@ if not actuals.empty and "style_code" in actuals:
     else:
         actual_scope = "店铺＋货号（无法可靠区分主播）"
     actuals["style_code"] = actuals["style_code"].astype(str).str.strip().str.upper()
-    actual_by_style = actuals.groupby("style_code", as_index=False).agg(
-        ship_amount=("ship_amount", "sum"), return_amount=("return_amount", "sum"), net_amount=("net_amount", "sum")
-    )
+    aggregations = {
+        "ship_amount": ("ship_amount", "sum"),
+        "return_amount": ("return_amount", "sum"),
+        "net_amount": ("net_amount", "sum"),
+    }
+    if "brand" in actuals.columns:
+        aggregations["销售品牌"] = (
+            "brand",
+            lambda values: next(
+                (str(value).strip() for value in values if pd.notna(value) and str(value).strip()),
+                None,
+            ),
+        )
+    actual_by_style = actuals.groupby("style_code", as_index=False).agg(**aggregations)
 
 style_summary = products[products["style_code"].notna()].groupby("style_code", as_index=False).agg(
     商品名称=("product_name", "first"), 商品图片=("product_image_url", "first"),
@@ -298,20 +315,47 @@ style_summary = style_summary.merge(talk_summary, on="style_code", how="left")
 if not product_master.empty and "style_code" in product_master.columns:
     master_meta = product_master.copy()
     master_meta["style_code"] = master_meta["style_code"].astype(str).str.strip().str.upper()
-    if "master_category" in master_meta.columns:
+    if "category" in master_meta.columns:
+        master_meta["品类"] = master_meta["category"]
+    elif "master_category" in master_meta.columns:
         master_meta["品类"] = master_meta["master_category"]
     elif "product_category" in master_meta.columns:
         master_meta["品类"] = master_meta["product_category"]
     else:
         master_meta["品类"] = None
-    for source, target in [("brand", "品牌"), ("year", "年份")]:
-        master_meta[target] = master_meta[source] if source in master_meta.columns else None
+    brand_source = master_meta.get("brand", pd.Series(index=master_meta.index, dtype="object"))
+    year_source = master_meta.get(
+        "product_year",
+        master_meta.get("year", pd.Series(index=master_meta.index, dtype="object")),
+    )
+    master_meta["品牌"] = brand_source
+    master_meta["年份"] = year_source
     master_meta["资料库图片"] = master_meta["image_url"] if "image_url" in master_meta.columns else None
     master_meta["上新日期"] = master_meta["launch_date"] if "launch_date" in master_meta.columns else None
     master_meta = master_meta[["style_code", "品牌", "年份", "品类", "上新日期", "资料库图片"]].drop_duplicates("style_code")
     style_summary = style_summary.merge(master_meta, on="style_code", how="left")
+    parsed_brand = style_summary["style_code"].astype(str).str.slice(0, 1)
+    parsed_year = style_summary["style_code"].astype(str).str.slice(1, 3)
+    master_brand = style_summary["品牌"].replace([0, "0", "", "nan", "None"], pd.NA)
+    sales_brand = style_summary.get("销售品牌", pd.Series(index=style_summary.index, dtype="object")).replace(
+        [0, "0", "", "nan", "None"], pd.NA
+    )
+    style_summary["品牌"] = master_brand.fillna(sales_brand).fillna(parsed_brand)
+    style_summary["年份"] = style_summary["年份"].replace(
+        [0, "0", "", "nan", "None"], pd.NA
+    ).fillna(parsed_year)
     style_summary["商品图片"] = style_summary["商品图片"].replace([0, "0", ""], pd.NA).fillna(style_summary["资料库图片"])
     style_summary = style_summary.drop(columns="资料库图片")
+else:
+    parsed_brand = style_summary["style_code"].astype(str).str.slice(0, 1)
+    parsed_year = style_summary["style_code"].astype(str).str.slice(1, 3)
+    sales_brand = style_summary.get("销售品牌", pd.Series(index=style_summary.index, dtype="object")).replace(
+        [0, "0", "", "nan", "None"], pd.NA
+    )
+    style_summary["品牌"] = sales_brand.fillna(parsed_brand)
+    style_summary["年份"] = parsed_year
+    style_summary["品类"] = None
+style_summary = style_summary.drop(columns="销售品牌", errors="ignore")
 style_image_lookup = (
     style_summary.assign(style_code=style_summary["style_code"].astype(str).str.strip().str.upper())
     .set_index("style_code")["商品图片"].dropna().to_dict()
