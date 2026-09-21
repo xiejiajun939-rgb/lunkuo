@@ -949,8 +949,20 @@ with decision_tab:
     ), width="stretch")
 
 with product_tab:
-    search = st.text_input("搜索商品名称或货号")
+    product_filter_cols = st.columns([2, 1])
+    with product_filter_cols[0]:
+        search = st.text_input("搜索商品名称或货号")
+    with product_filter_cols[1]:
+        product_min_sessions = st.number_input(
+            "最少上播场次",
+            min_value=1,
+            max_value=max(1, int(safe_number(style_summary["上播场次"].max(), 1))),
+            value=1,
+            step=1,
+            key="product_decision_min_sessions",
+        )
     table = style_summary.copy()
+    table = table[table["上播场次"] >= product_min_sessions]
     if search:
         key = search.strip().upper()
         table = table[table["style_code"].astype(str).str.upper().str.contains(key, regex=False) | table["商品名称"].astype(str).str.upper().str.contains(key, regex=False)]
