@@ -53,7 +53,7 @@ def localize_table(frame: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame()
     display = frame.copy()
     display = display.drop(
-        columns=["id", "live_room_id", "imported_at", "created_at", "updated_at"],
+        columns=["id", "live_room_id", "product_id", "imported_at", "created_at", "updated_at"],
         errors="ignore",
     )
     if "talk_start_time" not in display.columns and "talk_start_epoch" in display.columns:
