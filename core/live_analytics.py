@@ -129,6 +129,11 @@ def _duration_seconds(value):
     if isinstance(value, pd.Timedelta):
         return int(value.total_seconds())
     text = str(value).strip()
+    if re.fullmatch(r"\d+(?::\d{1,2}){1,2}", text):
+        parts = [int(part) for part in text.split(":")]
+        if len(parts) == 2:
+            return parts[0] * 60 + parts[1]
+        return parts[0] * 3600 + parts[1] * 60 + parts[2]
     match = re.search(r"(?:(\d+)小时)?(?:(\d+)分)?(?:(\d+)秒)?", text)
     if not match or not any(match.groups()):
         return 0
@@ -265,14 +270,15 @@ def parse_douyin_live_workbook(source):
         name = str(row.get("指标") or "").strip()
         if not name:
             continue
+        is_duration_metric = name == "人均观看时长"
         metric_records.append({
             "live_room_id": room_id,
             "module": str(row.get("分组") or "核心指标").strip() or "核心指标",
             "metric_name": name,
-            "metric_value": _number(row.get("本期值")),
+            "metric_value": _duration_seconds(row.get("本期值")) if is_duration_metric else _number(row.get("本期值")),
             "raw_value": _text_or_none(row.get("本期值")),
-            "unit": None,
-            "benchmark_value": _number(row.get("上期值")),
+            "unit": "秒" if is_duration_metric else None,
+            "benchmark_value": _duration_seconds(row.get("上期值")) if is_duration_metric else _number(row.get("上期值")),
             "benchmark_raw": _text_or_none(row.get("上期值")),
             "comparison_display": _text_or_none(row.get("较上期")),
         })

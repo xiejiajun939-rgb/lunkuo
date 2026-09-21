@@ -7,6 +7,7 @@ import streamlit as st
 
 from core.db import load_product_master
 from core.live_analytics import (
+    _duration_seconds,
     load_live_actuals,
     load_live_auxiliary,
     load_live_room_data,
@@ -450,6 +451,15 @@ def classify_repeat_sales(row):
 
 repeat_classification = style_summary.apply(classify_repeat_sales, axis=1, result_type="expand")
 style_summary[["复销分级", "复销判断依据"]] = repeat_classification
+
+if not metrics.empty:
+    duration_mask = metrics["metric_name"].astype(str).eq("人均观看时长")
+    duration_numeric = pd.to_numeric(metrics.loc[duration_mask, "metric_value"], errors="coerce")
+    needs_duration_recovery = duration_numeric.isna() | duration_numeric.eq(0)
+    recovery_index = duration_numeric.index[needs_duration_recovery]
+    metrics.loc[recovery_index, "metric_value"] = metrics.loc[recovery_index, "raw_value"].map(
+        _duration_seconds
+    )
 
 metric_wide = metrics.pivot_table(
     index="live_room_id", columns="metric_name", values="metric_value", aggfunc="max"
