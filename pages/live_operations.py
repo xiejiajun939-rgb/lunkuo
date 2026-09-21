@@ -521,7 +521,7 @@ session_kpis["每小时支付"] = session_kpis["商品支付金额"].div(session
 session_kpis["投放消耗观察值"] = session_kpis[[
     "投放消耗（店铺绑定）", "投放消耗（店铺被投）"
 ]].max(axis=1)
-session_kpis["支付/投放消耗"] = session_kpis["商品支付金额"].div(
+session_kpis["ROI"] = session_kpis["商品支付金额"].div(
     session_kpis["投放消耗观察值"].replace(0, pd.NA)
 )
 
@@ -536,6 +536,12 @@ if st.session_state.get("live_operations_section") not in live_sections:
     st.session_state["live_operations_section"] = "决策总览"
 
 active_section = st.session_state["live_operations_section"]
+
+
+def set_live_operations_section(section_name: str) -> None:
+    st.session_state["live_operations_section"] = section_name
+
+
 with st.sidebar:
     st.markdown(
         f'''<nav class="live-workspace-nav">
@@ -551,15 +557,15 @@ with st.sidebar:
         st.switch_page("pages/dashboard.py")
     st.markdown('<div class="live-workspace-nav__label">分析任务</div>', unsafe_allow_html=True)
     for section_name, section_help in live_sections.items():
-        if st.button(
+        st.button(
             section_name,
             key=f"live_section_{section_name}",
             help=section_help,
             type="primary" if section_name == active_section else "secondary",
             width="stretch",
-        ):
-            st.session_state["live_operations_section"] = section_name
-            st.rerun()
+            on_click=set_live_operations_section,
+            args=(section_name,),
+        )
 st.markdown(
     f'<div class="section-kicker">{active_section}</div><div class="section-help">{live_sections[active_section]}</div>',
     unsafe_allow_html=True,
@@ -609,8 +615,8 @@ with decision_tab:
     funnel_cards[2].metric("商品点击率", f"{overall_click_rate:.2%}")
     funnel_cards[3].metric("点击成交率", f"{overall_click_conversion:.2%}")
     funnel_cards[4].metric("关注转化率", f"{overall_follow_rate:.2%}")
-    funnel_cards[5].metric("支付/投放消耗", f"{overall_spend_output:.2f}" if overall_spend_output is not None else "—")
-    st.caption("支付/投放消耗为观察指标：投放消耗取“店铺绑定”和“店铺被投”两者较大值，不能直接作为财务ROI。")
+    funnel_cards[5].metric("ROI", f"{overall_spend_output:.2f}" if overall_spend_output is not None else "—")
+    st.caption("ROI为经营观察指标：平台支付金额 ÷ 投放消耗观察值；投放消耗取“店铺绑定”和“店铺被投”两者较大值。")
 
     valid_rooms = session_kpis[session_kpis["直播间观看人数"] > 0].copy()
     non_product_rules = [
@@ -621,7 +627,7 @@ with decision_tab:
         ("粉丝沉淀偏弱", "关注转化率", "新增粉丝数", "增加明确关注理由和粉丝权益表达", False),
         ("互动偏弱", "互动率", "直播间观看人数", "增加互动问题、场景引导和节奏节点", False),
         ("新客成交偏弱", "首购率", "直播间成交人数", "检查新客利益机制和首次购买信任表达", False),
-        ("付费流量效率偏弱", "支付/投放消耗", "投放消耗观察值", "复盘投放流量进入后的停留、点击和成交承接", True),
+        ("付费流量效率偏弱", "ROI", "投放消耗观察值", "复盘投放流量进入后的停留、点击和成交承接", True),
     ]
     for rule_name, metric_column, sample_column, action, needs_spend in non_product_rules:
         comparable = valid_rooms[valid_rooms[sample_column] > 0].copy()
@@ -740,7 +746,7 @@ with decision_tab:
                 "曝光进入率", "人均观看时长", "平均在线人数", "最高在线人数", "自然流量观看人数",
                 "付费流量观看人数", "互动率", "商品点击率", "点击成交率", "新增粉丝数", "关注转化率",
                 "首购率", "粉丝成交人数占比", "粉丝用户支付金额占比",
-                "千次观看用户支付金额", "投放消耗观察值", "支付/投放消耗",
+                "千次观看用户支付金额", "投放消耗观察值", "ROI",
             ]].sort_values("start_time", ascending=False))
 
     st.markdown("#### 下一场建议优先测试")
@@ -804,8 +810,8 @@ with review_tab:
     flow_cards[2].metric("商品点击率", f"{safe_number(room_kpi.get('商品点击率')):.2%}")
     flow_cards[3].metric("点击成交率", f"{safe_number(room_kpi.get('点击成交率')):.2%}")
     flow_cards[4].metric("关注转化率", f"{safe_number(room_kpi.get('关注转化率')):.2%}")
-    room_spend_output = room_kpi.get("支付/投放消耗", pd.NA)
-    flow_cards[5].metric("支付/投放消耗", f"{safe_number(room_spend_output):.2f}" if pd.notna(room_spend_output) else "—")
+    room_spend_output = room_kpi.get("ROI", pd.NA)
+    flow_cards[5].metric("ROI", f"{safe_number(room_spend_output):.2f}" if pd.notna(room_spend_output) else "—")
     audience_cards = st.columns(6)
     audience_cards[0].metric("自然／付费观看", f"{safe_number(room_kpi.get('自然流量观看人数')):,.0f}／{safe_number(room_kpi.get('付费流量观看人数')):,.0f}")
     audience_cards[1].metric("新增粉丝", f"{safe_number(room_kpi.get('新增粉丝数')):,.0f}")
@@ -817,7 +823,7 @@ with review_tab:
     room_actions = []
     room_benchmarks = {
         column: valid_rooms.loc[valid_rooms[column].notna(), column].median()
-        for column in ["曝光进入率", "人均观看时长", "互动率", "商品点击率", "点击成交率", "关注转化率", "首购率", "支付/投放消耗"]
+        for column in ["曝光进入率", "人均观看时长", "互动率", "商品点击率", "点击成交率", "关注转化率", "首购率", "ROI"]
     }
     room_non_product_rules = [
         ("曝光进入率", "曝光承接", "优化封面、标题和开场进房承接"),
@@ -827,7 +833,7 @@ with review_tab:
         ("点击成交率", "成交承接", "检查价格机制、信任表达和逼单节奏"),
         ("关注转化率", "粉丝沉淀", "增加明确关注理由和粉丝权益表达"),
         ("首购率", "新客成交", "检查新客利益机制和首次购买信任表达"),
-        ("支付/投放消耗", "付费流量效率", "复盘投放流量进入后的停留和成交承接"),
+        ("ROI", "付费流量效率", "复盘投放流量进入后的停留和成交承接"),
     ]
     for metric_column, diagnosis_name, action in room_non_product_rules:
         value = room_kpi.get(metric_column, pd.NA)
@@ -900,7 +906,7 @@ with review_tab:
                 detail_channels["watch_users"].replace(0, pd.NA)
             ) * 1000
             detail_channels["投放消耗观察值"] = detail_channels[["shop_bound_spend", "shop_promoted_spend"]].max(axis=1)
-            detail_channels["支付/投放消耗"] = detail_channels["paid_amount"].div(
+            detail_channels["ROI"] = detail_channels["paid_amount"].div(
                 detail_channels["投放消耗观察值"].replace(0, pd.NA)
             )
             show_table(detail_channels.sort_values("paid_amount", ascending=False))
@@ -934,7 +940,7 @@ with compare_tab:
     room_compare["每小时支付"] = room_compare["平台支付"].div(room_compare["直播小时"].replace(0, pd.NA))
     room_compare["点击成交率"] = room_compare["成交件数"].div(room_compare["商品点击"].replace(0, pd.NA))
     room_compare["每小时新增粉丝"] = room_compare["新增粉丝"].div(room_compare["直播小时"].replace(0, pd.NA))
-    room_compare["支付/投放消耗"] = room_compare["平台支付"].div(room_compare["投放消耗观察值"].replace(0, pd.NA))
+    room_compare["ROI"] = room_compare["平台支付"].div(room_compare["投放消耗观察值"].replace(0, pd.NA))
     show_table(room_compare.sort_values("平台支付", ascending=False))
     st.plotly_chart(px.bar(room_compare, x="shop_name", y="每小时支付", color="anchor_name", title="直播间每小时产出对比", labels={"shop_name": "直播间／店铺", "anchor_name": "主播"}), width="stretch")
     st.markdown("#### 同一商品的主播适配")
@@ -965,7 +971,7 @@ def render_session_trend(trend_frame: pd.DataFrame) -> None:
         "平台支付", "直播间观看人数", "曝光进入率", "人均观看时长", "平均在线人数", "互动率",
         "商品点击率", "点击成交率", "新增粉丝数", "关注转化率", "自然流量占比",
         "首购率", "粉丝成交人数占比", "千次观看用户支付金额",
-        "投放消耗观察值", "支付/投放消耗",
+        "投放消耗观察值", "ROI",
     ], key="session_trend_metric")
     st.plotly_chart(px.line(
         trend_frame.sort_values("start_time"), x="start_time", y=metric_name, color="anchor_name",
