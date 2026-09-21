@@ -16,6 +16,7 @@ from core.live_analytics import (
     import_douyin_live_workbook,
     preview_douyin_live_workbook,
 )
+from core.access_audit import default_audit_dates, load_access_logs
 
 st.set_page_config(page_title="系统设置", layout="wide")
 clear_cache_on_page_change("settings")
@@ -55,8 +56,8 @@ div[data-testid="stVerticalBlockBorderWrapper"] { border-radius: 16px; }
 """, unsafe_allow_html=True)
 page_header("系统设置", "集中管理首页、数据文件、账号权限与业务配置", "SYSTEM ADMINISTRATION", "管理员")
 
-tab_home, tab_upload, tab_tools, tab_accounts, tab_mapping = st.tabs([
-    "🖼️ 首页与轮播", "📤 文件与目标", "🧰 数据工具", "👥 账号与权限", "🗂️ 映射关系"
+tab_home, tab_upload, tab_tools, tab_accounts, tab_access, tab_mapping = st.tabs([
+    "🖼️ 首页与轮播", "📤 文件与目标", "🧰 数据工具", "👥 账号与权限", "🧾 访问记录", "🗂️ 映射关系"
 ])
 
 with tab_home:
@@ -419,6 +420,81 @@ with tab_tools:
                 callbacks["clear_targets"]("_all")
 with tab_accounts:
     render_account_management(supabase, all_pages)
+
+with tab_access:
+    st.markdown("### 账号访问记录")
+    st.caption("记录账号登录、登录失败、保持登录恢复、退出和页面访问。页面内筛选或刷新不会重复记为页面访问。")
+    default_start, default_end = default_audit_dates()
+    date_columns = st.columns(2)
+    audit_start = date_columns[0].date_input("开始日期", default_start, key="audit_start_date")
+    audit_end = date_columns[1].date_input("结束日期", default_end, key="audit_end_date")
+    if audit_start > audit_end:
+        st.error("开始日期不能晚于结束日期。")
+    else:
+        try:
+            audit_logs = load_access_logs(supabase, audit_start, audit_end)
+        except Exception as exc:
+            st.error(f"访问记录读取失败：{exc}")
+            audit_logs = pd.DataFrame()
+        if audit_logs.empty:
+            st.info("所选日期暂无访问记录。")
+        else:
+            filter_columns = st.columns(3)
+            selected_users = filter_columns[0].multiselect(
+                "账号", sorted(audit_logs["username"].dropna().astype(str).unique()), key="audit_users"
+            )
+            event_labels = {
+                "login": "登录成功", "login_failed": "登录失败", "login_restored": "保持登录恢复",
+                "logout": "退出登录", "page_view": "页面访问",
+            }
+            available_events = sorted(audit_logs["event_type"].dropna().astype(str).unique())
+            selected_events = filter_columns[1].multiselect(
+                "记录类型", available_events, format_func=lambda value: event_labels.get(value, value),
+                key="audit_events",
+            )
+            available_pages = sorted(
+                value for value in audit_logs["page_title"].dropna().astype(str).unique() if value.strip()
+            )
+            selected_pages = filter_columns[2].multiselect(
+                "页面", available_pages, key="audit_pages"
+            )
+            filtered_logs = audit_logs.copy()
+            if selected_users:
+                filtered_logs = filtered_logs[filtered_logs["username"].isin(selected_users)]
+            if selected_events:
+                filtered_logs = filtered_logs[filtered_logs["event_type"].isin(selected_events)]
+            if selected_pages:
+                filtered_logs = filtered_logs[filtered_logs["page_title"].isin(selected_pages)]
+
+            summary_columns = st.columns(4)
+            summary_columns[0].metric("记录数", f"{len(filtered_logs):,}")
+            summary_columns[1].metric("访问账号", f"{filtered_logs['username'].nunique():,}")
+            summary_columns[2].metric("登录成功", f"{filtered_logs['event_type'].isin(['login', 'login_restored']).sum():,}")
+            summary_columns[3].metric("登录失败", f"{(filtered_logs['event_type'] == 'login_failed').sum():,}")
+
+            display_logs = filtered_logs.copy()
+            display_logs["记录类型"] = display_logs["event_type"].map(event_labels).fillna(display_logs["event_type"])
+            display_logs["访问时间"] = display_logs["created_at"].dt.strftime("%Y-%m-%d %H:%M:%S")
+            display_logs["结果"] = display_logs["success"].map({True: "成功", False: "失败"})
+            display_logs["详细信息"] = display_logs["details"].map(
+                lambda value: "；".join(f"{key}={item}" for key, item in value.items()) if isinstance(value, dict) else ""
+            )
+            display_logs = display_logs.rename(columns={
+                "username": "账号", "page_title": "页面", "session_id": "会话编号",
+                "ip_address": "IP地址", "user_agent": "浏览器与设备",
+            })[["访问时间", "账号", "记录类型", "结果", "页面", "IP地址", "浏览器与设备", "会话编号", "详细信息"]]
+            st.dataframe(display_logs, width="stretch", hide_index=True)
+
+            export_buffer = io.BytesIO()
+            with pd.ExcelWriter(export_buffer, engine="openpyxl") as writer:
+                display_logs.to_excel(writer, index=False, sheet_name="访问记录")
+            st.download_button(
+                "下载当前访问记录",
+                export_buffer.getvalue(),
+                file_name=f"账号访问记录_{audit_start}_{audit_end}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="download_access_logs",
+            )
 
 with tab_mapping:
     render_mapping_management(supabase)

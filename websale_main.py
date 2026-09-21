@@ -29,6 +29,7 @@ from core.utils import extract_anchor, parse_product_code, date_quick_buttons, a
 from core.ai import get_siliconflow_client, get_ai_summary
 from core.theme import apply_global_theme
 from core.price_adjustments import infer_platform, save_adjustments, apply_order_adjustments
+from core.access_audit import record_access_event, record_page_visit
 
 # 防抖
 if "last_rerun" not in st.session_state:
@@ -244,15 +245,24 @@ def restore_login_from_cookie():
     st.session_state.username = username
     st.session_state.role = user["role"]
     st.session_state.table_suffix = "_all"
+    if not st.session_state.get("_audit_login_recorded"):
+        record_access_event(
+            supabase, "login_restored", username,
+            details={"login_method": "remembered_cookie"},
+        )
+        st.session_state["_audit_login_recorded"] = True
     return True
 
 
 def clear_login_state():
+    username = st.session_state.get("username")
+    if username:
+        record_access_event(supabase, "logout", username)
     if cookie_manager.get(AUTH_COOKIE_NAME):
         cookie_manager.delete(AUTH_COOKIE_NAME, key="auth_cookie_delete")
         st.session_state._skip_cookie_restore = True
     st.session_state.authenticated = False
-    for key in ["username", "role", "table_suffix"]:
+    for key in ["username", "role", "table_suffix", "_audit_login_recorded", "_last_audit_page"]:
         st.session_state.pop(key, None)
 
 def login():
@@ -279,6 +289,11 @@ def login():
                 st.session_state.role = users[username]["role"]
                 # 系统现在只有一个统一数据源
                 st.session_state.table_suffix = "_all"
+                record_access_event(
+                    supabase, "login", username,
+                    details={"login_method": "password", "keep_login": bool(keep_login)},
+                )
+                st.session_state["_audit_login_recorded"] = True
                 st.session_state.pop("_skip_cookie_restore", None)
                 if keep_login:
                     cookie_manager.set(
@@ -295,6 +310,10 @@ def login():
                 st.cache_data.clear()
                 st.rerun()
             else:
+                record_access_event(
+                    supabase, "login_failed", username,
+                    success=False, details={"reason": "用户名或密码错误"},
+                )
                 st.error("用户名或密码错误")
 
 # ========== 初始化 session_state ==========
@@ -811,6 +830,11 @@ st.session_state["_admin_callbacks"] = {
 }
 
 nav = st.navigation(pages_to_show, position="sidebar")
+record_page_visit(
+    supabase,
+    str(getattr(nav, "url_path", "") or getattr(nav, "title", "unknown")),
+    str(getattr(nav, "title", "未知页面")),
+)
 nav.run()
 apply_global_theme()  # 页面级旧样式之后再次注入，确保全站设计系统优先级一致
 
