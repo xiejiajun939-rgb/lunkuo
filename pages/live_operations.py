@@ -64,6 +64,14 @@ def localize_table(frame: pd.DataFrame) -> pd.DataFrame:
         if time_column in display.columns:
             display[time_column] = format_china_time(display[time_column])
     display = display.drop(columns=["talk_start_epoch", "talk_end_epoch"], errors="ignore")
+    if "讲解分钟" in display.columns:
+        display["讲解时长（分钟）"] = pd.to_numeric(display["讲解分钟"], errors="coerce").round(2)
+        display = display.drop(columns=["讲解分钟", "talk_duration_seconds"], errors="ignore")
+    elif "talk_duration_seconds" in display.columns:
+        display["讲解时长（分钟）"] = (
+            pd.to_numeric(display["talk_duration_seconds"], errors="coerce") / 60
+        ).round(2)
+        display = display.drop(columns=["talk_duration_seconds"], errors="ignore")
     style_column = "style_code" if "style_code" in display.columns else "货号" if "货号" in display.columns else None
     image_column_exists = "product_image_url" in display.columns or "商品图片" in display.columns
     image_lookup = globals().get("style_image_lookup", {})
