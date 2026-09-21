@@ -592,30 +592,47 @@ def _fetch_all(table_name, columns="*", query_builder=None):
     return rows
 
 
-@st.cache_data(ttl=120, show_spinner=False)
-def load_live_dataset(start_date: date, end_date: date):
+@st.cache_data(ttl=300, show_spinner=False)
+def load_live_sessions(start_date: date, end_date: date):
     start_boundary = pd.Timestamp(start_date).tz_localize("Asia/Shanghai").isoformat()
     end_boundary = (pd.Timestamp(end_date) + pd.Timedelta(days=1)).tz_localize("Asia/Shanghai").isoformat()
     sessions = _fetch_all(
-        "live_sessions", "*",
+        "live_sessions", "live_room_id,shop_name,anchor_name,start_time,end_time,duration_seconds,source_collected_at,imported_at",
         lambda q: q.gte("start_time", start_boundary).lt("start_time", end_boundary).order("start_time"),
     )
     session_df = pd.DataFrame(sessions)
-    if session_df.empty:
-        return session_df, pd.DataFrame(), pd.DataFrame()
-    room_ids = session_df["live_room_id"].astype(str).tolist()
+    if not session_df.empty:
+        for column in ["start_time", "end_time", "source_collected_at", "imported_at"]:
+            if column in session_df.columns:
+                session_df[column] = pd.to_datetime(session_df[column], utc=True, errors="coerce").dt.tz_convert("Asia/Shanghai")
+    return session_df
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def load_live_room_data(room_ids_key):
+    """只读取当前选中场次的商品与指标，避免先加载所有店铺的明细。"""
+    room_ids = [str(value) for value in room_ids_key if str(value).strip()]
+    if not room_ids:
+        return pd.DataFrame(), pd.DataFrame()
     products, metrics = [], []
     for start in range(0, len(room_ids), 50):
         room_batch = room_ids[start:start + 50]
         products.extend(_fetch_all("live_products", "*", lambda q, ids=room_batch: q.in_("live_room_id", ids)))
         metrics.extend(_fetch_all("live_metrics", "*", lambda q, ids=room_batch: q.in_("live_room_id", ids)))
-    for column in ["start_time", "end_time", "source_collected_at", "imported_at"]:
-        if column in session_df.columns:
-            session_df[column] = pd.to_datetime(session_df[column], utc=True, errors="coerce").dt.tz_convert("Asia/Shanghai")
-    return session_df, pd.DataFrame(products), pd.DataFrame(metrics)
+    return pd.DataFrame(products), pd.DataFrame(metrics)
 
 
-@st.cache_data(ttl=120, show_spinner=False)
+@st.cache_data(ttl=300, show_spinner=False)
+def load_live_dataset(start_date: date, end_date: date):
+    """兼容旧调用；新页面优先先读场次，再按筛选加载明细。"""
+    session_df = load_live_sessions(start_date, end_date)
+    if session_df.empty:
+        return session_df, pd.DataFrame(), pd.DataFrame()
+    products, metrics = load_live_room_data(tuple(session_df["live_room_id"].astype(str)))
+    return session_df, products, metrics
+
+
+@st.cache_data(ttl=300, show_spinner=False)
 def load_live_auxiliary(room_ids_key):
     """读取新抖音工作簿提供的渠道和商品讲解数据。"""
     room_ids = [str(value) for value in room_ids_key if str(value).strip()]

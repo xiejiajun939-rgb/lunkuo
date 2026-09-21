@@ -6,7 +6,12 @@ import plotly.express as px
 import streamlit as st
 
 from core.db import load_product_master
-from core.live_analytics import load_live_actuals, load_live_auxiliary, load_live_dataset
+from core.live_analytics import (
+    load_live_actuals,
+    load_live_auxiliary,
+    load_live_room_data,
+    load_live_sessions,
+)
 from core.theme import page_header
 from core.utils import clear_cache_on_page_change
 
@@ -198,41 +203,53 @@ if start_date > end_date:
     st.error("开始日期不能晚于结束日期。")
     st.stop()
 
-with st.spinner("正在加载直播与履约数据……"):
-    sessions, products, metrics = load_live_dataset(start_date, end_date)
-    actuals = load_live_actuals(start_date, end_date)
-    product_master = load_product_master()
+with st.spinner("正在加载直播场次……"):
+    sessions = load_live_sessions(start_date, end_date)
 
 if sessions.empty:
     st.warning("所选范围暂无直播记录。可调整日期，或先在系统设置上传直播数据。")
     st.stop()
 
-channels, talks = load_live_auxiliary(tuple(sessions["live_room_id"].astype(str)))
 sessions = sessions.copy()
 sessions["start_time"] = pd.to_datetime(sessions["start_time"], errors="coerce")
 sessions["直播日期"] = sessions["start_time"].dt.date
 
 all_shops = sorted(sessions["shop_name"].dropna().astype(str).unique())
 all_anchors = sorted(sessions["anchor_name"].dropna().astype(str).unique())
+default_shop = "抖音引美25.7转愉燃轮廓轻奢旗舰店"
+default_anchor = "轮廓官方旗舰店"
+if "live_operations_shops" not in st.session_state:
+    st.session_state["live_operations_shops"] = [default_shop] if default_shop in all_shops else all_shops
+else:
+    st.session_state["live_operations_shops"] = [
+        value for value in st.session_state["live_operations_shops"] if value in all_shops
+    ] or ([default_shop] if default_shop in all_shops else all_shops)
+if "live_operations_anchors" not in st.session_state:
+    st.session_state["live_operations_anchors"] = [default_anchor] if default_anchor in all_anchors else all_anchors
+else:
+    st.session_state["live_operations_anchors"] = [
+        value for value in st.session_state["live_operations_anchors"] if value in all_anchors
+    ] or ([default_anchor] if default_anchor in all_anchors else all_anchors)
 with st.container(border=True):
     st.markdown('<div class="section-kicker">分析对象</div><div class="section-help">筛选需要比较的直播间与主播。</div>', unsafe_allow_html=True)
     filter_cols = st.columns(2)
     with filter_cols[0]:
-        selected_shops = st.multiselect("直播间／店铺", all_shops, default=all_shops)
+        selected_shops = st.multiselect("直播间／店铺", all_shops, key="live_operations_shops")
     with filter_cols[1]:
-        selected_anchors = st.multiselect("主播", all_anchors, default=all_anchors)
+        selected_anchors = st.multiselect("主播", all_anchors, key="live_operations_anchors")
 
 sessions = sessions[sessions["shop_name"].isin(selected_shops) & sessions["anchor_name"].isin(selected_anchors)]
 room_ids = sessions["live_room_id"].astype(str)
-products = products[products["live_room_id"].astype(str).isin(room_ids)].copy()
-metrics = metrics[metrics["live_room_id"].astype(str).isin(room_ids)].copy()
-if not channels.empty:
-    channels = channels[channels["live_room_id"].astype(str).isin(room_ids)].copy()
-if not talks.empty:
-    talks = talks[talks["live_room_id"].astype(str).isin(room_ids)].copy()
 if sessions.empty:
     st.warning("当前筛选条件下没有直播记录。")
     st.stop()
+
+room_ids_key = tuple(room_ids)
+with st.spinner("正在加载所选直播间数据……"):
+    products, metrics = load_live_room_data(room_ids_key)
+    channels, talks = load_live_auxiliary(room_ids_key)
+    actuals = load_live_actuals(start_date, end_date)
+    product_master = load_product_master()
 
 products = products.merge(
     sessions[["live_room_id", "shop_name", "anchor_name", "start_time", "直播日期", "duration_seconds"]],
