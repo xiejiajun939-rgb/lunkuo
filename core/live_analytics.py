@@ -223,7 +223,8 @@ def parse_douyin_live_workbook(source):
         raise ValueError("工作簿中未找到房间号")
 
     anchor_name = str(overview.get("达人昵称") or overview.get("店铺/账号") or "").strip()
-    shop_name = _mapping_context(anchor_name)
+    platform_account_name = str(overview.get("店铺/账号") or anchor_name).strip()
+    shop_name = _mapping_context(platform_account_name)
     start_time = overview.get("开播时间")
     end_time = overview.get("关播时间")
     session = {
@@ -338,6 +339,7 @@ def parse_douyin_live_workbook(source):
     return {
         "session": session, "metrics": metric_records, "products": product_records,
         "mappings": mapping_records, "channels": channels, "talks": talks,
+        "platform_account_name": platform_account_name,
     }
 
 
@@ -350,6 +352,7 @@ def _parsed_workbook_summary(parsed):
     session = parsed["session"]
     return {
         "room_id": session["live_room_id"], "shop_name": session["shop_name"],
+        "platform_account_name": parsed.get("platform_account_name"),
         "anchor_name": session["anchor_name"], "start_time": session["start_time"],
         "end_time": session["end_time"], "metrics": len(parsed["metrics"]),
         "products": len(parsed["products"]), "channels": len(parsed["channels"]),

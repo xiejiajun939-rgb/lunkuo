@@ -179,14 +179,15 @@ with tab_upload:
                     st.error(f"{uploaded.name}：{exc}")
             if previews:
                 preview_df = pd.DataFrame(previews).rename(columns={
-                    "room_id": "房间号", "shop_name": "反查店铺", "anchor_name": "主播账号",
+                    "room_id": "房间号", "platform_account_name": "平台店铺／账号",
+                    "shop_name": "反查店铺", "anchor_name": "主播账号",
                     "start_time": "开播时间", "end_time": "关播时间", "metrics": "指标数",
                     "products": "商品数", "channels": "渠道数", "talks": "讲解区间数",
                     "matched": "已识别货号", "unmatched": "待确认货号",
                 })
                 st.dataframe(preview_df, width="stretch", hide_index=True)
                 if any(row["shop_name"] == "待维护店铺" for row in previews):
-                    st.warning("存在无法从主播映射反查店铺的文件，请先到“映射关系”维护后再导入。")
+                    st.warning("存在无法从平台店铺映射反查实销店铺的文件，请先到“映射关系”维护后再导入。")
                     preview_failed = True
                 confirm_douyin_import = st.checkbox(
                     "我已核对房间号、主播账号、反查店铺和货号识别结果",
