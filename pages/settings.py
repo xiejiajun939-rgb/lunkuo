@@ -614,7 +614,7 @@ def load_mapping_raw():
     if supabase is None:
         return pd.DataFrame()
     try:
-        resp = supabase.table("mapping").select("id,shop_name,anchor_name,org_name,dept").order("id").execute()
+        resp = supabase.table("mapping").select("id,shop_name,platform_shop_name,anchor_name,org_name,dept").order("id").execute()
         if resp.data:
             return pd.DataFrame(resp.data)
         return pd.DataFrame()
@@ -641,7 +641,8 @@ else:
         use_container_width=True,
         column_config={
             "id": st.column_config.NumberColumn("ID", disabled=True),
-            "shop_name": st.column_config.TextColumn("店铺", required=True),
+            "shop_name": st.column_config.TextColumn("实销店铺", required=True),
+            "platform_shop_name": st.column_config.TextColumn("平台店铺"),
             "anchor_name": st.column_config.TextColumn("主播账号", required=True),
             "org_name": st.column_config.TextColumn("组织", required=True),
             "dept": st.column_config.TextColumn("部门", required=True),
@@ -666,7 +667,7 @@ else:
                 continue
             changed = any(
                 _cell(row[c]) != _cell(orig[c])
-                for c in ["shop_name", "anchor_name", "org_name", "dept"]
+                for c in ["shop_name", "platform_shop_name", "anchor_name", "org_name", "dept"]
             )
             if changed:
                 to_update.append((rid, row))
@@ -682,6 +683,7 @@ else:
         for rid, row in to_update:
             supabase.table("mapping").update({
                 "shop_name": _cell(row["shop_name"]),
+                "platform_shop_name": _cell(row["platform_shop_name"]),
                 "anchor_name": _cell(row["anchor_name"]),
                 "org_name": _cell(row["org_name"]),
                 "dept": _cell(row["dept"]),
@@ -693,6 +695,7 @@ else:
             for _, row in new_rows.iterrows():
                 rec = {
                     "shop_name": _cell(row["shop_name"]),
+                    "platform_shop_name": _cell(row["platform_shop_name"]),
                     "anchor_name": _cell(row["anchor_name"]),
                     "org_name": _cell(row["org_name"]),
                     "dept": _cell(row["dept"]),

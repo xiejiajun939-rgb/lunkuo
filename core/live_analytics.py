@@ -166,14 +166,41 @@ def _overview_values(book):
     return values
 
 
-def _mapping_context(anchor_name):
-    """用数据库映射反查主播所属店铺；不从文件账号名臆测店铺。"""
-    rows = supabase.table("mapping").select("shop_name,anchor_name").execute().data or []
-    target = str(anchor_name or "").strip().upper()
+def _normalize_live_account_name(value):
+    """统一平台店铺／直播账号名称，兼容空格及“直播间”后缀。"""
+    text = re.sub(r"\s+", "", str(value or "")).strip().upper()
+    return re.sub(r"直播间$", "", text)
+
+
+def _mapping_context(account_name):
+    """优先按平台店铺反查实销店铺，旧数据再兼容主播名称精确匹配。"""
+    try:
+        rows = (
+            supabase.table("mapping")
+            .select("shop_name,platform_shop_name,anchor_name")
+            .execute().data or []
+        )
+    except Exception:
+        # 数据库字段部署前的短暂兼容窗口。
+        rows = supabase.table("mapping").select("shop_name,anchor_name").execute().data or []
+
+    target = _normalize_live_account_name(account_name)
+    platform_matches = []
+    for row in rows:
+        platform_name = _normalize_live_account_name(row.get("platform_shop_name"))
+        shop_name = str(row.get("shop_name") or "").strip()
+        if platform_name and shop_name and (target == platform_name or target.startswith(platform_name)):
+            platform_matches.append((len(platform_name), shop_name))
+    if platform_matches:
+        longest = max(length for length, _ in platform_matches)
+        shops = {shop for length, shop in platform_matches if length == longest}
+        if len(shops) == 1:
+            return next(iter(shops))
+
     shops = {
         str(row.get("shop_name") or "").strip()
         for row in rows
-        if str(row.get("anchor_name") or "").strip().upper() == target
+        if _normalize_live_account_name(row.get("anchor_name")) == target
         and str(row.get("shop_name") or "").strip()
     }
     return next(iter(shops)) if len(shops) == 1 else "待维护店铺"

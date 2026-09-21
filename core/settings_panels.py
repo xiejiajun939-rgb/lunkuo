@@ -90,10 +90,10 @@ def render_account_management(supabase, all_pages):
 
 def render_mapping_management(supabase):
     st.markdown("### 🗂️ 映射关系管理")
-    st.caption("维护店铺与主播所属组织、部门；支持直接编辑、增加和删除。")
+    st.caption("维护实销店铺、平台店铺与主播所属组织、部门；直播导入优先按平台店铺匹配实销店铺。")
     if "settings_mapping_df" not in st.session_state:
         try:
-            rows = supabase.table("mapping").select("id,shop_name,anchor_name,org_name,dept").order("id").execute().data or []
+            rows = supabase.table("mapping").select("id,shop_name,platform_shop_name,anchor_name,org_name,dept").order("id").execute().data or []
             st.session_state.settings_mapping_df = pd.DataFrame(rows)
         except Exception as exc:
             st.error(f"加载映射关系失败：{exc}")
@@ -103,7 +103,8 @@ def render_mapping_management(supabase):
         raw, num_rows="dynamic", width="stretch", hide_index=True,
         column_config={
             "id": st.column_config.NumberColumn("ID", disabled=True),
-            "shop_name": st.column_config.TextColumn("店铺", required=True),
+            "shop_name": st.column_config.TextColumn("实销店铺", required=True),
+            "platform_shop_name": st.column_config.TextColumn("平台店铺"),
             "anchor_name": st.column_config.TextColumn("主播账号", required=True),
             "org_name": st.column_config.TextColumn("组织", required=True),
             "dept": st.column_config.TextColumn("部门", required=True),
@@ -119,7 +120,7 @@ def render_mapping_management(supabase):
                     supabase.table("mapping").delete().eq("id", mapping_id).execute()
                 records = []
                 for row in edited.to_dict("records"):
-                    payload = {k: str(row.get(k) or "").strip() for k in ["shop_name", "anchor_name", "org_name", "dept"]}
+                    payload = {k: str(row.get(k) or "").strip() for k in ["shop_name", "platform_shop_name", "anchor_name", "org_name", "dept"]}
                     if not any(payload.values()):
                         continue
                     if pd.notna(row.get("id")):
