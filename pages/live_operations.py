@@ -941,7 +941,10 @@ with compare_tab:
     room_compare["点击成交率"] = room_compare["成交件数"].div(room_compare["商品点击"].replace(0, pd.NA))
     room_compare["每小时新增粉丝"] = room_compare["新增粉丝"].div(room_compare["直播小时"].replace(0, pd.NA))
     room_compare["ROI"] = room_compare["平台支付"].div(room_compare["投放消耗观察值"].replace(0, pd.NA))
-    show_table(room_compare.sort_values("平台支付", ascending=False))
+    room_compare_display = room_compare.drop(
+        columns=["观看时长加权", "投放消耗观察值"], errors="ignore"
+    )
+    show_table(room_compare_display.sort_values("平台支付", ascending=False))
     st.plotly_chart(px.bar(room_compare, x="shop_name", y="每小时支付", color="anchor_name", title="直播间每小时产出对比", labels={"shop_name": "直播间／店铺", "anchor_name": "主播"}), width="stretch")
     st.markdown("#### 同一商品的主播适配")
     compare_style_options = style_summary.sort_values("平台支付", ascending=False)["style_code"].astype(str).tolist()
