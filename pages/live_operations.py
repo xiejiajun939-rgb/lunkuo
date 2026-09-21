@@ -28,10 +28,23 @@ DISPLAY_COLUMN_NAMES = {
     "talk_start_epoch": "讲解开始时间戳", "talk_end_epoch": "讲解结束时间戳",
     "talk_duration_seconds": "讲解时长（秒）", "viewer_change": "在线人数变化",
     "avg_online_users": "平均在线人数", "session_start_utc": "开播时间",
-    "talk_start_time": "讲解开始时间", "ship_amount": "范围发货",
+    "talk_start_time": "讲解开始时间", "talk_end_time": "讲解结束时间", "ship_amount": "范围发货",
     "return_amount": "范围退货", "net_amount": "范围实销", "sale_date": "销售日期",
     "created_at": "记录时间", "updated_at": "更新时间", "imported_at": "导入时间",
 }
+
+
+def parse_epoch_utc(values: pd.Series) -> pd.Series:
+    """同时兼容秒级和毫秒级 Unix 时间戳，统一转换为 UTC。"""
+    numeric = pd.to_numeric(values, errors="coerce")
+    seconds = pd.to_datetime(numeric.where(numeric.abs() < 100_000_000_000), unit="s", utc=True, errors="coerce")
+    milliseconds = pd.to_datetime(numeric.where(numeric.abs() >= 100_000_000_000), unit="ms", utc=True, errors="coerce")
+    return seconds.fillna(milliseconds)
+
+
+def format_china_time(values: pd.Series) -> pd.Series:
+    parsed = pd.to_datetime(values, utc=True, errors="coerce")
+    return parsed.dt.tz_convert("Asia/Shanghai").dt.strftime("%Y-%m-%d %H:%M:%S").fillna("")
 
 
 def localize_table(frame: pd.DataFrame) -> pd.DataFrame:
@@ -39,6 +52,18 @@ def localize_table(frame: pd.DataFrame) -> pd.DataFrame:
     if frame is None:
         return pd.DataFrame()
     display = frame.copy()
+    display = display.drop(
+        columns=["id", "live_room_id", "imported_at", "created_at", "updated_at"],
+        errors="ignore",
+    )
+    if "talk_start_time" not in display.columns and "talk_start_epoch" in display.columns:
+        display["talk_start_time"] = parse_epoch_utc(display["talk_start_epoch"])
+    if "talk_end_time" not in display.columns and "talk_end_epoch" in display.columns:
+        display["talk_end_time"] = parse_epoch_utc(display["talk_end_epoch"])
+    for time_column in ["talk_start_time", "talk_end_time"]:
+        if time_column in display.columns:
+            display[time_column] = format_china_time(display[time_column])
+    display = display.drop(columns=["talk_start_epoch", "talk_end_epoch"], errors="ignore")
     style_column = "style_code" if "style_code" in display.columns else "货号" if "货号" in display.columns else None
     image_column_exists = "product_image_url" in display.columns or "商品图片" in display.columns
     image_lookup = globals().get("style_image_lookup", {})
@@ -217,7 +242,8 @@ if not talks.empty:
     talk_session_times["session_start_utc"] = pd.to_datetime(talk_session_times["start_time"], utc=True, errors="coerce")
     talks["live_room_id"] = talks["live_room_id"].astype(str)
     talks = talks.merge(talk_session_times[["live_room_id", "session_start_utc"]], on="live_room_id", how="left")
-    talks["talk_start_time"] = pd.to_datetime(talks["talk_start_epoch"], unit="s", utc=True, errors="coerce")
+    talks["talk_start_time"] = parse_epoch_utc(talks["talk_start_epoch"])
+    talks["talk_end_time"] = parse_epoch_utc(talks["talk_end_epoch"])
     talks["开播后分钟"] = ((talks["talk_start_time"] - talks["session_start_utc"]).dt.total_seconds() / 60).clip(lower=0)
     for column in ["talk_duration_seconds", "paid_amount", "sold_units", "viewer_change", "avg_online_users"]:
         talks[column] = pd.to_numeric(talks.get(column), errors="coerce").fillna(0)
