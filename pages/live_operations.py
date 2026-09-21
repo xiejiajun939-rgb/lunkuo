@@ -958,22 +958,28 @@ with compare_tab:
         show_table(same_product_compare.sort_values(["点击成交率", "场均支付"], ascending=False))
         st.caption("同货号对比优先看点击成交率和场均支付，避免仅用总销售额评价主播。")
 
-with decision_tab:
-    st.markdown("#### 场次经营趋势")
-    trend_frame = session_kpis.rename(columns={
-        "商品支付金额": "平台支付", "商品点击人数": "商品点击", "商品成交件数": "成交件数",
-    }).copy()
+@st.fragment
+def render_session_trend(trend_frame: pd.DataFrame) -> None:
+    """指标切换只重绘趋势组件，不触发整页直播分析重新计算。"""
     metric_name = st.selectbox("趋势指标", [
         "平台支付", "直播间观看人数", "曝光进入率", "人均观看时长", "平均在线人数", "互动率",
         "商品点击率", "点击成交率", "新增粉丝数", "关注转化率", "自然流量占比",
         "首购率", "粉丝成交人数占比", "千次观看用户支付金额",
         "投放消耗观察值", "支付/投放消耗",
-    ])
+    ], key="session_trend_metric")
     st.plotly_chart(px.line(
         trend_frame.sort_values("start_time"), x="start_time", y=metric_name, color="anchor_name",
         markers=True, hover_data=["shop_name", "live_room_id"],
         labels={"start_time": "开播时间", "anchor_name": "主播", "shop_name": "直播间／店铺", "live_room_id": "直播场次ID"},
-    ), width="stretch")
+    ), width="stretch", key="session_trend_chart")
+
+
+with decision_tab:
+    st.markdown("#### 场次经营趋势")
+    trend_frame = session_kpis.rename(columns={
+        "商品支付金额": "平台支付", "商品点击人数": "商品点击", "商品成交件数": "成交件数",
+    }).copy()
+    render_session_trend(trend_frame)
 
 with product_tab:
     product_filter_cols = st.columns([2, 1])
