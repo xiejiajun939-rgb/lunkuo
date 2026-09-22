@@ -1,9 +1,12 @@
 """新版直播经营分析：历史直播表现 × 数据罗盘履约实销。"""
 from datetime import date, timedelta
+import io
+import json
 
 import pandas as pd
 import plotly.express as px
 import streamlit as st
+from openpyxl.styles import Font, PatternFill
 
 from core.db import load_product_master
 from core.live_analytics import (
@@ -1340,9 +1343,163 @@ with product_tab:
     st.subheader("逐场历史")
     show_table(item[["直播日期", "shop_name", "anchor_name", "talk_count", "click_users", "sold_units", "paid_amount", "pre_ship_refund_amount", "post_ship_refund_amount"]].sort_values("直播日期", ascending=False))
 
-with product_tab:
-    csv = style_summary.to_csv(index=False).encode("utf-8-sig")
-    st.download_button("下载当前商品分析", csv, f"直播经营商品分析_{start_date}_{end_date}.csv", "text/csv")
+def _export_frame(value) -> pd.DataFrame:
+    if value is None:
+        return pd.DataFrame()
+    if isinstance(value, pd.Series):
+        frame = value.to_frame().T
+    elif isinstance(value, pd.DataFrame):
+        frame = value.copy()
+    elif isinstance(value, list):
+        frame = pd.DataFrame(value)
+    elif isinstance(value, dict):
+        frame = pd.DataFrame([value])
+    else:
+        frame = pd.DataFrame({"内容": [value]})
+    if frame.empty:
+        return frame
+    frame = localize_table(frame)
+    for column in frame.columns:
+        if isinstance(frame[column].dtype, pd.DatetimeTZDtype):
+            frame[column] = frame[column].dt.tz_localize(None)
+        elif pd.api.types.is_datetime64_any_dtype(frame[column]):
+            frame[column] = pd.to_datetime(frame[column], errors="coerce")
+        elif frame[column].dtype == "object":
+            frame[column] = frame[column].map(
+                lambda value: json.dumps(
+                    sorted(value) if isinstance(value, set) else value,
+                    ensure_ascii=False,
+                )
+                if isinstance(value, (dict, list, tuple, set)) else value
+            )
+    return frame
+
+
+def _current_export_sheets() -> dict[str, pd.DataFrame]:
+    sheets = {
+        "筛选条件": pd.DataFrame([{
+            "当前栏目": active_section,
+            "分析周期": quick,
+            "开始日期": start_date,
+            "结束日期": end_date,
+            "店铺": "、".join(selected_shops),
+            "主播": "、".join(selected_anchors),
+            "导出口径": "平台指标按直播发生时间；发货、退货和实销按仓库发生时间",
+        }]),
+    }
+    scope = globals()
+    if active_section == "决策总览":
+        sheets.update({
+            "经营链路": pd.DataFrame([{
+                "曝光进入率": overall_entry_rate, "人均观看时长（秒）": weighted_watch_seconds,
+                "商品点击率": overall_click_rate, "点击成交率": overall_click_conversion,
+                "关注转化率": overall_follow_rate, "ROI": overall_spend_output,
+            }]),
+            "优先处理清单": decisions,
+            "下一场建议": scope.get("next_display"),
+            "每日经营趋势": daily_platform,
+            "逐场经营链路": session_kpis,
+            "全部商品判断": style_summary,
+            "判断证据": scope.get("evidence_rows"),
+        })
+    elif active_section == "开播选品":
+        sheets.update({
+            "前段商品排行": scope.get("display_rank"),
+            "当前机会类型": pd.DataFrame([{
+                "机会类型": opportunity, "最少上播场次": min_sessions,
+                "最少累计点击": min_clicks,
+            }]),
+            "机会商品": candidates,
+            "讲解汇总": talk_summary,
+            "前段逐场数据": scope.get("analysis_room"),
+            "前段判断证据": scope.get("evidence"),
+            "复销判断证据": scope.get("repeat_evidence"),
+            "全部商品判断": style_summary,
+        })
+    elif active_section == "单场复盘":
+        selected_room_talks = talks[talks["live_room_id"].astype(str) == room].copy() if not talks.empty else pd.DataFrame()
+        selected_room_metrics = metrics[metrics["live_room_id"].astype(str) == room].copy() if not metrics.empty else pd.DataFrame()
+        sheets.update({
+            "场次信息": labels[labels["live_room_id"].astype(str) == room],
+            "本场经营链路": room_kpi,
+            "本场诊断建议": room_actions,
+            "商品平台表现": room_products,
+            "商品讲解区间": selected_room_talks,
+            "渠道流量": scope.get("detail_channels", scope.get("room_channels")),
+            "全部直播指标": selected_room_metrics,
+        })
+    elif active_section == "商品决策":
+        sheets.update({
+            "当前商品结论": pd.DataFrame([{"货号": selected_style, "商品决策": product_decision}]),
+            "当前商品汇总": summary_row,
+            "筛选后商品汇总": table,
+            "主播适配": anchor_item,
+            "讲解区间": item_talks,
+            "逐场历史": item,
+        })
+    elif active_section == "主播对比":
+        sheets.update({
+            "主播经营对比": room_compare_display,
+            "同商品主播对比": scope.get("same_product_compare"),
+            "场次趋势底表": trend_frame,
+            "全部商品汇总": style_summary,
+        })
+    prepared = {}
+    for name, frame in sheets.items():
+        prepared_frame = _export_frame(frame)
+        if not prepared_frame.empty:
+            prepared[name] = prepared_frame
+    return prepared
+
+
+def _build_live_export(sheets: dict[str, pd.DataFrame]) -> bytes:
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        for sheet_name, frame in sheets.items():
+            safe_name = sheet_name[:31]
+            frame.to_excel(writer, index=False, sheet_name=safe_name)
+            worksheet = writer.book[safe_name]
+            worksheet.freeze_panes = "A2"
+            worksheet.auto_filter.ref = worksheet.dimensions
+            for cell in worksheet[1]:
+                cell.font = Font(bold=True, color="FFFFFF")
+                cell.fill = PatternFill(fill_type="solid", fgColor="17324D")
+            for column_cells in worksheet.columns:
+                width = min(45, max(10, max(len(str(cell.value or "")) for cell in column_cells[:200]) + 2))
+                worksheet.column_dimensions[column_cells[0].column_letter].width = width
+            for column_index, column_name in enumerate(frame.columns, start=1):
+                if "率" in str(column_name) or "占比" in str(column_name):
+                    for cell in worksheet.iter_cols(min_col=column_index, max_col=column_index, min_row=2):
+                        for value_cell in cell:
+                            if isinstance(value_cell.value, (int, float)):
+                                value_cell.number_format = "0.00%"
+                elif str(column_name) == "ROI":
+                    for cell in worksheet.iter_cols(min_col=column_index, max_col=column_index, min_row=2):
+                        for value_cell in cell:
+                            if isinstance(value_cell.value, (int, float)):
+                                value_cell.number_format = "0.00"
+    return output.getvalue()
+
+
+@st.fragment
+def render_current_page_export(sheets: dict[str, pd.DataFrame]) -> None:
+    export_key = f"_live_export_{active_section}_{start_date}_{end_date}"
+    if st.button("生成当前页面完整报表", key="build_current_live_export", type="primary"):
+        with st.spinner("正在整理当前页面全部信息……"):
+            st.session_state[export_key] = _build_live_export(sheets)
+    export_data = st.session_state.get(export_key)
+    if export_data:
+        st.download_button(
+            "下载当前页面全部信息",
+            export_data,
+            file_name=f"直播经营分析_{active_section}_{start_date}_{end_date}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="download_current_live_export",
+        )
+
+
+st.markdown("---")
+render_current_page_export(_current_export_sheets())
 
 for hidden_holder in hidden_section_holders:
     hidden_holder.empty()
