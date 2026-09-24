@@ -1182,12 +1182,18 @@ for idx, row in page_df.iterrows():
     c9.write(f"{row['实销金额占比']:.2%}" if pd.notna(row["实销金额占比"]) else "-")
     c10.write(row["退款率"])
     c11.caption(product_tags_text(row.get("product_tags")) or "-")
-    if c12.button(f"{row.get('总库存', 0):,.0f}", key=f"inventory_btn_{row['货号']}_{idx}", help="点击查看仓库、颜色、尺码明细"):
+    if c12.button(f"{row.get('总库存', 0):,.0f}", key=f"inventory_btn_{row['货号']}_{idx}", help="查看所有仓库合并后的颜色 × 尺码库存"):
         st.session_state.show_dialog = False
         st.session_state.show_trend_dialog = False
         st.session_state.inventory_dialog_style_code = row["货号"]
+        st.session_state.inventory_dialog_scope = "all"
         st.rerun()
-    c13.write(f"{row.get('总仓库存', 0):,.0f}")
+    if c13.button(f"{row.get('总仓库存', 0):,.0f}", key=f"main_inventory_btn_{row['货号']}_{idx}", help="查看总仓的颜色 × 尺码库存"):
+        st.session_state.show_dialog = False
+        st.session_state.show_trend_dialog = False
+        st.session_state.inventory_dialog_style_code = row["货号"]
+        st.session_state.inventory_dialog_scope = "main"
+        st.rerun()
     if c14.button("📊", key=f"detail_btn_{row['货号']}_{idx}"):
         st.session_state.inventory_dialog_style_code = None
         style_code = row["货号"]
@@ -1245,9 +1251,14 @@ for idx, row in page_df.iterrows():
 # ---------- 库存明细对话框 ----------
 if st.session_state.get("inventory_dialog_style_code"):
     inventory_style_code = st.session_state.inventory_dialog_style_code
+    inventory_scope = st.session_state.get("inventory_dialog_scope", "all")
     @st.dialog(f"货号 {inventory_style_code} 库存明细", width="large")
     def show_inventory_detail():
-        render_inventory_detail(inventory_style_code, f"product_page_{inventory_style_code}")
+        render_inventory_detail(
+            inventory_style_code,
+            f"product_page_{inventory_style_code}",
+            scope=inventory_scope,
+        )
         if st.button("关闭", key="close_inventory_dialog"):
             st.session_state.inventory_dialog_style_code = None
             st.rerun()

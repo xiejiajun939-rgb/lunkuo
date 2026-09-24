@@ -21,7 +21,7 @@ from core.product_tags import normalize_product_tags, product_tags_text
 from core.utils import extract_anchor, clear_cache_on_page_change
 from core.ai import get_ai_summary
 from core.theme import page_header
-from core.inventory import attach_inventory_summary, render_inventory_detail
+from core.inventory import attach_inventory_summary, render_inventory_buttons
 
 st.set_page_config(page_title="商品分析助手", layout="wide", initial_sidebar_state="expanded")
 clear_cache_on_page_change("product_assistant")
@@ -801,8 +801,8 @@ inventory_style = st.selectbox(
     "选择货号查看库存明细", sorted(filtered["style_code"].astype(str).unique()),
     key="assistant_inventory_style",
 )
-with st.expander(f"{inventory_style} 仓库、颜色和尺码库存"):
-    render_inventory_detail(inventory_style, "assistant_inventory")
+inventory_row = filtered[filtered["style_code"].astype(str) == str(inventory_style)].iloc[0]
+render_inventory_buttons(inventory_style, inventory_row["总库存"], inventory_row["总仓库存"], "assistant_inventory")
 
 st.markdown("---")
 

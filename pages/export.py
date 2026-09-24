@@ -15,7 +15,7 @@ from core.db import (
 from core.product_tags import normalize_product_tags, product_tags_text
 from core.utils import clear_cache_on_page_change
 from core.theme import page_header
-from core.inventory import attach_inventory_summary, render_inventory_detail
+from core.inventory import attach_inventory_summary, render_inventory_buttons
 
 st.set_page_config(page_title="商品信息管理", layout="wide")
 clear_cache_on_page_change("export")
@@ -355,8 +355,8 @@ with tab_manage:
 
     if not page_df.empty:
         inventory_style = st.selectbox("查看商品库存明细", page_df["style_code"].dropna().astype(str).tolist(), key="master_inventory_style")
-        with st.expander(f"{inventory_style} 库存明细"):
-            render_inventory_detail(inventory_style, "master_inventory")
+        inventory_row = page_df[page_df["style_code"].astype(str) == str(inventory_style)].iloc[0]
+        render_inventory_buttons(inventory_style, inventory_row["总库存"], inventory_row["总仓库存"], "master_inventory")
 
     action_save, action_delete, confirm_col = st.columns([1, 1, 2])
     with action_save:

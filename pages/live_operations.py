@@ -18,7 +18,7 @@ from core.live_analytics import (
 )
 from core.theme import page_header
 from core.utils import clear_cache_on_page_change
-from core.inventory import attach_inventory_summary, render_inventory_detail
+from core.inventory import attach_inventory_summary, render_inventory_buttons
 
 
 DISPLAY_COLUMN_NAMES = {
@@ -378,6 +378,7 @@ else:
     style_summary["年份"] = parsed_year
     style_summary["品类"] = None
 style_summary = style_summary.drop(columns="销售品牌", errors="ignore")
+style_summary = attach_inventory_summary(style_summary, "style_code")
 style_image_lookup = (
     style_summary.assign(style_code=style_summary["style_code"].astype(str).str.strip().str.upper())
     .set_index("style_code")["商品图片"].dropna().to_dict()
@@ -1297,8 +1298,13 @@ with selection_tab:
 with product_tab:
     options = style_summary.sort_values("平台支付", ascending=False)["style_code"].astype(str).tolist()
     selected_style = st.selectbox("选择货号", options)
-    with st.expander(f"{selected_style} 库存明细"):
-        render_inventory_detail(selected_style, f"live_inventory_{selected_style}")
+    inventory_row = style_summary[style_summary["style_code"].astype(str) == selected_style].iloc[0]
+    render_inventory_buttons(
+        selected_style,
+        inventory_row["总库存"],
+        inventory_row["总仓库存"],
+        f"live_inventory_{selected_style}",
+    )
     item = products[products["style_code"].astype(str) == selected_style].copy()
     summary_row = style_summary[style_summary["style_code"].astype(str) == selected_style].iloc[0]
     cards = st.columns(5)

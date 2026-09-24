@@ -9,7 +9,7 @@ from core.db import get_sales_date_range, load_product_master, load_product_sale
 from core.product_tags import normalize_product_tags, product_tags_text
 from core.utils import date_quick_buttons, clear_cache_on_page_change
 from core.theme import page_header
-from core.inventory import attach_inventory_summary, render_inventory_detail
+from core.inventory import attach_inventory_summary, render_inventory_buttons
 
 st.set_page_config(page_title="销售分布与品牌", layout="wide")
 clear_cache_on_page_change("distribution")
@@ -308,8 +308,8 @@ if not coupon_filtered.empty:
         use_container_width=True
     )
     inventory_style = st.selectbox("查看商品库存明细", coupon_detail["货号"].tolist(), key="distribution_inventory_style")
-    with st.expander(f"{inventory_style} 库存明细"):
-        render_inventory_detail(inventory_style, "distribution_inventory")
+    inventory_row = coupon_detail[coupon_detail["货号"].astype(str) == str(inventory_style)].iloc[0]
+    render_inventory_buttons(inventory_style, inventory_row["总库存"], inventory_row["总仓库存"], "distribution_inventory")
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         export_df = coupon_detail.drop(columns=["图片"], errors='ignore')

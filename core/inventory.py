@@ -214,24 +214,58 @@ def load_inventory_details(style_code: str) -> pd.DataFrame:
         return pd.DataFrame(columns=columns)
 
 
-def render_inventory_detail(style_code: str, key: str) -> None:
+def render_inventory_detail(style_code: str, key: str, scope: str = "all") -> None:
+    """Render a colour-by-size matrix for all warehouses or the main warehouse."""
     detail = load_inventory_details(style_code)
     if detail.empty:
         st.info("该货号暂无库存数据。")
         return
+    if scope == "main":
+        detail = detail[detail["warehouse_name"].astype(str).str.strip() == "总仓"].copy()
+        scope_label = "总仓库存"
+    else:
+        scope_label = "总库存"
+    if detail.empty:
+        st.info(f"该货号暂无{scope_label}数据。")
+        return
     as_of = detail["inventory_date"].max()
     total = detail["available_qty"].sum()
-    main = detail.loc[detail["warehouse_name"].astype(str).str.strip() == "总仓", "available_qty"].sum()
-    c1, c2, c3 = st.columns(3)
-    c1.metric("总库存", f"{total:,.0f}")
-    c2.metric("总仓库存", f"{main:,.0f}")
-    c3.metric("库存截至", str(as_of))
-    warehouse = detail.groupby("warehouse_name", as_index=False).agg(库存=("available_qty", "sum"))
-    st.dataframe(warehouse.sort_values("库存", ascending=False), hide_index=True, width="stretch")
-    selected = st.selectbox("查看仓库色码明细", warehouse["warehouse_name"].tolist(), key=f"{key}_warehouse")
-    selected_detail = detail[detail["warehouse_name"] == selected]
-    matrix = selected_detail.pivot_table(
+    c1, c2 = st.columns(2)
+    c1.metric(scope_label, f"{total:,.0f}")
+    c2.metric("库存截至", str(as_of))
+    matrix = detail.pivot_table(
         index="color_name", columns="size_name", values="available_qty", aggfunc="sum", fill_value=0,
     )
     matrix["合计"] = matrix.sum(axis=1)
+    matrix.loc["合计"] = matrix.sum(axis=0)
     st.dataframe(matrix, width="stretch")
+
+
+def render_inventory_buttons(
+    style_code: str,
+    total_inventory: float,
+    main_warehouse_inventory: float,
+    key: str,
+) -> None:
+    """Show total and main-warehouse values as colour-size detail controls."""
+    style_code = str(style_code).strip().upper()
+
+    @st.dialog(f"货号 {style_code} 库存明细", width="large")
+    def _show(scope: str) -> None:
+        render_inventory_detail(style_code, f"{key}_{scope}", scope=scope)
+
+    all_col, main_col = st.columns(2)
+    if all_col.button(
+        f"总库存 {float(total_inventory or 0):,.0f}",
+        key=f"{key}_all",
+        help="查看所有仓库合并后的颜色 × 尺码库存",
+        width="stretch",
+    ):
+        _show("all")
+    if main_col.button(
+        f"总仓库存 {float(main_warehouse_inventory or 0):,.0f}",
+        key=f"{key}_main",
+        help="查看总仓的颜色 × 尺码库存",
+        width="stretch",
+    ):
+        _show("main")
