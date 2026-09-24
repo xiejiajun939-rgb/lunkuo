@@ -62,19 +62,71 @@ function(params) {
 """)
 
 _IMAGE_RENDERER = JsCode("""
-function(params) {
-  if (!params.value) return '';
-  // streamlit-aggrid's React renderer expects a primitive return value here.
-  // Returning an HTMLImageElement is interpreted as a React child and raises
-  // React invariant #31 once for every visible image cell.
-  const safeUrl = String(params.value)
-    .replaceAll('&', '&amp;')
-    .replaceAll('"', '&quot;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;');
-  return `<img src="${safeUrl}" alt="商品图片" style="width:44px;height:44px;object-fit:cover;border-radius:6px;margin-top:2px" />`;
+class InventoryImageRenderer {
+  init(params) {
+    this.eGui = document.createElement('img');
+    this.eGui.alt = '商品图片';
+    this.eGui.style.width = '44px';
+    this.eGui.style.height = '44px';
+    this.eGui.style.objectFit = 'cover';
+    this.eGui.style.borderRadius = '8px';
+    this.eGui.style.display = 'block';
+    this.eGui.style.margin = '3px auto';
+    this.setValue(params.value);
+  }
+  setValue(value) {
+    this.eGui.src = value ? String(value) : '';
+    this.eGui.style.visibility = value ? 'visible' : 'hidden';
+  }
+  getGui() {
+    return this.eGui;
+  }
+  refresh(params) {
+    this.setValue(params.value);
+    return true;
+  }
 }
 """)
+
+_GRID_CSS = {
+    ".ag-root-wrapper": {
+        "border": "1px solid #D9E5EE !important",
+        "border-radius": "12px !important",
+        "overflow": "hidden !important",
+        "box-shadow": "0 1px 3px rgba(15, 45, 68, 0.05) !important",
+    },
+    ".ag-header": {
+        "background-color": "#EEF5FA !important",
+        "border-bottom": "1px solid #D4E2EC !important",
+    },
+    ".ag-header-cell, .ag-header-group-cell": {
+        "color": "#183B56 !important",
+        "font-weight": "700 !important",
+    },
+    ".ag-row": {
+        "color": "#243B53 !important",
+        "border-color": "#E7EEF4 !important",
+    },
+    ".ag-row-even": {"background-color": "#FFFFFF !important"},
+    ".ag-row-odd": {"background-color": "#F8FBFD !important"},
+    ".ag-row-hover": {"background-color": "#E8F5FB !important"},
+    ".ag-row-selected": {
+        "background-color": "#DDF1FA !important",
+        "box-shadow": "inset 3px 0 0 #087EA4 !important",
+    },
+    ".ag-cell": {
+        "color": "#243B53 !important",
+        "border-color": "#EDF2F6 !important",
+    },
+    ".ag-cell[col-id='总库存'], .ag-cell[col-id='总仓库存']": {
+        "color": "#087EA4 !important",
+        "font-weight": "700 !important",
+    },
+    ".ag-paging-panel, .ag-status-bar": {
+        "color": "#486581 !important",
+        "background-color": "#F8FBFD !important",
+    },
+}
 
 
 def _style_column(frame: pd.DataFrame) -> str | None:
@@ -113,6 +165,8 @@ def render_inventory_grid(
         onCellClicked=_CLICK_OR_SELECT_HANDLER if selectable else _CLICK_HANDLER,
         suppressCellFocus=False,
         suppressRowClickSelection=True,
+        rowHeight=52,
+        headerHeight=44,
     )
     builder.configure_column("__inventory_style", hide=True)
     builder.configure_column("__inventory_click", hide=True)
@@ -146,6 +200,7 @@ def render_inventory_grid(
         key=key,
         height=height or min(620, max(250, 58 + min(len(display), 15) * 34)),
         theme="streamlit",
+        custom_css=_GRID_CSS,
         allow_unsafe_jscode=True,
         update_on=["cellValueChanged"],
         data_return_mode=DataReturnMode.CUSTOM,
