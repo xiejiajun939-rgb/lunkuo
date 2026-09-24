@@ -18,7 +18,8 @@ except ImportError:
             start_date=start_date, end_date=end_date,
         )
 from core.theme import page_header
-from core.inventory import attach_inventory_summary, render_inventory_buttons
+from core.inventory import attach_inventory_summary
+from core.interactive_inventory_grid import render_inventory_grid
 from core.utils import clear_cache_on_page_change, date_quick_buttons
 
 
@@ -134,10 +135,7 @@ column_config = {
 }
 for item in selected_objects:
     column_config[item] = st.column_config.NumberColumn(item, format="%.2f")
-st.dataframe(pivot, use_container_width=True, hide_index=True, column_config=column_config)
-inventory_style = st.selectbox("查看商品库存明细", pivot["货号"].tolist(), key="comparison_inventory_style")
-inventory_row = pivot[pivot["货号"].astype(str) == str(inventory_style)].iloc[0]
-render_inventory_buttons(inventory_style, inventory_row["总库存"], inventory_row["总仓库存"], "comparison_inventory")
+render_inventory_grid(pivot, "comparison_inventory_grid", pinned_columns=("商品图片", "货号"))
 
 top_styles = pivot.head(15)["货号"].tolist()
 chart_data = detail[detail["style_code"].isin(top_styles)].copy()

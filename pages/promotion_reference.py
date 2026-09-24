@@ -11,7 +11,8 @@ from core.db import load_product_sales
 from core.promotion import completed_week_starts, load_promotion_rows, week_label
 from core.theme import page_header
 from core.utils import clear_cache_on_page_change
-from core.inventory import attach_inventory_summary, render_inventory_buttons
+from core.inventory import attach_inventory_summary
+from core.interactive_inventory_grid import render_inventory_grid
 
 
 st.set_page_config(page_title="推广参考", layout="wide")
@@ -224,20 +225,16 @@ common_column_config = {
 
 st.markdown("### 货号汇总（所选店铺合计）")
 st.caption("同一货号在所选抖音店铺中合并展示；点击一行，即可在下方查看该货号的各店铺明细。")
-summary_event = st.dataframe(
-    style_display, use_container_width=True, hide_index=True,
-    column_config=common_column_config,
-    on_select="rerun",
-    selection_mode="single-row",
-    key="promotion_reference_style_summary",
+selected_row = render_inventory_grid(
+    style_display,
+    "promotion_reference_style_summary_grid",
+    pinned_columns=("货号", "商品名称"),
+    selectable=True,
 )
 
-selected_rows = list(summary_event.selection.rows)
-if selected_rows:
-    selected_position = selected_rows[0]
-    if 0 <= selected_position < len(style_display):
-        selected_style = str(style_display.iloc[selected_position]["货号"])
-        product_value = style_display.iloc[selected_position]["商品名称"]
+if selected_row:
+        selected_style = str(selected_row["货号"])
+        product_value = selected_row.get("商品名称")
         selected_product = "" if pd.isna(product_value) else str(product_value)
         detail_display = display[display["货号"].astype(str) == selected_style].copy()
         with st.expander(
@@ -246,16 +243,10 @@ if selected_rows:
         ):
             if selected_product and selected_product.lower() not in {"nan", "none"}:
                 st.caption(selected_product)
-            st.dataframe(
-                detail_display, use_container_width=True, hide_index=True,
-                column_config=common_column_config,
-            )
-            inventory_row = style_display[style_display["货号"].astype(str) == str(selected_style)].iloc[0]
-            render_inventory_buttons(
-                selected_style,
-                inventory_row["总库存"],
-                inventory_row["总仓库存"],
-                f"promotion_inventory_{selected_style}",
+            render_inventory_grid(
+                detail_display,
+                f"promotion_detail_grid_{selected_style}",
+                pinned_columns=("货号", "抖音店铺"),
             )
 else:
     st.info("请点击上方货号汇总表中的一行，查看该货号在各抖音店铺的明细。")

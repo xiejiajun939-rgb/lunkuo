@@ -21,7 +21,8 @@ from core.product_tags import normalize_product_tags, product_tags_text
 from core.utils import extract_anchor, clear_cache_on_page_change
 from core.ai import get_ai_summary
 from core.theme import page_header
-from core.inventory import attach_inventory_summary, render_inventory_buttons
+from core.inventory import attach_inventory_summary
+from core.interactive_inventory_grid import render_inventory_grid
 
 st.set_page_config(page_title="商品分析助手", layout="wide", initial_sidebar_state="expanded")
 clear_cache_on_page_change("product_assistant")
@@ -797,12 +798,17 @@ if len(st.session_state.pa_compare_products) >= 2:
 st.markdown("---")
 
 st.markdown("#### 商品库存")
-inventory_style = st.selectbox(
-    "选择货号查看库存明细", sorted(filtered["style_code"].astype(str).unique()),
-    key="assistant_inventory_style",
+inventory_columns = [
+    column for column in [
+        "style_code", "image", "brands", "categories", "总库存", "总仓库存",
+        "净销售额", "发货额", "退货额", "退货率",
+    ] if column in filtered.columns
+]
+render_inventory_grid(
+    filtered[inventory_columns],
+    "assistant_inventory_grid",
+    pinned_columns=("style_code", "image"),
 )
-inventory_row = filtered[filtered["style_code"].astype(str) == str(inventory_style)].iloc[0]
-render_inventory_buttons(inventory_style, inventory_row["总库存"], inventory_row["总仓库存"], "assistant_inventory")
 
 st.markdown("---")
 

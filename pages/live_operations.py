@@ -2,6 +2,7 @@
 from datetime import date, timedelta
 import io
 import json
+import hashlib
 
 import pandas as pd
 import plotly.express as px
@@ -19,6 +20,7 @@ from core.live_analytics import (
 from core.theme import page_header
 from core.utils import clear_cache_on_page_change
 from core.inventory import attach_inventory_summary, render_inventory_buttons
+from core.interactive_inventory_grid import render_inventory_grid
 
 
 DISPLAY_COLUMN_NAMES = {
@@ -108,6 +110,13 @@ def localize_table(frame: pd.DataFrame) -> pd.DataFrame:
 
 def show_table(frame: pd.DataFrame) -> None:
     display = localize_table(frame)
+    if {"总库存", "总仓库存"}.issubset(display.columns):
+        signature = "|".join(map(str, display.columns)) + f"|{len(display)}"
+        if "货号" in display.columns and not display.empty:
+            signature += f"|{display['货号'].iloc[0]}|{display['货号'].iloc[-1]}"
+        grid_key = "live_inventory_grid_" + hashlib.md5(signature.encode("utf-8")).hexdigest()[:12]
+        render_inventory_grid(display, grid_key, pinned_columns=("货号", "商品图片"))
+        return
     column_config = {}
     if "商品图片" in display.columns:
         column_config["商品图片"] = st.column_config.ImageColumn("商品图片", width="small")

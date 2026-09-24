@@ -15,7 +15,8 @@ from core.db import (
 from core.product_tags import normalize_product_tags, product_tags_text
 from core.utils import clear_cache_on_page_change
 from core.theme import page_header
-from core.inventory import attach_inventory_summary, render_inventory_buttons
+from core.inventory import attach_inventory_summary
+from core.interactive_inventory_grid import render_inventory_grid
 
 st.set_page_config(page_title="商品信息管理", layout="wide")
 clear_cache_on_page_change("export")
@@ -334,8 +335,8 @@ with tab_manage:
     with page_col:
         page_number = st.number_input("页码", 1, page_count, 1, key="master_page_number")
     start = (int(page_number) - 1) * page_size
-    page_columns = EDIT_COLUMNS + [column for column in ["总库存", "总仓库存"] if column in filtered.columns]
-    page_df = filtered.iloc[start:start + page_size][page_columns].copy().reset_index(drop=True)
+    current_page = filtered.iloc[start:start + page_size].copy().reset_index(drop=True)
+    page_df = current_page[EDIT_COLUMNS].copy()
     page_df.insert(0, "选择删除", False)
 
     edited_df = st.data_editor(
@@ -348,15 +349,20 @@ with tab_manage:
             "image_url": st.column_config.LinkColumn("图片地址", display_text="查看图片"),
             "category": st.column_config.TextColumn("品类"),
             "tags": st.column_config.TextColumn("商品标签", help="多个标签用逗号分隔，例如：秋季新品，主推品"),
-            "总库存": st.column_config.NumberColumn("总库存", disabled=True, format="%.0f"),
-            "总仓库存": st.column_config.NumberColumn("总仓库存", disabled=True, format="%.0f"),
         }, key="product_master_editor",
     )
 
-    if not page_df.empty:
-        inventory_style = st.selectbox("查看商品库存明细", page_df["style_code"].dropna().astype(str).tolist(), key="master_inventory_style")
-        inventory_row = page_df[page_df["style_code"].astype(str) == str(inventory_style)].iloc[0]
-        render_inventory_buttons(inventory_style, inventory_row["总库存"], inventory_row["总仓库存"], "master_inventory")
+    if not current_page.empty:
+        st.caption("当前页库存：点击总库存或总仓库存数字查看颜色 × 尺码明细。")
+        inventory_columns = [
+            column for column in ["style_code", "image_url", "总库存", "总仓库存"]
+            if column in current_page.columns
+        ]
+        render_inventory_grid(
+            current_page[inventory_columns],
+            f"master_inventory_grid_{page_number}_{page_size}",
+            pinned_columns=("style_code", "image_url"),
+        )
 
     action_save, action_delete, confirm_col = st.columns([1, 1, 2])
     with action_save:

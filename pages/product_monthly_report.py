@@ -8,7 +8,8 @@ import streamlit as st
 
 from core.db import get_sales_date_range, load_product_master, load_product_sales_cube
 from core.theme import page_header
-from core.inventory import attach_inventory_summary, render_inventory_buttons
+from core.inventory import attach_inventory_summary
+from core.interactive_inventory_grid import render_inventory_grid
 from core.utils import SEASON_MAP, clear_cache_on_page_change
 
 
@@ -185,10 +186,7 @@ with tab_products:
     fig_top = px.bar(product.head(15), x="style_code", y="实销金额", color="季节", hover_data=["品类", "发货金额", "退货率"], title="实销金额 TOP15 货号")
     fig_top.update_layout(height=380, xaxis_title="货号", yaxis_title="实销金额（元）")
     st.plotly_chart(fig_top, use_container_width=True)
-    st.dataframe(product, hide_index=True, use_container_width=True, column_config={"发货金额":st.column_config.NumberColumn(format="¥%.2f"),"退货金额":st.column_config.NumberColumn(format="¥%.2f"),"实销金额":st.column_config.NumberColumn(format="¥%.2f"),"退货率":st.column_config.NumberColumn(format="percent"),"实销占比":st.column_config.NumberColumn(format="percent")})
-    inventory_style = st.selectbox("查看商品库存明细", product["style_code"].tolist(), key="monthly_inventory_style")
-    inventory_row = product[product["style_code"].astype(str) == str(inventory_style)].iloc[0]
-    render_inventory_buttons(inventory_style, inventory_row["总库存"], inventory_row["总仓库存"], "monthly_inventory")
+    render_inventory_grid(product, "monthly_product_inventory_grid", pinned_columns=("style_code",))
 
 with tab_structure:
     dimension = st.radio("结构维度", ["品类", "年份", "季节", "品牌"], horizontal=True)
