@@ -64,14 +64,15 @@ function(params) {
 _IMAGE_RENDERER = JsCode("""
 function(params) {
   if (!params.value) return '';
-  const image = document.createElement('img');
-  image.src = params.value;
-  image.style.width = '44px';
-  image.style.height = '44px';
-  image.style.objectFit = 'cover';
-  image.style.borderRadius = '6px';
-  image.style.marginTop = '2px';
-  return image;
+  // streamlit-aggrid's React renderer expects a primitive return value here.
+  // Returning an HTMLImageElement is interpreted as a React child and raises
+  // React invariant #31 once for every visible image cell.
+  const safeUrl = String(params.value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('"', '&quot;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;');
+  return `<img src="${safeUrl}" alt="商品图片" style="width:44px;height:44px;object-fit:cover;border-radius:6px;margin-top:2px" />`;
 }
 """)
 
