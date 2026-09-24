@@ -136,6 +136,7 @@ def _style_column(frame: pd.DataFrame) -> str | None:
     return None
 
 
+@st.fragment
 def render_inventory_grid(
     frame: pd.DataFrame,
     key: str,
@@ -145,13 +146,15 @@ def render_inventory_grid(
     selectable: bool = False,
 ) -> dict | None:
     """Render a sortable/filterable grid whose two inventory cells open details."""
+    selection_state_key = f"__inventory_grid_selection_{key}"
+    stored_selection = st.session_state.get(selection_state_key) if selectable else None
     if frame is None or frame.empty:
         st.info("暂无数据。")
-        return None
+        return stored_selection
     style_column = _style_column(frame)
     if not style_column or not {"总库存", "总仓库存"}.issubset(frame.columns):
         st.dataframe(frame, hide_index=True, width="stretch")
-        return None
+        return stored_selection
 
     display = frame.copy()
     display["__inventory_style"] = display[style_column].fillna("").astype(str).str.strip().str.upper()
@@ -212,7 +215,7 @@ def render_inventory_grid(
     )
     clicked = getattr(response, "raw_data", None)
     if not isinstance(clicked, dict):
-        return None
+        return stored_selection
     row = clicked.get("row") if isinstance(clicked.get("row"), dict) else {}
     token = str(row.get("__inventory_click") or "")
     style_code = str(row.get("__inventory_style") or "").strip().upper()
@@ -224,10 +227,16 @@ def render_inventory_grid(
             render_inventory_detail(style_code, f"{key}_{scope}", scope=scope)
 
         _show_detail()
-        return None
+        return stored_selection
     if selectable and row.get("__row_select"):
-        return {
+        selected = {
             column: value for column, value in row.items()
             if not column.startswith("__")
         }
-    return None
+        if selected != stored_selection:
+            st.session_state[selection_state_key] = selected
+            # Row drilldown lives outside this fragment, so only that action
+            # intentionally requests a full rerun. Inventory clicks stay local.
+            st.rerun()
+        return selected
+    return stored_selection
