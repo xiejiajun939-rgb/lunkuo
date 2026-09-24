@@ -90,7 +90,9 @@ begin
     raise exception 'Inventory batch is missing or is not importing';
   end if;
 
-  delete from public.inventory_stock_current;
+  -- The hosted database rejects DELETE statements without an explicit filter.
+  -- `id` is the non-null primary key, so this still clears the current snapshot.
+  delete from public.inventory_stock_current where id is not null;
 
   insert into public.inventory_stock_current (
     batch_id, inventory_date, style_code, sku,
