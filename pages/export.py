@@ -15,6 +15,7 @@ from core.db import (
 from core.product_tags import normalize_product_tags, product_tags_text
 from core.utils import clear_cache_on_page_change
 from core.theme import page_header
+from core.inventory import attach_inventory_summary, render_inventory_detail
 
 st.set_page_config(page_title="商品信息管理", layout="wide")
 clear_cache_on_page_change("export")
@@ -181,6 +182,7 @@ if audit_loaded:
 else:
     sold_styles_df = pd.DataFrame(columns=["style_code"])
     catalog_df = master_df.copy()
+catalog_df = attach_inventory_summary(catalog_df, "style_code")
 catalog_df["tags"] = catalog_df["tags"].fillna("")
 catalog_df["launch_date"] = pd.to_datetime(catalog_df["launch_date"], errors="coerce")
 style_text = catalog_df["style_code"].fillna("").astype(str).str.strip().str.upper()
@@ -332,7 +334,8 @@ with tab_manage:
     with page_col:
         page_number = st.number_input("页码", 1, page_count, 1, key="master_page_number")
     start = (int(page_number) - 1) * page_size
-    page_df = filtered.iloc[start:start + page_size][EDIT_COLUMNS].copy().reset_index(drop=True)
+    page_columns = EDIT_COLUMNS + [column for column in ["总库存", "总仓库存"] if column in filtered.columns]
+    page_df = filtered.iloc[start:start + page_size][page_columns].copy().reset_index(drop=True)
     page_df.insert(0, "选择删除", False)
 
     edited_df = st.data_editor(
@@ -345,8 +348,15 @@ with tab_manage:
             "image_url": st.column_config.LinkColumn("图片地址", display_text="查看图片"),
             "category": st.column_config.TextColumn("品类"),
             "tags": st.column_config.TextColumn("商品标签", help="多个标签用逗号分隔，例如：秋季新品，主推品"),
+            "总库存": st.column_config.NumberColumn("总库存", disabled=True, format="%.0f"),
+            "总仓库存": st.column_config.NumberColumn("总仓库存", disabled=True, format="%.0f"),
         }, key="product_master_editor",
     )
+
+    if not page_df.empty:
+        inventory_style = st.selectbox("查看商品库存明细", page_df["style_code"].dropna().astype(str).tolist(), key="master_inventory_style")
+        with st.expander(f"{inventory_style} 库存明细"):
+            render_inventory_detail(inventory_style, "master_inventory")
 
     action_save, action_delete, confirm_col = st.columns([1, 1, 2])
     with action_save:

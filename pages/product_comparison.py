@@ -18,6 +18,7 @@ except ImportError:
             start_date=start_date, end_date=end_date,
         )
 from core.theme import page_header
+from core.inventory import attach_inventory_summary, render_inventory_detail
 from core.utils import clear_cache_on_page_change, date_quick_buttons
 
 
@@ -108,6 +109,7 @@ pivot = detail.pivot_table(
 pivot["合计"] = pivot.sum(axis=1)
 pivot["表现最好"] = pivot[selected_objects].idxmax(axis=1)
 pivot = pivot.sort_values("合计", ascending=False).reset_index().rename(columns={"style_code": "货号"})
+pivot = attach_inventory_summary(pivot, "货号")
 
 master = load_product_master()
 if not master.empty and {"style_code", "image_url"}.issubset(master.columns):
@@ -133,6 +135,9 @@ column_config = {
 for item in selected_objects:
     column_config[item] = st.column_config.NumberColumn(item, format="%.2f")
 st.dataframe(pivot, use_container_width=True, hide_index=True, column_config=column_config)
+inventory_style = st.selectbox("查看商品库存明细", pivot["货号"].tolist(), key="comparison_inventory_style")
+with st.expander(f"{inventory_style} 库存明细"):
+    render_inventory_detail(inventory_style, "comparison_inventory")
 
 top_styles = pivot.head(15)["货号"].tolist()
 chart_data = detail[detail["style_code"].isin(top_styles)].copy()

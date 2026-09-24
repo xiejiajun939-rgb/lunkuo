@@ -28,6 +28,7 @@ except ImportError:
 from core.utils import date_quick_buttons, extract_anchor, clear_cache_on_page_change
 from core.ai import get_ai_summary
 from core.theme import page_header
+from core.inventory import attach_inventory_summary, render_inventory_detail
 
 st.markdown("""
 <style>
@@ -1009,12 +1010,13 @@ grouped["退款率"] = np.where(
     (grouped["退货金额"] / grouped["发货金额"] * 100).map("{:.2f}%".format),
     "-"
 )
+grouped = attach_inventory_summary(grouped, "货号")
 
 # ---------- 排序与分页 ----------
 st.markdown("#### 货号汇总表")
 col_s1, col_s2, col_s3 = st.columns([1, 1, 2])
 with col_s1:
-    sort_opts = ["货号", "发货金额", "发货金额占比", "退货金额", "净销售金额", "实销金额占比", "退款率"]
+    sort_opts = ["货号", "总库存", "总仓库存", "发货金额", "发货金额占比", "退货金额", "净销售金额", "实销金额占比", "退款率"]
     sort_by = st.selectbox("排序字段", sort_opts, index=sort_opts.index(st.session_state.sort_by), key="sort_sel")
 with col_s2:
     asc = st.radio("顺序", ["降序", "升序"], horizontal=True, index=0 if not st.session_state.sort_ascending else 1, key="order")
@@ -1031,6 +1033,8 @@ if sort_by != st.session_state.sort_by or (asc == "升序" and not st.session_st
 # 排序
 if st.session_state.sort_by == "货号":
     grouped = grouped.sort_values("货号", ascending=st.session_state.sort_ascending)
+elif st.session_state.sort_by in {"总库存", "总仓库存"}:
+    grouped = grouped.sort_values(st.session_state.sort_by, ascending=st.session_state.sort_ascending)
 elif st.session_state.sort_by == "发货金额":
     grouped = grouped.sort_values("发货金额", ascending=st.session_state.sort_ascending)
 elif st.session_state.sort_by == "发货金额占比":
@@ -1078,7 +1082,7 @@ with col_export:
             if "image_url" in export_df.columns:
                 export_df = export_df.drop(columns=["image_url"])
             cols_order = [
-                "货号", "master_category", "launch_date", "发货金额", "发货金额占比", "退货金额",
+                "货号", "master_category", "launch_date", "总库存", "总仓库存", "发货金额", "发货金额占比", "退货金额",
                 "净销售金额", "实销金额占比", "退款率", "product_tags"
             ]
             export_cols = [c for c in cols_order if c in export_df.columns]
@@ -1105,7 +1109,7 @@ with col_export:
                 "-"
             )
             master_cols = grouped[[
-                "货号", "master_category", "launch_date", "发货金额", "发货金额占比", "退货金额",
+                "货号", "master_category", "launch_date", "总库存", "总仓库存", "发货金额", "发货金额占比", "退货金额",
                 "净销售金额", "实销金额占比", "退款率", "product_tags"
             ]].copy()
             export_df = pd.merge(
@@ -1124,7 +1128,7 @@ with col_export:
             }, inplace=True)
             export_df["商品标签"] = export_df["商品标签"].map(product_tags_text)
             final_cols = [
-                "货号", "商品分类", "上新时间", "发货金额", "发货金额占比", "退货金额",
+                "货号", "商品分类", "上新时间", "总库存", "总仓库存", "发货金额", "发货金额占比", "退货金额",
                 "净销售金额", "实销金额占比", "退款率", "商品标签",
                 "明细类型", group_name, "明细发货金额", "明细退货金额", "明细净销售金额", "明细退款率"
             ]
@@ -1150,17 +1154,17 @@ with col_export:
         )
 
 # ---------- 显示表格 ----------
-cols = st.columns([1.4, 0.5, 1.0, 0.9, 1.0, 0.8, 1.0, 1.0, 0.8, 0.8, 0.7, 0.6, 0.6])
+cols = st.columns([1.3, 0.5, 0.9, 0.8, 0.9, 0.7, 0.9, 0.9, 0.7, 0.7, 0.7, 0.65, 0.65, 0.55, 0.55])
 headers = [
     "货号", "图片", "商品分类", "上新时间", "发货金额(¥)", "发货占比", "退货金额(¥)",
-    "实销金额(¥)", "实销占比", "退款率", "商品标签", "详情", "趋势"
+    "实销金额(¥)", "实销占比", "退款率", "商品标签", "总库存", "总仓库存", "详情", "趋势"
 ]
 for c, h in zip(cols, headers):
     c.markdown(f"**{h}**")
 
 for idx, row in page_df.iterrows():
-    c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13 = st.columns(
-        [1.4, 0.5, 1.0, 0.9, 1.0, 0.8, 1.0, 1.0, 0.8, 0.8, 0.7, 0.6, 0.6]
+    c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15 = st.columns(
+        [1.3, 0.5, 0.9, 0.8, 0.9, 0.7, 0.9, 0.9, 0.7, 0.7, 0.7, 0.65, 0.65, 0.55, 0.55]
     )
     c1.write(row["货号"])
     if row.get("image_url") and pd.notna(row["image_url"]):
@@ -1178,7 +1182,14 @@ for idx, row in page_df.iterrows():
     c9.write(f"{row['实销金额占比']:.2%}" if pd.notna(row["实销金额占比"]) else "-")
     c10.write(row["退款率"])
     c11.caption(product_tags_text(row.get("product_tags")) or "-")
-    if c12.button("📊", key=f"detail_btn_{row['货号']}_{idx}"):
+    if c12.button(f"{row.get('总库存', 0):,.0f}", key=f"inventory_btn_{row['货号']}_{idx}", help="点击查看仓库、颜色、尺码明细"):
+        st.session_state.show_dialog = False
+        st.session_state.show_trend_dialog = False
+        st.session_state.inventory_dialog_style_code = row["货号"]
+        st.rerun()
+    c13.write(f"{row.get('总仓库存', 0):,.0f}")
+    if c14.button("📊", key=f"detail_btn_{row['货号']}_{idx}"):
+        st.session_state.inventory_dialog_style_code = None
         style_code = row["货号"]
         detail_df = filtered[filtered["style_code"] == style_code].copy()
         if not detail_df.empty:
@@ -1208,7 +1219,8 @@ for idx, row in page_df.iterrows():
         st.session_state.show_dialog = True
         st.session_state.detail_clicked = True
         st.rerun()
-    if c13.button("📈", key=f"trend_btn_{row['货号']}_{idx}"):
+    if c15.button("📈", key=f"trend_btn_{row['货号']}_{idx}"):
+        st.session_state.inventory_dialog_style_code = None
         style_code = row["货号"]
         trend_data = filtered[filtered["style_code"] == style_code].copy()
         if not trend_data.empty:
@@ -1230,6 +1242,17 @@ for idx, row in page_df.iterrows():
         st.session_state.show_trend_dialog = True
         st.session_state.trend_clicked = True
         st.rerun()
+# ---------- 库存明细对话框 ----------
+if st.session_state.get("inventory_dialog_style_code"):
+    inventory_style_code = st.session_state.inventory_dialog_style_code
+    @st.dialog(f"货号 {inventory_style_code} 库存明细", width="large")
+    def show_inventory_detail():
+        render_inventory_detail(inventory_style_code, f"product_page_{inventory_style_code}")
+        if st.button("关闭", key="close_inventory_dialog"):
+            st.session_state.inventory_dialog_style_code = None
+            st.rerun()
+    show_inventory_detail()
+
 # ---------- 详情对话框 ----------
 if st.session_state.show_dialog and st.session_state.dialog_style_code:
     style_code = st.session_state.dialog_style_code

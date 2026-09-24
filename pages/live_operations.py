@@ -18,6 +18,7 @@ from core.live_analytics import (
 )
 from core.theme import page_header
 from core.utils import clear_cache_on_page_change
+from core.inventory import attach_inventory_summary, render_inventory_detail
 
 
 DISPLAY_COLUMN_NAMES = {
@@ -60,7 +61,7 @@ def localize_table(frame: pd.DataFrame) -> pd.DataFrame:
     """只调整页面展示：字段中文化，比例按两位小数显示。"""
     if frame is None:
         return pd.DataFrame()
-    display = frame.copy()
+    display = attach_inventory_summary(frame.copy())
     display = display.drop(
         columns=["id", "live_room_id", "product_id", "imported_at", "created_at", "updated_at"],
         errors="ignore",
@@ -1296,6 +1297,8 @@ with selection_tab:
 with product_tab:
     options = style_summary.sort_values("平台支付", ascending=False)["style_code"].astype(str).tolist()
     selected_style = st.selectbox("选择货号", options)
+    with st.expander(f"{selected_style} 库存明细"):
+        render_inventory_detail(selected_style, f"live_inventory_{selected_style}")
     item = products[products["style_code"].astype(str) == selected_style].copy()
     summary_row = style_summary[style_summary["style_code"].astype(str) == selected_style].iloc[0]
     cards = st.columns(5)

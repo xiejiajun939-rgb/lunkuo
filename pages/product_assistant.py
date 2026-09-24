@@ -21,6 +21,7 @@ from core.product_tags import normalize_product_tags, product_tags_text
 from core.utils import extract_anchor, clear_cache_on_page_change
 from core.ai import get_ai_summary
 from core.theme import page_header
+from core.inventory import attach_inventory_summary, render_inventory_detail
 
 st.set_page_config(page_title="商品分析助手", layout="wide", initial_sidebar_state="expanded")
 clear_cache_on_page_change("product_assistant")
@@ -458,6 +459,7 @@ if selected_tags:
     )]
 filtered = filtered[(filtered["净销售额"] >= min_net) & (filtered["净销售额"] <= max_net)]
 filtered = filtered[filtered["退货率"] <= max_return_rate]
+filtered = attach_inventory_summary(filtered, "style_code")
 
 if filtered.empty:
     st.warning("没有商品满足当前筛选条件，请调整筛选条件。")
@@ -794,6 +796,16 @@ if len(st.session_state.pa_compare_products) >= 2:
 
 st.markdown("---")
 
+st.markdown("#### 商品库存")
+inventory_style = st.selectbox(
+    "选择货号查看库存明细", sorted(filtered["style_code"].astype(str).unique()),
+    key="assistant_inventory_style",
+)
+with st.expander(f"{inventory_style} 仓库、颜色和尺码库存"):
+    render_inventory_detail(inventory_style, "assistant_inventory")
+
+st.markdown("---")
+
 # ---------- AI 智能报告 ----------
 st.markdown("#### 📄 AI 智能报告")
 if st.button("🚀 生成当前筛选条件下的智能报告", key="pa_generate_report_new"):
@@ -840,7 +852,7 @@ st.markdown("---")
 # ---------- 导出 ----------
 st.markdown("#### 💾 导出数据")
 if st.button("📥 导出当前筛选的商品列表（Excel）", key="pa_export_new"):
-    export_df = filtered[["style_code", "brands", "categories", "净销售额", "发货额", "退货额", "退货率", "order_count", "最近销售日期", "product_tags"]].copy()
+    export_df = filtered[["style_code", "brands", "categories", "总库存", "总仓库存", "净销售额", "发货额", "退货额", "退货率", "order_count", "最近销售日期", "product_tags"]].copy()
     export_df.rename(columns={
         "style_code": "货号",
         "brands": "品牌",

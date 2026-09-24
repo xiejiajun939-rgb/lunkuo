@@ -8,6 +8,7 @@ import streamlit as st
 
 from core.db import get_sales_date_range, load_product_master, load_product_sales_cube
 from core.theme import page_header
+from core.inventory import attach_inventory_summary, render_inventory_detail
 from core.utils import SEASON_MAP, clear_cache_on_page_change
 
 
@@ -175,6 +176,7 @@ product = current.groupby("style_code", as_index=False).agg(
     品牌=("brand", "last"), 年份=("product_year", "last"), 季节=("season", "last"), 品类=("category", "last"),
     发货金额=("ship_amount", "sum"), 退货金额=("return_amount", "sum"), 实销金额=("net_amount", "sum")
 )
+product = attach_inventory_summary(product, "style_code")
 product["退货率"] = np.where(product["发货金额"] != 0, product["退货金额"] / product["发货金额"], 0)
 product["实销占比"] = product["实销金额"] / cur["net"] if cur["net"] else 0
 product = product.sort_values("实销金额", ascending=False)
@@ -184,6 +186,9 @@ with tab_products:
     fig_top.update_layout(height=380, xaxis_title="货号", yaxis_title="实销金额（元）")
     st.plotly_chart(fig_top, use_container_width=True)
     st.dataframe(product, hide_index=True, use_container_width=True, column_config={"发货金额":st.column_config.NumberColumn(format="¥%.2f"),"退货金额":st.column_config.NumberColumn(format="¥%.2f"),"实销金额":st.column_config.NumberColumn(format="¥%.2f"),"退货率":st.column_config.NumberColumn(format="percent"),"实销占比":st.column_config.NumberColumn(format="percent")})
+    inventory_style = st.selectbox("查看商品库存明细", product["style_code"].tolist(), key="monthly_inventory_style")
+    with st.expander(f"{inventory_style} 库存明细"):
+        render_inventory_detail(inventory_style, "monthly_inventory")
 
 with tab_structure:
     dimension = st.radio("结构维度", ["品类", "年份", "季节", "品牌"], horizontal=True)

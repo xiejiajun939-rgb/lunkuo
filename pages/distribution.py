@@ -9,6 +9,7 @@ from core.db import get_sales_date_range, load_product_master, load_product_sale
 from core.product_tags import normalize_product_tags, product_tags_text
 from core.utils import date_quick_buttons, clear_cache_on_page_change
 from core.theme import page_header
+from core.inventory import attach_inventory_summary, render_inventory_detail
 
 st.set_page_config(page_title="销售分布与品牌", layout="wide")
 clear_cache_on_page_change("distribution")
@@ -279,6 +280,7 @@ if not coupon_filtered.empty:
         净销售金额=("net_amount", "sum")
     ).reset_index()
     coupon_detail.rename(columns={"style_code": "货号"}, inplace=True)
+    coupon_detail = attach_inventory_summary(coupon_detail, "货号")
     master_df = load_product_master()
     if not master_df.empty and "style_code" in master_df.columns:
         master_df["style_code"] = master_df["style_code"].astype(str).str.strip().str.upper()
@@ -305,6 +307,9 @@ if not coupon_filtered.empty:
         hide_index=True,
         use_container_width=True
     )
+    inventory_style = st.selectbox("查看商品库存明细", coupon_detail["货号"].tolist(), key="distribution_inventory_style")
+    with st.expander(f"{inventory_style} 库存明细"):
+        render_inventory_detail(inventory_style, "distribution_inventory")
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         export_df = coupon_detail.drop(columns=["图片"], errors='ignore')

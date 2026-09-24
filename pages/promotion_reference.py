@@ -11,6 +11,7 @@ from core.db import load_product_sales
 from core.promotion import completed_week_starts, load_promotion_rows, week_label
 from core.theme import page_header
 from core.utils import clear_cache_on_page_change
+from core.inventory import attach_inventory_summary, render_inventory_detail
 
 
 st.set_page_config(page_title="推广参考", layout="wide")
@@ -202,6 +203,8 @@ style_display = style_summary.rename(columns={
     "整体发货", "小店发货", "直播发货", "整体实销", "小店实销", "直播实销", "小店贡献率",
     "推广消耗", "推广展示", "推广点击", "推广CTR", "推广净成交", "推广净ROI", "消耗/小店实销",
 ]].sort_values(["小店实销", "整体实销"], ascending=False).reset_index(drop=True)
+style_display = attach_inventory_summary(style_display, "货号")
+display = attach_inventory_summary(display, "货号")
 
 common_column_config = {
     column: st.column_config.NumberColumn(column, format="¥%.2f")
@@ -247,6 +250,7 @@ if selected_rows:
                 detail_display, use_container_width=True, hide_index=True,
                 column_config=common_column_config,
             )
+            render_inventory_detail(selected_style, f"promotion_inventory_{selected_style}")
 else:
     st.info("请点击上方货号汇总表中的一行，查看该货号在各抖音店铺的明细。")
 

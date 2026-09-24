@@ -17,6 +17,7 @@ from core.live_analytics import (
     preview_douyin_live_workbook,
 )
 from core.access_audit import default_audit_dates, load_access_logs
+from core.inventory import parse_inventory_workbook, save_inventory_snapshot
 
 st.set_page_config(page_title="系统设置", layout="wide")
 clear_cache_on_page_change("settings")
@@ -152,6 +153,60 @@ with tab_upload:
                         st.write(f"✅ {uploaded.name}：{count} 条")
                     if total:
                         callbacks["mark_data_changed"]()
+
+    st.markdown("### 库存数据上传")
+    with st.container(border=True):
+        st.markdown("#### 每日全量库存")
+        st.caption(
+            "每天上传一次完整库存表。系统只保存商品库中已存在的货号；正式导入成功后，"
+            "当前库存会整盘替换，不会与前一天或同一天旧数据累计。"
+        )
+        inventory_date = st.date_input("库存日期", value=date.today(), key="settings_inventory_date")
+        inventory_file = st.file_uploader(
+            "库存 Excel", type=["xlsx", "xls"], key="settings_inventory_file"
+        )
+        if inventory_file is not None:
+            try:
+                inventory_frame, inventory_stats = parse_inventory_workbook(inventory_file, inventory_date)
+                metric_columns = st.columns(5)
+                metric_columns[0].metric("原始记录", f"{inventory_stats['source_rows']:,}")
+                metric_columns[1].metric("原始货号", f"{inventory_stats['source_styles']:,}")
+                metric_columns[2].metric("匹配货号", f"{inventory_stats['matched_styles']:,}")
+                metric_columns[3].metric("跳过货号", f"{inventory_stats['skipped_styles']:,}")
+                metric_columns[4].metric("保存明细", f"{inventory_stats['saved_rows']:,}")
+                if inventory_stats["negative_rows"]:
+                    st.warning(f"匹配后的库存中有 {inventory_stats['negative_rows']:,} 条负库存，将保留并在明细中显示。")
+                if inventory_stats["invalid_qty_rows"]:
+                    st.warning(f"有 {inventory_stats['invalid_qty_rows']:,} 条可用数无法识别，已跳过。")
+                with st.expander("查看未匹配、不会保存的货号"):
+                    skipped = inventory_stats["skipped_style_codes"]
+                    st.write("、".join(skipped[:500]) if skipped else "无")
+                    if len(skipped) > 500:
+                        st.caption(f"仅显示前500个，共 {len(skipped):,} 个。")
+                confirm_inventory = st.checkbox(
+                    f"我确认用 {inventory_date} 的完整库存替换当前库存",
+                    key="confirm_inventory_replace",
+                )
+                if st.button(
+                    "正式导入并整盘替换库存",
+                    type="primary",
+                    disabled=not confirm_inventory,
+                    key="settings_replace_inventory",
+                ):
+                    with st.spinner("正在写入新库存，完成前旧库存仍保持可用……"):
+                        result = save_inventory_snapshot(
+                            inventory_frame, inventory_date, inventory_file.name, inventory_stats
+                        )
+                    st.cache_data.clear()
+                    if callbacks:
+                        callbacks["mark_data_changed"]()
+                    st.success(
+                        f"库存替换完成：{result['matched_styles']:,} 个货号，"
+                        f"{result['saved_rows']:,} 条仓库色码明细；"
+                        f"未匹配的 {result['skipped_styles']:,} 个货号没有保存。"
+                    )
+            except Exception as exc:
+                st.error(f"库存文件预检失败：{exc}")
 
     st.markdown("### 直播数据上传")
     with st.container(border=True):
