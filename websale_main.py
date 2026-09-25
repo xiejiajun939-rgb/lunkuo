@@ -16,6 +16,7 @@ import json
 import math
 import time
 import re
+import secrets
 import numpy as np
 import extra_streamlit_components as stx
 from supabase import create_client
@@ -131,6 +132,26 @@ apply_global_theme()
 supabase = init_supabase()
 
 # ========== 子账号数据库操作 ==========
+def hash_password(password):
+    if str(password).startswith("pbkdf2_sha256$"):
+        return str(password)
+    salt = base64.urlsafe_b64encode(secrets.token_bytes(16)).decode("ascii").rstrip("=")
+    digest = hashlib.pbkdf2_hmac("sha256", str(password).encode("utf-8"), salt.encode("ascii"), 210000, dklen=32)
+    encoded = base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
+    return f"pbkdf2_sha256$210000${salt}${encoded}"
+
+def verify_password(password, stored):
+    stored = str(stored or "")
+    if not stored.startswith("pbkdf2_sha256$"):
+        return hmac.compare_digest(stored, str(password))
+    try:
+        _, rounds, salt, expected = stored.split("$", 3)
+        digest = hashlib.pbkdf2_hmac("sha256", str(password).encode("utf-8"), salt.encode("ascii"), int(rounds), dklen=32)
+        actual = base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
+        return hmac.compare_digest(actual, expected)
+    except (ValueError, TypeError):
+        return False
+
 def load_sub_accounts_from_db():
     if supabase is None:
         return {}
@@ -162,7 +183,7 @@ def save_sub_account_to_db(username, info):
     try:
         data = {
             "username": username,
-            "password": info["password"],
+            "password": hash_password(info["password"]),
             "role": info["role"],
             "default_suffix": "_all",  # 兼容数据库现有字段
             "permissions": info.get("permissions", {}),
@@ -283,7 +304,7 @@ def login():
         submitted = st.form_submit_button("登录工作台", type="primary")
         if submitted:
             users = get_all_users()
-            if username in users and users[username]["password"] == password:
+            if username in users and verify_password(password, users[username]["password"]):
                 st.session_state.authenticated = True
                 st.session_state.username = username
                 st.session_state.role = users[username]["role"]
