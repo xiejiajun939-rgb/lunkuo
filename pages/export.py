@@ -148,6 +148,28 @@ def _delete_tag_from_products(tag_name, product_df):
     return len(records)
 
 
+def _update_tag_product_links(tag_name, changes, product_df):
+    """只更新指定标签与商品的关联，不改变商品已有的其他标签。"""
+    tag_lookup = product_df.drop_duplicates("style_code", keep="last").set_index("style_code")["tags"].to_dict()
+    records = []
+    for style_code, enabled in changes.items():
+        style_code = str(style_code).strip().upper()
+        tags = normalize_product_tags(tag_lookup.get(style_code))
+        if enabled and tag_name not in tags:
+            tags.append(tag_name)
+        elif not enabled:
+            tags = [tag for tag in tags if tag != tag_name]
+        payload = {"style_code": style_code, "tags": tags}
+        if tag_name == "首单礼金":
+            payload["has_newbie_coupon"] = bool(enabled)
+        records.append(payload)
+    for offset in range(0, len(records), 500):
+        supabase.table("product_master").upsert(
+            records[offset:offset + 500], on_conflict="style_code"
+        ).execute()
+    return len(records)
+
+
 callbacks = st.session_state.get("_admin_callbacks", {})
 
 
@@ -462,11 +484,15 @@ with tab_tags:
     tag_flash = st.session_state.pop("product_tag_flash", None)
     if tag_flash:
         st.success(tag_flash)
-    current_tags = sorted({
+    product_tag_names = {
         tag for value in master_df["tags"]
         for tag in normalize_product_tags(value)
-    })
+    }
     tag_period_df = load_product_tag_periods()
+    period_tag_names = set(
+        tag_period_df.get("tag_name", pd.Series(dtype=str)).dropna().astype(str).str.strip()
+    )
+    current_tags = sorted(product_tag_names | {tag for tag in period_tag_names if tag})
     if current_tags:
         st.write("当前标签：" + "　".join(f"`{tag}`" for tag in current_tags))
         period_view = pd.DataFrame({"标签名称": current_tags})
@@ -497,6 +523,96 @@ with tab_tags:
             axis=1,
         )
         st.dataframe(period_view, hide_index=True, width="stretch")
+
+        with st.container(border=True):
+            st.markdown("#### 直接修改标签商品")
+            st.caption("选择已有标签后，可直接勾选或取消商品。保存时只修改当前标签，不影响商品的其他标签。")
+            edit_tag = st.selectbox(
+                "选择已有标签",
+                current_tags,
+                index=None,
+                placeholder="请选择需要维护的标签",
+                key="edit_existing_product_tag",
+            )
+            if edit_tag:
+                edit_search_col, edit_scope_col = st.columns([2, 1])
+                with edit_search_col:
+                    edit_keyword = st.text_input(
+                        "搜索货号",
+                        placeholder="输入完整或部分货号",
+                        key="edit_existing_tag_keyword",
+                    ).strip().upper()
+                with edit_scope_col:
+                    edit_scope = st.radio(
+                        "显示范围", ["全部商品", "仅已关联"], horizontal=True,
+                        key="edit_existing_tag_scope",
+                    )
+
+                editable_products = master_df.copy()
+                editable_products["style_code"] = (
+                    editable_products["style_code"].fillna("").astype(str).str.strip().str.upper()
+                )
+                editable_products = editable_products[editable_products["style_code"] != ""].drop_duplicates(
+                    "style_code", keep="last"
+                )
+                editable_products["关联当前标签"] = editable_products["tags"].map(
+                    lambda value: edit_tag in normalize_product_tags(value)
+                )
+                linked_count = int(editable_products["关联当前标签"].sum())
+                if edit_keyword:
+                    editable_products = editable_products[
+                        editable_products["style_code"].str.contains(edit_keyword, regex=False)
+                    ]
+                if edit_scope == "仅已关联":
+                    editable_products = editable_products[editable_products["关联当前标签"]]
+
+                st.info(
+                    f"“{edit_tag}”当前关联 {linked_count:,} 个商品；本表显示 {len(editable_products):,} 个商品。"
+                )
+                editor_columns = [
+                    column for column in ["关联当前标签", "style_code", "image_url", "category", "launch_date", "tags"]
+                    if column in editable_products.columns
+                ]
+                original_links = editable_products.set_index("style_code")["关联当前标签"].to_dict()
+                edited_links = st.data_editor(
+                    editable_products[editor_columns],
+                    width="stretch",
+                    hide_index=True,
+                    disabled=[column for column in editor_columns if column != "关联当前标签"],
+                    column_config={
+                        "关联当前标签": st.column_config.CheckboxColumn("关联当前标签"),
+                        "style_code": st.column_config.TextColumn("货号"),
+                        "image_url": st.column_config.ImageColumn("图片"),
+                        "category": st.column_config.TextColumn("品类"),
+                        "launch_date": st.column_config.DateColumn("上新日期", format="YYYY-MM-DD"),
+                        "tags": st.column_config.TextColumn("现有全部标签"),
+                    },
+                    key=f"existing_tag_product_editor_{edit_tag}",
+                )
+                changed_links = {
+                    str(row["style_code"]).strip().upper(): bool(row["关联当前标签"])
+                    for row in edited_links.to_dict("records")
+                    if bool(row["关联当前标签"]) != bool(original_links.get(str(row["style_code"]).strip().upper()))
+                }
+                if changed_links:
+                    add_count = sum(changed_links.values())
+                    remove_count = len(changed_links) - add_count
+                    st.caption(f"待保存：新增关联 {add_count:,} 个，移除关联 {remove_count:,} 个。")
+                if st.button(
+                    "💾 保存当前标签的商品修改",
+                    type="primary",
+                    disabled=not changed_links,
+                    key="save_existing_tag_product_links",
+                ):
+                    try:
+                        count = _update_tag_product_links(edit_tag, changed_links, master_df)
+                        st.cache_data.clear()
+                        st.session_state.product_tag_flash = (
+                            f"已保存“{edit_tag}”的商品关联，共更新 {count:,} 个商品。"
+                        )
+                        st.rerun()
+                    except Exception as exc:
+                        st.error(f"保存标签商品失败：{exc}")
 
         with st.container(border=True):
             st.markdown("#### 删除现有标签")
