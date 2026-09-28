@@ -1085,6 +1085,187 @@ with product_tab:
     table.loc[table["退款率"] >= .35, "诊断"] = "退款风险"
     show_table(table.sort_values("平台支付", ascending=False))
 
+    st.markdown("#### 主播商品结构")
+    st.caption(
+        "价格带按单款件均价归类：发货结构按发货件数占比，平台结构按平台成交件数占比；"
+        "品类结构分别按发货金额和平台支付金额占比。金额为0的赠品不参与。"
+    )
+    structure_anchor_options = sorted(products["anchor_name"].dropna().astype(str).unique())
+    if structure_anchor_options:
+        structure_anchor = st.selectbox(
+            "选择主播查看商品结构",
+            structure_anchor_options,
+            index=0,
+            key="product_structure_anchor",
+        )
+
+        def price_band(value):
+            if pd.isna(value) or float(value) < 0:
+                return "未计算"
+            value = float(value)
+            if value < 500:
+                return "0–500｜引流或配饰类"
+            if value < 800:
+                return "500–800｜引流款"
+            if value < 1100:
+                return "800–1100｜搭配撑场款"
+            if value < 1500:
+                return "1100–1500｜搭配撑场款"
+            return "1500以上｜利润款"
+
+        band_order = [
+            "0–500｜引流或配饰类",
+            "500–800｜引流款",
+            "800–1100｜搭配撑场款",
+            "1100–1500｜搭配撑场款",
+            "1500以上｜利润款",
+        ]
+        category_lookup = (
+            style_summary.drop_duplicates("style_code", keep="last")
+            .set_index("style_code")["品类"].to_dict()
+        )
+
+        anchor_platform_rows = products[
+            products["anchor_name"].fillna("").astype(str) == structure_anchor
+        ].copy()
+        anchor_platform_rows["style_code"] = (
+            anchor_platform_rows["style_code"].fillna("").astype(str).str.strip().str.upper()
+        )
+        platform_style_structure = anchor_platform_rows.groupby("style_code", as_index=False).agg(
+            平台支付金额=("paid_amount", "sum"),
+            平台成交件数=("sold_units", "sum"),
+        )
+        platform_style_structure = platform_style_structure[
+            (platform_style_structure["平台支付金额"] > 0)
+            & (platform_style_structure["平台成交件数"] > 0)
+        ].copy()
+        platform_style_structure["平台支付均价"] = platform_style_structure["平台支付金额"].div(
+            platform_style_structure["平台成交件数"]
+        )
+        platform_style_structure["价格带"] = platform_style_structure["平台支付均价"].map(price_band)
+        platform_style_structure["品类"] = (
+            platform_style_structure["style_code"].map(category_lookup)
+            .fillna("未维护").replace(["", 0, "0"], "未维护")
+        )
+
+        anchor_actual_rows = actuals.copy()
+        if not anchor_actual_rows.empty:
+            anchor_source = anchor_actual_rows.get(
+                "anchor", anchor_actual_rows.get("anchor_display", pd.Series("", index=anchor_actual_rows.index))
+            )
+            anchor_actual_rows = anchor_actual_rows[
+                anchor_source.fillna("").astype(str).str.strip().str.upper() == structure_anchor.strip().upper()
+            ].copy()
+        if not anchor_actual_rows.empty:
+            if "ship_units" not in anchor_actual_rows.columns:
+                anchor_actual_rows["ship_units"] = (
+                    pd.to_numeric(anchor_actual_rows["ship_amount"], errors="coerce").fillna(0) > 0
+                ).astype(int)
+            anchor_actual_rows["style_code"] = (
+                anchor_actual_rows["style_code"].fillna("").astype(str).str.strip().str.upper()
+            )
+            ship_style_structure = anchor_actual_rows.groupby("style_code", as_index=False).agg(
+                发货金额=("ship_amount", "sum"),
+                发货件数=("ship_units", "sum"),
+            )
+            ship_style_structure = ship_style_structure[
+                (ship_style_structure["发货金额"] > 0)
+                & (ship_style_structure["发货件数"] > 0)
+            ].copy()
+            ship_style_structure["发货件均价"] = ship_style_structure["发货金额"].div(
+                ship_style_structure["发货件数"]
+            )
+            ship_style_structure["价格带"] = ship_style_structure["发货件均价"].map(price_band)
+            ship_style_structure["品类"] = (
+                ship_style_structure["style_code"].map(category_lookup)
+                .fillna("未维护").replace(["", 0, "0"], "未维护")
+            )
+        else:
+            ship_style_structure = pd.DataFrame(columns=[
+                "style_code", "发货金额", "发货件数", "发货件均价", "价格带", "品类"
+            ])
+
+        price_pie_cols = st.columns(2)
+        with price_pie_cols[0]:
+            if ship_style_structure.empty:
+                st.info("当前主播在所选范围暂无可识别的发货件数数据。")
+            else:
+                ship_band = ship_style_structure.groupby("价格带", as_index=False, observed=True).agg(
+                    发货件数=("发货件数", "sum"),
+                    发货金额=("发货金额", "sum"),
+                    货号数=("style_code", "nunique"),
+                )
+                ship_band["价格带"] = pd.Categorical(ship_band["价格带"], band_order, ordered=True)
+                ship_band = ship_band.sort_values("价格带")
+                fig_ship_band = px.pie(
+                    ship_band, names="价格带", values="发货件数", hole=.42,
+                    title=f"{structure_anchor}｜发货价格带结构",
+                    hover_data={"发货金额": ":,.2f", "发货件数": ":,.0f", "货号数": ":,.0f"},
+                )
+                fig_ship_band.update_traces(textposition="inside", textinfo="percent+label")
+                st.plotly_chart(fig_ship_band, width="stretch", key="ship_price_band_structure")
+                show_table(ship_band)
+        with price_pie_cols[1]:
+            if platform_style_structure.empty:
+                st.info("当前主播在所选范围暂无有效的平台支付商品数据。")
+            else:
+                platform_band = platform_style_structure.groupby("价格带", as_index=False, observed=True).agg(
+                    平台成交件数=("平台成交件数", "sum"),
+                    平台支付金额=("平台支付金额", "sum"),
+                    货号数=("style_code", "nunique"),
+                )
+                platform_band["价格带"] = pd.Categorical(platform_band["价格带"], band_order, ordered=True)
+                platform_band = platform_band.sort_values("价格带")
+                fig_platform_band = px.pie(
+                    platform_band, names="价格带", values="平台成交件数", hole=.42,
+                    title=f"{structure_anchor}｜平台支付价格带结构",
+                    hover_data={"平台支付金额": ":,.2f", "平台成交件数": ":,.0f", "货号数": ":,.0f"},
+                )
+                fig_platform_band.update_traces(textposition="inside", textinfo="percent+label")
+                st.plotly_chart(fig_platform_band, width="stretch", key="platform_price_band_structure")
+                show_table(platform_band)
+
+        category_pie_cols = st.columns(2)
+        with category_pie_cols[0]:
+            if not ship_style_structure.empty:
+                ship_category = ship_style_structure.groupby("品类", as_index=False).agg(
+                    发货金额=("发货金额", "sum"),
+                    发货件数=("发货件数", "sum"),
+                    货号数=("style_code", "nunique"),
+                ).sort_values("发货金额", ascending=False)
+                fig_ship_category = px.pie(
+                    ship_category, names="品类", values="发货金额", hole=.42,
+                    title=f"{structure_anchor}｜发货品类结构",
+                    hover_data={"发货金额": ":,.2f", "发货件数": ":,.0f", "货号数": ":,.0f"},
+                )
+                fig_ship_category.update_traces(textposition="inside", textinfo="percent+label")
+                st.plotly_chart(fig_ship_category, width="stretch", key="ship_category_structure")
+                show_table(ship_category)
+        with category_pie_cols[1]:
+            if not platform_style_structure.empty:
+                platform_category = platform_style_structure.groupby("品类", as_index=False).agg(
+                    平台支付金额=("平台支付金额", "sum"),
+                    平台成交件数=("平台成交件数", "sum"),
+                    货号数=("style_code", "nunique"),
+                ).sort_values("平台支付金额", ascending=False)
+                fig_platform_category = px.pie(
+                    platform_category, names="品类", values="平台支付金额", hole=.42,
+                    title=f"{structure_anchor}｜平台支付品类结构",
+                    hover_data={"平台支付金额": ":,.2f", "平台成交件数": ":,.0f", "货号数": ":,.0f"},
+                )
+                fig_platform_category.update_traces(textposition="inside", textinfo="percent+label")
+                st.plotly_chart(fig_platform_category, width="stretch", key="platform_category_structure")
+                show_table(platform_category)
+
+        with st.expander("查看主播商品结构货号明细"):
+            detail_structure_cols = st.columns(2)
+            with detail_structure_cols[0]:
+                st.markdown("##### 发货口径")
+                show_table(ship_style_structure.sort_values("发货金额", ascending=False))
+            with detail_structure_cols[1]:
+                st.markdown("##### 平台支付口径")
+                show_table(platform_style_structure.sort_values("平台支付金额", ascending=False))
+
 with selection_tab:
     st.subheader("开播前段商品销售排行")
     rank_cols = st.columns([1.2, 1.2, 1.4, 1.5])
@@ -1523,6 +1704,12 @@ def _current_export_sheets() -> dict[str, pd.DataFrame]:
             "当前商品结论": pd.DataFrame([{"货号": selected_style, "商品决策": product_decision}]),
             "当前商品汇总": summary_row,
             "筛选后商品汇总": table,
+            "主播发货价格带": scope.get("ship_band"),
+            "主播平台价格带": scope.get("platform_band"),
+            "主播发货品类结构": scope.get("ship_category"),
+            "主播平台品类结构": scope.get("platform_category"),
+            "主播发货货号结构": scope.get("ship_style_structure"),
+            "主播平台货号结构": scope.get("platform_style_structure"),
             "主播适配": anchor_item,
             "讲解区间": item_talks,
             "逐场历史": item,
