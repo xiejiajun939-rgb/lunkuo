@@ -21,7 +21,11 @@ _CLICK_COLLECTOR = JsCode("""
 function(params) {
   const event = params.eventData || {};
   const row = event.data || (event.node ? event.node.data : null) || null;
-  return {eventType: params.streamlitRerunEventTriggerName, row: row};
+  return {
+    eventType: params.streamlitRerunEventTriggerName,
+    row: row,
+    columnsState: params.api ? params.api.getColumnState() : []
+  };
 }
 """)
 
@@ -144,6 +148,8 @@ def render_inventory_grid(
     height: int | None = None,
     pinned_columns: tuple[str, ...] = (),
     selectable: bool = False,
+    columns_state: list[dict] | None = None,
+    remember_layout: bool = False,
 ) -> dict | None:
     """Render a sortable/filterable grid whose two inventory cells open details."""
     selection_state_key = f"__inventory_grid_selection_{key}"
@@ -152,12 +158,16 @@ def render_inventory_grid(
         st.info("暂无数据。")
         return stored_selection
     style_column = _style_column(frame)
-    if not style_column or not {"总库存", "总仓库存"}.issubset(frame.columns):
+    has_inventory_links = bool(style_column) and {"总库存", "总仓库存"}.issubset(frame.columns)
+    if not remember_layout and not has_inventory_links:
         st.dataframe(frame, hide_index=True, width="stretch")
         return stored_selection
 
     display = frame.copy()
-    display["__inventory_style"] = display[style_column].fillna("").astype(str).str.strip().str.upper()
+    display["__inventory_style"] = (
+        display[style_column].fillna("").astype(str).str.strip().str.upper()
+        if style_column else ""
+    )
     display["__inventory_click"] = ""
     display["__row_select"] = ""
     display["__row_id"] = [f"{key}_{index}" for index in range(len(display))]
@@ -205,7 +215,11 @@ def render_inventory_grid(
         theme="streamlit",
         custom_css=_GRID_CSS,
         allow_unsafe_jscode=True,
-        update_on=["cellValueChanged"],
+        update_on=(
+            ["cellValueChanged", "columnMoved", "columnResized", "columnVisible", "columnPinned", "sortChanged"]
+            if remember_layout else ["cellValueChanged"]
+        ),
+        columns_state=columns_state or None,
         data_return_mode=DataReturnMode.CUSTOM,
         custom_jscode_for_grid_return=_CLICK_COLLECTOR,
         enable_enterprise_modules=False,
@@ -216,6 +230,8 @@ def render_inventory_grid(
     clicked = getattr(response, "raw_data", None)
     if not isinstance(clicked, dict):
         return stored_selection
+    if remember_layout and isinstance(clicked.get("columnsState"), list):
+        st.session_state[f"__grid_columns_state_{key}"] = clicked["columnsState"]
     row = clicked.get("row") if isinstance(clicked.get("row"), dict) else {}
     token = str(row.get("__inventory_click") or "")
     style_code = str(row.get("__inventory_style") or "").strip().upper()

@@ -22,6 +22,7 @@ from core.utils import clear_cache_on_page_change
 from core.inventory import attach_inventory_summary, render_inventory_buttons
 from core.interactive_inventory_grid import render_inventory_grid
 from core.display_rules import format_amount, format_count, format_percent
+from core.table_layouts import layout_controls, remember_column_state
 
 
 DISPLAY_COLUMN_NAMES = {
@@ -116,14 +117,31 @@ def localize_table(frame: pd.DataFrame) -> pd.DataFrame:
     return display
 
 
-def show_table(frame: pd.DataFrame) -> None:
+def show_table(frame: pd.DataFrame, table_key: str | None = None) -> None:
     display = localize_table(frame)
-    if {"总库存", "总仓库存"}.issubset(display.columns):
-        signature = "|".join(map(str, display.columns)) + f"|{len(display)}"
-        if "货号" in display.columns and not display.empty:
-            signature += f"|{display['货号'].iloc[0]}|{display['货号'].iloc[-1]}"
-        grid_key = "live_inventory_grid_" + hashlib.md5(signature.encode("utf-8")).hexdigest()[:12]
-        render_inventory_grid(display, grid_key, pinned_columns=("货号", "商品图片"))
+    column_state = None
+    if table_key and not display.empty:
+        visible_columns, column_state = layout_controls(
+            "live_operations", table_key, list(display.columns)
+        )
+        display = display[[column for column in visible_columns if column in display.columns]]
+    if table_key or {"总库存", "总仓库存"}.issubset(display.columns):
+        if table_key:
+            grid_key = f"live_layout_grid_{table_key}"
+        else:
+            signature = "|".join(map(str, display.columns)) + f"|{len(display)}"
+            if "货号" in display.columns and not display.empty:
+                signature += f"|{display['货号'].iloc[0]}|{display['货号'].iloc[-1]}"
+            grid_key = "live_inventory_grid_" + hashlib.md5(signature.encode("utf-8")).hexdigest()[:12]
+        render_inventory_grid(
+            display, grid_key, pinned_columns=("货号", "商品图片"),
+            columns_state=column_state, remember_layout=bool(table_key),
+        )
+        if table_key:
+            remember_column_state(
+                "live_operations", table_key,
+                st.session_state.get(f"__grid_columns_state_{grid_key}"),
+            )
         return
     column_config = {}
     if "商品图片" in display.columns:
@@ -262,12 +280,14 @@ else:
         value for value in st.session_state["live_operations_anchors"] if value in all_anchors
     ] or ([default_anchor] if default_anchor in all_anchors else all_anchors)
 with st.container(border=True):
-    st.markdown('<div class="section-kicker">分析对象</div><div class="section-help">筛选需要比较的直播间与主播。</div>', unsafe_allow_html=True)
-    filter_cols = st.columns(2)
-    with filter_cols[0]:
-        selected_shops = st.multiselect("直播间／店铺", all_shops, key="live_operations_shops")
-    with filter_cols[1]:
-        selected_anchors = st.multiselect("主播", all_anchors, key="live_operations_anchors")
+    st.markdown('<div class="section-kicker">分析对象</div><div class="section-help">可连续选择多个条件，点击“应用筛选”后统一刷新分析结果。</div>', unsafe_allow_html=True)
+    with st.form("live_operations_object_filters", clear_on_submit=False):
+        filter_cols = st.columns(2)
+        with filter_cols[0]:
+            selected_shops = st.multiselect("直播间／店铺", all_shops, key="live_operations_shops")
+        with filter_cols[1]:
+            selected_anchors = st.multiselect("主播", all_anchors, key="live_operations_anchors")
+        st.form_submit_button("应用店铺与主播筛选", type="primary", width="stretch")
 
 sessions = sessions[sessions["shop_name"].isin(selected_shops) & sessions["anchor_name"].isin(selected_anchors)]
 room_ids = sessions["live_room_id"].astype(str)
@@ -958,7 +978,10 @@ with review_tab:
         st.info("本场未触发高优先级规则，可进入商品明细继续检查。")
     detail_tabs = st.tabs(["商品平台表现", "商品讲解区间", "渠道流量", "全部直播指标"])
     with detail_tabs[0]:
-        show_table(room_products[["style_code", "product_name", "click_users", "sold_units", "paid_amount", "pre_ship_refund_amount", "post_ship_refund_amount"]].sort_values("paid_amount", ascending=False))
+        show_table(
+            room_products[["style_code", "product_name", "click_users", "sold_units", "paid_amount", "pre_ship_refund_amount", "post_ship_refund_amount"]].sort_values("paid_amount", ascending=False),
+            table_key="session_products",
+        )
     with detail_tabs[1]:
         show_table(talks[talks["live_room_id"].astype(str) == room].sort_values("talk_start_epoch") if not talks.empty else pd.DataFrame())
     with detail_tabs[2]:
@@ -1062,18 +1085,20 @@ with decision_tab:
     render_session_trend(trend_frame)
 
 with product_tab:
-    product_filter_cols = st.columns([2, 1])
-    with product_filter_cols[0]:
-        search = st.text_input("搜索商品名称或货号")
-    with product_filter_cols[1]:
-        product_min_sessions = st.number_input(
-            "最少上播场次",
-            min_value=1,
-            max_value=max(1, int(safe_number(style_summary["上播场次"].max(), 1))),
-            value=1,
-            step=1,
-            key="product_decision_min_sessions",
-        )
+    with st.form("product_decision_filters", clear_on_submit=False):
+        product_filter_cols = st.columns([2, 1])
+        with product_filter_cols[0]:
+            search = st.text_input("搜索商品名称或货号")
+        with product_filter_cols[1]:
+            product_min_sessions = st.number_input(
+                "最少上播场次",
+                min_value=1,
+                max_value=max(1, int(safe_number(style_summary["上播场次"].max(), 1))),
+                value=1,
+                step=1,
+                key="product_decision_min_sessions",
+            )
+        st.form_submit_button("应用商品筛选", type="primary", width="stretch")
     table = style_summary.copy()
     table = table[table["上播场次"] >= product_min_sessions]
     if search:
@@ -1083,7 +1108,7 @@ with product_tab:
     table.loc[(table["上播场次"] >= 3) & (table["点击成交率"] >= .06), "诊断"] = "稳定转化"
     table.loc[(table["累计点击"] >= 100) & (table["点击成交率"] < .03), "诊断"] = "高点击低成交"
     table.loc[table["退款率"] >= .35, "诊断"] = "退款风险"
-    show_table(table.sort_values("平台支付", ascending=False))
+    show_table(table.sort_values("平台支付", ascending=False), table_key="product_decision")
 
     st.markdown("#### 主播商品结构")
     st.caption(
@@ -1268,23 +1293,25 @@ with product_tab:
 
 with selection_tab:
     st.subheader("开播前段商品销售排行")
-    rank_cols = st.columns([1.2, 1.2, 1.4, 1.5])
-    with rank_cols[0]:
-        rank_window = st.segmented_control(
-            "统计范围", [15, 30, 60, 90], default=60,
-            format_func=lambda value: f"前{value}分钟", key="opening_sales_window",
-        )
-    with rank_cols[1]:
-        rank_by = st.selectbox(
-            "排序指标", ["前段成交金额", "前段成交件数", "成交场次率", "支付/讲解分钟", "在线上升场次占比"]
-        )
-    with rank_cols[2]:
-        minimum_room_count = st.slider("最少出现直播场次", 1, 10, 1, key="opening_min_rooms")
-    with rank_cols[3]:
-        launch_day_mode = st.selectbox(
-            "上新当天口径", ["全部销售", "排除上新当天", "只看上新当天"],
-            key="opening_launch_day_mode",
-        )
+    with st.form("opening_selection_filters", clear_on_submit=False):
+        rank_cols = st.columns([1.2, 1.2, 1.4, 1.5])
+        with rank_cols[0]:
+            rank_window = st.segmented_control(
+                "统计范围", [15, 30, 60, 90], default=60,
+                format_func=lambda value: f"前{value}分钟", key="opening_sales_window",
+            )
+        with rank_cols[1]:
+            rank_by = st.selectbox(
+                "排序指标", ["前段成交金额", "前段成交件数", "成交场次率", "支付/讲解分钟", "在线上升场次占比"]
+            )
+        with rank_cols[2]:
+            minimum_room_count = st.slider("最少出现直播场次", 1, 10, 1, key="opening_min_rooms")
+        with rank_cols[3]:
+            launch_day_mode = st.selectbox(
+                "上新当天口径", ["全部销售", "排除上新当天", "只看上新当天"],
+                key="opening_launch_day_mode",
+            )
+        st.form_submit_button("应用开播选品筛选", type="primary", width="stretch")
 
     opening_talks = talks[talks["开播后分钟"] <= rank_window].copy() if not talks.empty else pd.DataFrame()
     if opening_talks.empty:
@@ -1421,7 +1448,7 @@ with selection_tab:
             "退款率": "整场退款率", "ship_amount": "范围发货", "return_amount": "范围退货",
             "net_amount": "范围实销",
         })
-        show_table(display_rank)
+        show_table(display_rank, table_key="opening_selection")
         st.download_button(
             f"下载前{rank_window}分钟商品销售排行",
             display_rank.to_csv(index=False).encode("utf-8-sig"),
@@ -1526,7 +1553,7 @@ with selection_tab:
     elif opportunity == "退款风险": candidates = candidates.sort_values("退款率", ascending=False)
     if opportunity in ["讲解高效", "在线提升", "开播阶段"] and talks.empty:
         st.warning("当前范围没有新版商品讲解区间数据，上传新版直播工作簿后才能计算。")
-    show_table(candidates)
+    show_table(candidates, table_key="opportunity_products")
     if opportunity == "稳定复销":
         if candidates.empty:
             st.info(f"当前没有“{selected_stability_level}”商品。")
@@ -1612,7 +1639,10 @@ with product_tab:
             .sort_values(["live_room_id", "开播后分钟"])
         )
     st.subheader("逐场历史")
-    show_table(item[["直播日期", "shop_name", "anchor_name", "talk_count", "click_users", "sold_units", "paid_amount", "pre_ship_refund_amount", "post_ship_refund_amount"]].sort_values("直播日期", ascending=False))
+    show_table(
+        item[["直播日期", "shop_name", "anchor_name", "talk_count", "click_users", "sold_units", "paid_amount", "pre_ship_refund_amount", "post_ship_refund_amount"]].sort_values("直播日期", ascending=False),
+        table_key="single_product_history",
+    )
 
 def _export_frame(value) -> pd.DataFrame:
     if value is None:
