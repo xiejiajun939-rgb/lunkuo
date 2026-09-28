@@ -21,6 +21,7 @@ from core.theme import page_header
 from core.utils import clear_cache_on_page_change
 from core.inventory import attach_inventory_summary, render_inventory_buttons
 from core.interactive_inventory_grid import render_inventory_grid
+from core.display_rules import format_amount, format_count, format_percent
 
 
 DISPLAY_COLUMN_NAMES = {
@@ -91,6 +92,12 @@ def localize_table(frame: pd.DataFrame) -> pd.DataFrame:
     if style_column and not image_column_exists and image_lookup:
         display["商品图片"] = display[style_column].astype(str).str.strip().str.upper().map(image_lookup)
     display = display.rename(columns=DISPLAY_COLUMN_NAMES)
+    for column in display.columns:
+        if "日期" not in str(column):
+            continue
+        parsed_dates = pd.to_datetime(display[column], errors="coerce")
+        if parsed_dates.notna().any():
+            display[column] = parsed_dates.dt.strftime("%Y-%m-%d").where(parsed_dates.notna(), "—")
     if "商品图片" in display.columns:
         display["商品图片"] = display["商品图片"].replace([0, "0", "", "nan", "None"], pd.NA)
     if "货号" in display.columns and "商品图片" in display.columns:
@@ -122,9 +129,18 @@ def show_table(frame: pd.DataFrame) -> None:
     if "商品图片" in display.columns:
         column_config["商品图片"] = st.column_config.ImageColumn("商品图片", width="small")
     for column in display.columns:
-        if "率" in str(column) or "占比" in str(column):
+        column_name = str(column)
+        if "率" in column_name or "占比" in column_name:
             if pd.api.types.is_numeric_dtype(display[column]):
                 column_config[column] = st.column_config.NumberColumn(column, format="percent")
+        elif column_name == "ROI" and pd.api.types.is_numeric_dtype(display[column]):
+            column_config[column] = st.column_config.NumberColumn(column, format="%.2f")
+        elif any(keyword in column_name for keyword in ["件数", "人数", "次数", "场次", "库存", "粉丝"]):
+            if pd.api.types.is_numeric_dtype(display[column]):
+                column_config[column] = st.column_config.NumberColumn(column, format="%.0f")
+        elif any(keyword in column_name for keyword in ["金额", "支付", "发货", "退货", "实销", "均价", "吊牌价", "产出"]):
+            if pd.api.types.is_numeric_dtype(display[column]):
+                column_config[column] = st.column_config.NumberColumn(column, format="%.2f")
     st.dataframe(display, width="stretch", hide_index=True, column_config=column_config)
 
 
@@ -1094,11 +1110,14 @@ with selection_tab:
         st.warning("当前范围没有商品讲解区间数据，上传新版直播工作簿后才能生成排行。")
     else:
         opening_room = opening_talks.groupby(["style_code", "live_room_id"], as_index=False).agg(
-            直播日期=("session_start_utc", lambda values: values.iloc[0].date() if len(values) else None),
             讲解次数=("product_id", "size"), 讲解分钟=("讲解分钟", "sum"),
             前段成交金额=("paid_amount", "sum"), 前段成交件数=("sold_units", "sum"),
             在线净变化=("viewer_change", "sum"), 分均在线人数=("avg_online_users", "mean"),
         )
+        room_dates = sessions[["live_room_id", "直播日期"]].copy()
+        room_dates["live_room_id"] = room_dates["live_room_id"].astype(str)
+        opening_room["live_room_id"] = opening_room["live_room_id"].astype(str)
+        opening_room = opening_room.merge(room_dates.drop_duplicates("live_room_id"), on="live_room_id", how="left")
         opening_room["有成交"] = opening_room["前段成交件数"] > 0
         opening_room["在线上升"] = opening_room["在线净变化"] > 0
         launch_lookup = style_summary[["style_code", "上新日期"]].drop_duplicates("style_code") if "上新日期" in style_summary else pd.DataFrame(columns=["style_code", "上新日期"])
@@ -1366,13 +1385,13 @@ with product_tab:
     cards[3].metric("平台支付", f"¥{summary_row['平台支付']:,.0f}")
     cards[4].metric("范围实销", f"¥{summary_row['net_amount']:,.0f}")
     price_cards = st.columns(5)
-    price_cards[0].metric("范围发货件数", f"{safe_number(summary_row.get('发货件数')):,.0f}件")
-    price_cards[1].metric("范围发货件均价", f"¥{safe_number(summary_row.get('发货件均价')):,.2f}" if pd.notna(summary_row.get("发货件均价")) else "—")
-    price_cards[2].metric("吊牌价", f"¥{safe_number(summary_row.get('吊牌价')):,.2f}" if pd.notna(summary_row.get("吊牌价")) else "—")
-    price_cards[3].metric("发货折扣率", f"{safe_number(summary_row.get('发货折扣率')):.2%}" if pd.notna(summary_row.get("发货折扣率")) else "—")
+    price_cards[0].metric("范围发货件数", f"{format_count(summary_row.get('发货件数'))}件")
+    price_cards[1].metric("范围发货件均价", f"¥{format_amount(summary_row.get('发货件均价'))}" if pd.notna(summary_row.get("发货件均价")) else "—")
+    price_cards[2].metric("吊牌价", f"¥{format_amount(summary_row.get('吊牌价'))}" if pd.notna(summary_row.get("吊牌价")) else "—")
+    price_cards[3].metric("发货折扣率", format_percent(summary_row.get("发货折扣率")))
     price_cards[4].metric("范围实销件数／件均价", (
-        f"{safe_number(summary_row.get('实销件数')):,.0f}件／¥{safe_number(summary_row.get('实销件均价')):,.2f}"
-        if pd.notna(summary_row.get("实销件均价")) else f"{safe_number(summary_row.get('实销件数')):,.0f}件／—"
+        f"{format_count(summary_row.get('实销件数'))}件／¥{format_amount(summary_row.get('实销件均价'))}"
+        if pd.notna(summary_row.get("实销件均价")) else f"{format_count(summary_row.get('实销件数'))}件／—"
     ))
     st.caption("金额为 0 的赠品不计件、不参与件均价；范围实销按所选日期、店铺与主播口径关联。")
     product_level = safe_text(summary_row.get("复销分级"), "样本不足")

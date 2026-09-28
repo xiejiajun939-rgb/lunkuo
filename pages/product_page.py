@@ -29,6 +29,7 @@ from core.utils import date_quick_buttons, extract_anchor, clear_cache_on_page_c
 from core.ai import get_ai_summary
 from core.theme import page_header
 from core.inventory import attach_inventory_summary, render_inventory_detail
+from core.display_rules import format_amount, format_count, format_percent
 
 st.markdown("""
 <style>
@@ -1184,38 +1185,25 @@ with col_export:
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 
-with st.expander("查看件数、件均价、吊牌价与折扣率", expanded=True):
-    price_columns = [
-        "货号", "发货件数", "发货件均价", "退货件数", "实销件数", "实销件均价", "吊牌价", "发货折扣率"
-    ]
-    price_display = page_df[price_columns].copy()
-    price_display["发货折扣率"] = price_display["发货折扣率"] * 100
-    st.dataframe(
-        price_display,
-        width="stretch",
-        hide_index=True,
-        column_config={
-            "发货件均价": st.column_config.NumberColumn(format="¥%.2f"),
-            "实销件均价": st.column_config.NumberColumn(format="¥%.2f"),
-            "吊牌价": st.column_config.NumberColumn(format="¥%.2f"),
-            "发货折扣率": st.column_config.NumberColumn(format="%.2f%%"),
-        },
-    )
-    st.caption("金额为 0 的赠品不计件、不参与件均价；实销件数≤0时不显示实销件均价。")
-
 # ---------- 显示表格 ----------
-cols = st.columns([1.3, 0.5, 0.9, 0.8, 0.9, 0.7, 0.9, 0.9, 0.7, 0.7, 0.7, 0.65, 0.65, 0.55, 0.55])
+table_widths = [
+    1.15, 0.45, 0.75, 0.72, 0.78, 0.55, 0.72, 0.72, 0.68, 0.68,
+    0.62, 0.72, 0.68, 0.62, 0.62, 0.58, 0.58, 0.46, 0.46,
+]
+cols = st.columns(table_widths)
 headers = [
-    "货号", "图片", "商品分类", "上新时间", "发货金额(¥)", "发货占比", "退货金额(¥)",
-    "实销金额(¥)", "实销占比", "退款率", "商品标签", "总库存", "总仓库存", "详情", "趋势"
+    "货号", "图片", "商品分类", "上新时间", "发货金额(¥)", "发货件数", "发货件均价",
+    "吊牌价", "发货折扣率", "发货占比", "退货金额(¥)", "实销金额(¥)", "实销占比",
+    "退款率", "商品标签", "总库存", "总仓库存", "详情", "趋势",
 ]
 for c, h in zip(cols, headers):
     c.markdown(f"**{h}**")
 
 for idx, row in page_df.iterrows():
-    c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15 = st.columns(
-        [1.3, 0.5, 0.9, 0.8, 0.9, 0.7, 0.9, 0.9, 0.7, 0.7, 0.7, 0.65, 0.65, 0.55, 0.55]
-    )
+    (
+        c1, c2, c3, c4, c5, c6, c7, c8, c9, c10,
+        c11, c12, c13, c14, c15, c16, c17, c18, c19,
+    ) = st.columns(table_widths)
     c1.write(row["货号"])
     if row.get("image_url") and pd.notna(row["image_url"]):
         c2.image(row["image_url"], width=50)
@@ -1225,26 +1213,30 @@ for idx, row in page_df.iterrows():
     category_text = str(row["master_category"]).strip() if pd.notna(row["master_category"]) else "-"
     c3.text(category_text or "-")
     c4.write(row["launch_date"].isoformat() if pd.notna(row.get("launch_date")) else "-")
-    c5.write(f"{row['发货金额']:,.2f}")
-    c6.write(f"{row['发货金额占比']:.2%}" if pd.notna(row["发货金额占比"]) else "-")
-    c7.write(f"{row['退货金额']:,.2f}")
-    c8.write(f"{row['净销售金额']:,.2f}")
-    c9.write(f"{row['实销金额占比']:.2%}" if pd.notna(row["实销金额占比"]) else "-")
-    c10.write(row["退款率"])
-    c11.caption(product_tags_text(row.get("product_tags")) or "-")
-    if c12.button(f"{row.get('总库存', 0):,.0f}", key=f"inventory_btn_{row['货号']}_{idx}", help="查看所有仓库合并后的颜色 × 尺码库存"):
+    c5.write(format_amount(row["发货金额"]))
+    c6.write(format_count(row["发货件数"]))
+    c7.write(format_amount(row["发货件均价"]))
+    c8.write(format_amount(row["吊牌价"]))
+    c9.write(format_percent(row["发货折扣率"]))
+    c10.write(format_percent(row["发货金额占比"]))
+    c11.write(format_amount(row["退货金额"]))
+    c12.write(format_amount(row["净销售金额"]))
+    c13.write(format_percent(row["实销金额占比"]))
+    c14.write(row["退款率"] if row["退款率"] != "-" else "—")
+    c15.caption(product_tags_text(row.get("product_tags")) or "—")
+    if c16.button(f"{row.get('总库存', 0):,.0f}", key=f"inventory_btn_{row['货号']}_{idx}", help="查看所有仓库合并后的颜色 × 尺码库存"):
         st.session_state.show_dialog = False
         st.session_state.show_trend_dialog = False
         st.session_state.inventory_dialog_style_code = row["货号"]
         st.session_state.inventory_dialog_scope = "all"
         st.rerun()
-    if c13.button(f"{row.get('总仓库存', 0):,.0f}", key=f"main_inventory_btn_{row['货号']}_{idx}", help="查看总仓的颜色 × 尺码库存"):
+    if c17.button(f"{row.get('总仓库存', 0):,.0f}", key=f"main_inventory_btn_{row['货号']}_{idx}", help="查看总仓的颜色 × 尺码库存"):
         st.session_state.show_dialog = False
         st.session_state.show_trend_dialog = False
         st.session_state.inventory_dialog_style_code = row["货号"]
         st.session_state.inventory_dialog_scope = "main"
         st.rerun()
-    if c14.button("📊", key=f"detail_btn_{row['货号']}_{idx}"):
+    if c18.button("📊", key=f"detail_btn_{row['货号']}_{idx}"):
         st.session_state.inventory_dialog_style_code = None
         style_code = row["货号"]
         detail_df = filtered[filtered["style_code"] == style_code].copy()
@@ -1282,7 +1274,7 @@ for idx, row in page_df.iterrows():
         st.session_state.show_dialog = True
         st.session_state.detail_clicked = True
         st.rerun()
-    if c15.button("📈", key=f"trend_btn_{row['货号']}_{idx}"):
+    if c19.button("📈", key=f"trend_btn_{row['货号']}_{idx}"):
         st.session_state.inventory_dialog_style_code = None
         style_code = row["货号"]
         trend_data = filtered[filtered["style_code"] == style_code].copy()
