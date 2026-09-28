@@ -497,7 +497,7 @@ def load_product_sales(
     return df
 
 
-PRODUCT_CUBE_CACHE_VERSION = 2
+PRODUCT_CUBE_CACHE_VERSION = 3
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -575,7 +575,10 @@ def _load_product_sales_cube_rpc(start_date, end_date, data_version, department=
             return pd.DataFrame()
         cube = pd.DataFrame(rows)
         cube["sale_date"] = pd.to_datetime(cube["sale_date"])
-        for column in ["ship_amount", "return_amount", "net_amount", "order_count"]:
+        for column in [
+            "ship_amount", "return_amount", "net_amount",
+            "ship_units", "return_units", "net_units", "order_count",
+        ]:
             cube[column] = pd.to_numeric(cube[column], errors="coerce").fillna(0)
         return cube
     except Exception as exc:
@@ -621,8 +624,11 @@ def load_product_sales_cube(start_date, end_date, apply_filter=True, department=
             ship_amount=("ship_amount", "sum"),
             return_amount=("return_amount", "sum"),
             net_amount=("net_amount", "sum"),
+            ship_units=("ship_amount", lambda values: (values > 0).sum()),
+            return_units=("return_amount", lambda values: (values > 0).sum()),
             order_count=("remark", "nunique"),
         )
+        cube["net_units"] = cube["ship_units"] - cube["return_units"]
 
     if department and "dept" in cube.columns:
         cube = cube[cube["dept"].fillna("").astype(str).str.strip() == department]

@@ -21,6 +21,7 @@ INVENTORY_COLUMNS = {
     "尺码名称": "size_name",
     "可用数": "available_qty",
 }
+TAG_PRICE_SOURCE_COLUMN = "选定单价"
 
 
 def _text(series: pd.Series) -> pd.Series:
@@ -30,12 +31,14 @@ def _text(series: pd.Series) -> pd.Series:
 def parse_inventory_workbook(file_value, inventory_date: date) -> tuple[pd.DataFrame, dict]:
     """Parse one full inventory workbook and keep only product_master styles."""
     raw = pd.read_excel(io.BytesIO(file_value.getvalue()), sheet_name=0, dtype=object)
-    missing = [column for column in INVENTORY_COLUMNS if column not in raw.columns]
+    missing = [column for column in [*INVENTORY_COLUMNS, TAG_PRICE_SOURCE_COLUMN] if column not in raw.columns]
     if missing:
         raise ValueError(f"库存表缺少必要列：{'、'.join(missing)}")
 
     source_rows = len(raw)
-    frame = raw[list(INVENTORY_COLUMNS)].rename(columns=INVENTORY_COLUMNS).copy()
+    frame = raw[[*INVENTORY_COLUMNS, TAG_PRICE_SOURCE_COLUMN]].rename(
+        columns={**INVENTORY_COLUMNS, TAG_PRICE_SOURCE_COLUMN: "tag_price"}
+    ).copy()
     for column in [
         "warehouse_code", "warehouse_name", "sku", "style_code",
         "color_code", "color_name", "size_code", "size_name",
@@ -44,6 +47,7 @@ def parse_inventory_workbook(file_value, inventory_date: date) -> tuple[pd.DataF
     frame["style_code"] = frame["style_code"].str.upper()
     frame["sku"] = frame["sku"].str.upper()
     frame["available_qty"] = pd.to_numeric(frame["available_qty"], errors="coerce")
+    frame["tag_price"] = pd.to_numeric(frame["tag_price"], errors="coerce")
     invalid_qty_rows = int(frame["available_qty"].isna().sum())
     frame = frame[
         (frame["style_code"] != "")
@@ -62,6 +66,17 @@ def parse_inventory_workbook(file_value, inventory_date: date) -> tuple[pd.DataF
     matched_styles = source_styles & known_styles
     skipped_styles = source_styles - known_styles
     frame = frame[frame["style_code"].isin(matched_styles)].copy()
+
+    positive_prices = frame.loc[frame["tag_price"] > 0, ["style_code", "tag_price"]].drop_duplicates()
+    price_conflicts = positive_prices.groupby("style_code")["tag_price"].nunique()
+    price_conflicts = price_conflicts[price_conflicts > 1]
+    if not price_conflicts.empty:
+        examples = "、".join(price_conflicts.index.astype(str).tolist()[:10])
+        raise ValueError(f"同一货号存在多个吊牌价，请先核对：{examples}")
+    tag_prices = (
+        positive_prices.drop_duplicates("style_code", keep="last")
+        .set_index("style_code")["tag_price"].astype(float).to_dict()
+    )
 
     group_columns = [
         "warehouse_code", "warehouse_name", "sku", "style_code",
@@ -85,6 +100,8 @@ def parse_inventory_workbook(file_value, inventory_date: date) -> tuple[pd.DataF
         "invalid_qty_rows": invalid_qty_rows,
         "matched_style_codes": sorted(matched_styles),
         "skipped_style_codes": sorted(skipped_styles),
+        "tag_prices": tag_prices,
+        "tag_price_styles": len(tag_prices),
     }
     return frame, stats
 
@@ -112,6 +129,19 @@ def save_inventory_snapshot(
     }
     response = client.table("inventory_import_batches").insert(batch_payload).execute()
     batch_id = response.data[0]["id"]
+    def sync_tag_prices() -> None:
+        records = [
+            {"style_code": style_code, "tag_price": float(price)}
+            for style_code, price in stats.get("tag_prices", {}).items()
+            if pd.notna(price) and float(price) > 0
+        ]
+        for offset in range(0, len(records), 500):
+            client.rpc(
+                "update_product_tag_prices",
+                {"p_items": records[offset:offset + 500]},
+            ).execute()
+        load_product_master.clear()
+
     try:
         records = frame.to_dict("records")
         for record in records:
@@ -120,6 +150,7 @@ def save_inventory_snapshot(
         for offset in range(0, len(records), 500):
             client.table("inventory_stock_staging").insert(records[offset:offset + 500]).execute()
         client.rpc("finalize_inventory_batch", {"p_batch_id": batch_id}).execute()
+        sync_tag_prices()
     except Exception:
         # RPC may have completed although the HTTP response was interrupted.
         # Never mark a completed replacement as failed or attempt a second cutover.
@@ -129,6 +160,7 @@ def save_inventory_snapshot(
                 .select("status").eq("id", batch_id).limit(1).execute().data or []
             )
             if state and state[0].get("status") == "completed":
+                sync_tag_prices()
                 load_inventory_summary.clear()
                 load_inventory_details.clear()
                 return {"batch_id": batch_id, **stats}

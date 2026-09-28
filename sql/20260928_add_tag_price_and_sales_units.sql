@@ -1,16 +1,15 @@
--- 商品分析第二阶段性能优化：日级商品销售聚合 RPC
--- 只创建索引和函数，不修改、删除任何销售数据，可重复执行。
+-- 商品吊牌价与销售件数口径。
+-- 一条销售明细代表一件；金额为 0 的赠品不计入件数和件均价。
 
-create index if not exists idx_product_sales_all_date_shop_anchor_style
-on public.product_sales_all (sale_date, shop_name, anchor_name, style_code);
+alter table public.product_master
+    add column if not exists tag_price numeric;
 
-create index if not exists idx_mapping_shop_anchor_upper
-on public.mapping (
-    upper(btrim(shop_name)),
-    upper(btrim(coalesce(anchor_name, 'NONE')))
-);
+comment on column public.product_master.tag_price is
+    '商品吊牌价，来自每日全量库存表的选定单价；仅正数更新。';
 
-create or replace function public.get_product_sales_cube(
+drop function if exists public.get_product_sales_cube(date, date);
+
+create function public.get_product_sales_cube(
     p_start_date date,
     p_end_date date
 )
@@ -109,24 +108,38 @@ group by
     coalesce(exact_map.dept, fallback.dept, '未分配部门'),
     coalesce(exact_map.org_name, fallback.org_name, '未分配组织'),
     s.shop_name,
-    s.anchor
-order by
-    s.sale_date,
-    s.style_code,
-    coalesce(exact_map.dept, fallback.dept, '未分配部门'),
-    coalesce(exact_map.org_name, fallback.org_name, '未分配组织'),
-    s.shop_name,
     s.anchor;
 $$;
 
 grant execute on function public.get_product_sales_cube(date, date) to anon, authenticated;
 
-analyze public.product_sales_all;
-analyze public.mapping;
+create or replace function public.update_product_tag_prices(p_items jsonb)
+returns integer
+language plpgsql
+security invoker
+set search_path = public
+as $$
+declare
+    updated_count integer;
+begin
+    with prices as (
+        select
+            upper(btrim(item.style_code)) as style_code,
+            item.tag_price
+        from jsonb_to_recordset(coalesce(p_items, '[]'::jsonb))
+            as item(style_code text, tag_price numeric)
+        where item.tag_price > 0
+    ), updated as (
+        update public.product_master master
+        set tag_price = prices.tag_price,
+            updated_at = now()
+        from prices
+        where upper(btrim(master.style_code)) = prices.style_code
+        returning master.id
+    )
+    select count(*) into updated_count from updated;
+    return updated_count;
+end;
+$$;
 
--- 核验：应快速返回少量聚合行，而不是订单级明细。
-select count(*) as current_month_cube_rows
-from public.get_product_sales_cube(
-    date_trunc('month', current_date)::date,
-    current_date
-);
+grant execute on function public.update_product_tag_prices(jsonb) to anon, authenticated;

@@ -42,6 +42,7 @@ DISPLAY_COLUMN_NAMES = {
     "avg_online_users": "平均在线人数", "session_start_utc": "开播时间",
     "talk_start_time": "讲解开始时间", "talk_end_time": "讲解结束时间", "ship_amount": "范围发货",
     "return_amount": "范围退货", "net_amount": "范围实销", "sale_date": "销售日期",
+    "ship_units": "范围发货件数", "return_units": "范围退货件数", "net_units": "范围实销件数",
     "created_at": "记录时间", "updated_at": "更新时间", "imported_at": "导入时间",
 }
 
@@ -306,7 +307,10 @@ if not talks.empty:
     talk_summary["每次讲解平均产出"] = talk_summary["讲解区间支付"].div(talk_summary["讲解区间数"].replace(0, pd.NA))
 
 actual_scope = "店铺＋主播＋货号"
-actual_by_style = pd.DataFrame(columns=["style_code", "ship_amount", "return_amount", "net_amount"])
+actual_by_style = pd.DataFrame(columns=[
+    "style_code", "ship_amount", "return_amount", "net_amount",
+    "ship_units", "return_units", "net_units",
+])
 if not actuals.empty and "style_code" in actuals:
     actuals = actuals.copy()
     actuals["shop_key"] = actuals["shop_name"].fillna("").astype(str).str.strip().str.upper()
@@ -324,6 +328,9 @@ if not actuals.empty and "style_code" in actuals:
         "return_amount": ("return_amount", "sum"),
         "net_amount": ("net_amount", "sum"),
     }
+    for unit_column in ["ship_units", "return_units", "net_units"]:
+        if unit_column in actuals.columns:
+            aggregations[unit_column] = (unit_column, "sum")
     if "brand" in actuals.columns:
         aggregations["销售品牌"] = (
             "brand",
@@ -333,6 +340,11 @@ if not actuals.empty and "style_code" in actuals:
             ),
         )
     actual_by_style = actuals.groupby("style_code", as_index=False).agg(**aggregations)
+    if "ship_units" not in actual_by_style:
+        actual_by_style["ship_units"] = 0
+    if "return_units" not in actual_by_style:
+        actual_by_style["return_units"] = 0
+    actual_by_style["net_units"] = actual_by_style["ship_units"] - actual_by_style["return_units"]
 
 style_summary = products[products["style_code"].notna()].groupby("style_code", as_index=False).agg(
     商品名称=("product_name", "first"), 商品图片=("product_image_url", "first"),
@@ -363,7 +375,10 @@ if not product_master.empty and "style_code" in product_master.columns:
     master_meta["年份"] = year_source
     master_meta["资料库图片"] = master_meta["image_url"] if "image_url" in master_meta.columns else None
     master_meta["上新日期"] = master_meta["launch_date"] if "launch_date" in master_meta.columns else None
-    master_meta = master_meta[["style_code", "品牌", "年份", "品类", "上新日期", "资料库图片"]].drop_duplicates("style_code")
+    master_meta["吊牌价"] = pd.to_numeric(
+        master_meta.get("tag_price", pd.Series(index=master_meta.index, dtype=float)), errors="coerce"
+    )
+    master_meta = master_meta[["style_code", "品牌", "年份", "品类", "上新日期", "资料库图片", "吊牌价"]].drop_duplicates("style_code")
     style_summary = style_summary.merge(master_meta, on="style_code", how="left")
     parsed_brand = style_summary["style_code"].astype(str).str.slice(0, 1)
     parsed_year = style_summary["style_code"].astype(str).str.slice(1, 3)
@@ -386,7 +401,25 @@ else:
     style_summary["品牌"] = sales_brand.fillna(parsed_brand)
     style_summary["年份"] = parsed_year
     style_summary["品类"] = None
+    style_summary["吊牌价"] = pd.NA
 style_summary = style_summary.drop(columns="销售品牌", errors="ignore")
+style_summary["发货件数"] = pd.to_numeric(
+    style_summary.get("ship_units", pd.Series(0, index=style_summary.index)), errors="coerce"
+).fillna(0)
+style_summary["退货件数"] = pd.to_numeric(
+    style_summary.get("return_units", pd.Series(0, index=style_summary.index)), errors="coerce"
+).fillna(0)
+style_summary["实销件数"] = style_summary["发货件数"] - style_summary["退货件数"]
+style_summary["发货件均价"] = style_summary["ship_amount"].div(style_summary["发货件数"].replace(0, pd.NA))
+style_summary["实销件均价"] = style_summary["net_amount"].div(
+    style_summary["实销件数"].where(style_summary["实销件数"] > 0, pd.NA)
+)
+style_summary["发货折扣率"] = style_summary["发货件均价"].div(
+    pd.to_numeric(style_summary["吊牌价"], errors="coerce").where(
+        pd.to_numeric(style_summary["吊牌价"], errors="coerce") > 0, pd.NA
+    )
+)
+style_summary = style_summary.drop(columns=["ship_units", "return_units", "net_units"], errors="ignore")
 style_summary = attach_inventory_summary(style_summary, "style_code")
 style_image_lookup = (
     style_summary.assign(style_code=style_summary["style_code"].astype(str).str.strip().str.upper())
@@ -808,6 +841,14 @@ with review_tab:
     selected_label = st.selectbox("选择直播场次", labels["场次"].tolist())
     room = str(labels.loc[labels["场次"] == selected_label, "live_room_id"].iloc[0])
     room_products = products[products["live_room_id"].astype(str) == room].copy()
+    range_columns = [
+        "style_code", "ship_amount", "return_amount", "net_amount", "发货件数", "退货件数",
+        "实销件数", "发货件均价", "实销件均价", "吊牌价", "发货折扣率",
+    ]
+    room_products = room_products.merge(
+        style_summary[[column for column in range_columns if column in style_summary.columns]],
+        on="style_code", how="left",
+    )
     room_metrics = metric_wide.loc[room] if room in metric_wide.index.astype(str) else pd.Series(dtype=float)
     cards = st.columns(5)
     cards[0].metric("观看人数", f"{float(room_metrics.get('直播间观看人数', 0) or 0):,.0f}")
@@ -1094,7 +1135,9 @@ with selection_tab:
         opening_rank["成交件数/讲解分钟"] = opening_rank["前段成交件数"].div(opening_rank["前段讲解分钟"].replace(0, pd.NA))
         context_column_names = [
             "style_code", "商品名称", "累计点击", "平台退款", "退款率",
-            "ship_amount", "return_amount", "net_amount", "品牌", "年份", "品类", "上新日期",
+            "ship_amount", "return_amount", "net_amount", "发货件数", "退货件数", "实销件数",
+            "发货件均价", "实销件均价", "吊牌价", "发货折扣率",
+            "品牌", "年份", "品类", "上新日期",
         ]
         context_columns = style_summary[[column for column in context_column_names if column in style_summary.columns]]
         opening_rank = opening_rank.merge(context_columns, on="style_code", how="left").merge(
@@ -1322,6 +1365,16 @@ with product_tab:
     cards[2].metric("点击成交率", f"{summary_row['点击成交率']:.2%}")
     cards[3].metric("平台支付", f"¥{summary_row['平台支付']:,.0f}")
     cards[4].metric("范围实销", f"¥{summary_row['net_amount']:,.0f}")
+    price_cards = st.columns(5)
+    price_cards[0].metric("范围发货件数", f"{safe_number(summary_row.get('发货件数')):,.0f}件")
+    price_cards[1].metric("范围发货件均价", f"¥{safe_number(summary_row.get('发货件均价')):,.2f}" if pd.notna(summary_row.get("发货件均价")) else "—")
+    price_cards[2].metric("吊牌价", f"¥{safe_number(summary_row.get('吊牌价')):,.2f}" if pd.notna(summary_row.get("吊牌价")) else "—")
+    price_cards[3].metric("发货折扣率", f"{safe_number(summary_row.get('发货折扣率')):.2%}" if pd.notna(summary_row.get("发货折扣率")) else "—")
+    price_cards[4].metric("范围实销件数／件均价", (
+        f"{safe_number(summary_row.get('实销件数')):,.0f}件／¥{safe_number(summary_row.get('实销件均价')):,.2f}"
+        if pd.notna(summary_row.get("实销件均价")) else f"{safe_number(summary_row.get('实销件数')):,.0f}件／—"
+    ))
+    st.caption("金额为 0 的赠品不计件、不参与件均价；范围实销按所选日期、店铺与主播口径关联。")
     product_level = safe_text(summary_row.get("复销分级"), "样本不足")
     product_refund = safe_number(summary_row.get("退款率"))
     product_conversion = safe_number(summary_row.get("点击成交率"))

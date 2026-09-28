@@ -962,11 +962,22 @@ detail_types = sorted(filtered["_detail_type"].dropna().unique())
 detail_label = detail_types[0] if len(detail_types) == 1 else "动态归属"
 
 # ---------- 聚合 ----------
+for unit_column, amount_column in [
+    ("ship_units", "ship_amount"),
+    ("return_units", "return_amount"),
+]:
+    if unit_column not in filtered.columns:
+        filtered[unit_column] = (pd.to_numeric(filtered[amount_column], errors="coerce").fillna(0) > 0).astype(int)
 grouped = filtered.groupby("style_code").agg(
     发货金额=("ship_amount", "sum"),
     退货金额=("return_amount", "sum"),
-    净销售金额=("net_amount", "sum")
+    净销售金额=("net_amount", "sum"),
+    发货件数=("ship_units", "sum"),
+    退货件数=("return_units", "sum"),
 ).reset_index().rename(columns={"style_code": "货号"})
+grouped["实销件数"] = grouped["发货件数"] - grouped["退货件数"]
+grouped["发货件均价"] = grouped["发货金额"].div(grouped["发货件数"].replace(0, np.nan))
+grouped["实销件均价"] = grouped["净销售金额"].div(grouped["实销件数"].where(grouped["实销件数"] > 0, np.nan))
 
 # 单款金额在当前查询结果全部货号总额中的贡献占比。
 total_ship_amount = grouped["发货金额"].sum()
@@ -989,11 +1000,16 @@ if not master_df.empty and "style_code" in master_df.columns:
     img_map = master_df.set_index("style_code")["image_url"].to_dict()
     cat_map = master_df.set_index("style_code")["category"].to_dict()
     launch_map = master_df.set_index("style_code")["launch_date"].to_dict()
+    price_map = (
+        master_df.set_index("style_code")["tag_price"].to_dict()
+        if "tag_price" in master_df.columns else {}
+    )
     grouped["image_url"] = grouped["货号"].map(img_map)
     grouped["master_category"] = grouped["货号"].map(cat_map).replace("", None)
     grouped["launch_date"] = pd.to_datetime(
         grouped["货号"].map(launch_map), errors="coerce"
     ).dt.date
+    grouped["吊牌价"] = pd.to_numeric(grouped["货号"].map(price_map), errors="coerce")
     grouped["product_tags"] = grouped["货号"].map(tag_map).map(
         lambda value: active_product_tags(
             value, tag_periods, include_inactive=show_inactive_tags
@@ -1003,6 +1019,7 @@ else:
     grouped["image_url"] = None
     grouped["master_category"] = None
     grouped["launch_date"] = None
+    grouped["吊牌价"] = np.nan
     grouped["product_tags"] = [[] for _ in range(len(grouped))]
 
 grouped["退款率"] = np.where(
@@ -1010,13 +1027,18 @@ grouped["退款率"] = np.where(
     (grouped["退货金额"] / grouped["发货金额"] * 100).map("{:.2f}%".format),
     "-"
 )
+grouped["发货折扣率"] = grouped["发货件均价"].div(grouped["吊牌价"].where(grouped["吊牌价"] > 0, np.nan))
 grouped = attach_inventory_summary(grouped, "货号")
 
 # ---------- 排序与分页 ----------
 st.markdown("#### 货号汇总表")
 col_s1, col_s2, col_s3 = st.columns([1, 1, 2])
 with col_s1:
-    sort_opts = ["货号", "总库存", "总仓库存", "发货金额", "发货金额占比", "退货金额", "净销售金额", "实销金额占比", "退款率"]
+    sort_opts = [
+        "货号", "总库存", "总仓库存", "发货金额", "发货件数", "发货件均价", "发货折扣率",
+        "发货金额占比", "退货金额", "退货件数", "净销售金额", "实销件数", "实销件均价",
+        "实销金额占比", "退款率",
+    ]
     sort_by = st.selectbox("排序字段", sort_opts, index=sort_opts.index(st.session_state.sort_by), key="sort_sel")
 with col_s2:
     asc = st.radio("顺序", ["降序", "升序"], horizontal=True, index=0 if not st.session_state.sort_ascending else 1, key="order")
@@ -1035,16 +1057,8 @@ if st.session_state.sort_by == "货号":
     grouped = grouped.sort_values("货号", ascending=st.session_state.sort_ascending)
 elif st.session_state.sort_by in {"总库存", "总仓库存"}:
     grouped = grouped.sort_values(st.session_state.sort_by, ascending=st.session_state.sort_ascending)
-elif st.session_state.sort_by == "发货金额":
-    grouped = grouped.sort_values("发货金额", ascending=st.session_state.sort_ascending)
-elif st.session_state.sort_by == "发货金额占比":
-    grouped = grouped.sort_values("发货金额占比", ascending=st.session_state.sort_ascending)
-elif st.session_state.sort_by == "退货金额":
-    grouped = grouped.sort_values("退货金额", ascending=st.session_state.sort_ascending)
-elif st.session_state.sort_by == "净销售金额":
-    grouped = grouped.sort_values("净销售金额", ascending=st.session_state.sort_ascending)
-elif st.session_state.sort_by == "实销金额占比":
-    grouped = grouped.sort_values("实销金额占比", ascending=st.session_state.sort_ascending)
+elif st.session_state.sort_by in set(sort_opts) - {"货号", "总库存", "总仓库存", "退款率"}:
+    grouped = grouped.sort_values(st.session_state.sort_by, ascending=st.session_state.sort_ascending)
 elif st.session_state.sort_by == "退款率":
     grouped["退款率_num"] = grouped["退款率"].str.rstrip("%").astype(float)
     grouped = grouped.sort_values("退款率_num", ascending=st.session_state.sort_ascending)
@@ -1082,8 +1096,10 @@ with col_export:
             if "image_url" in export_df.columns:
                 export_df = export_df.drop(columns=["image_url"])
             cols_order = [
-                "货号", "master_category", "launch_date", "总库存", "总仓库存", "发货金额", "发货金额占比", "退货金额",
-                "净销售金额", "实销金额占比", "退款率", "product_tags"
+                "货号", "master_category", "launch_date", "吊牌价", "总库存", "总仓库存",
+                "发货金额", "发货件数", "发货件均价", "发货折扣率", "发货金额占比",
+                "退货金额", "退货件数", "净销售金额", "实销件数", "实销件均价",
+                "实销金额占比", "退款率", "product_tags"
             ]
             export_cols = [c for c in cols_order if c in export_df.columns]
             export_df = export_df[export_cols]
@@ -1101,16 +1117,27 @@ with col_export:
             detail_agg = filtered.groupby(["style_code", "_detail_type", group_col], dropna=False).agg(
                 明细发货金额=("ship_amount", "sum"),
                 明细退货金额=("return_amount", "sum"),
-                明细净销售金额=("net_amount", "sum")
+                明细净销售金额=("net_amount", "sum"),
+                明细发货件数=("ship_units", "sum"),
+                明细退货件数=("return_units", "sum"),
             ).reset_index().rename(columns={"_detail_type": "明细类型"})
+            detail_agg["明细实销件数"] = detail_agg["明细发货件数"] - detail_agg["明细退货件数"]
+            detail_agg["明细发货件均价"] = detail_agg["明细发货金额"].div(
+                detail_agg["明细发货件数"].replace(0, np.nan)
+            )
+            detail_agg["明细实销件均价"] = detail_agg["明细净销售金额"].div(
+                detail_agg["明细实销件数"].where(detail_agg["明细实销件数"] > 0, np.nan)
+            )
             detail_agg["明细退款率"] = np.where(
                 detail_agg["明细发货金额"] != 0,
                 (detail_agg["明细退货金额"] / detail_agg["明细发货金额"] * 100).map("{:.2f}%".format),
                 "-"
             )
             master_cols = grouped[[
-                "货号", "master_category", "launch_date", "总库存", "总仓库存", "发货金额", "发货金额占比", "退货金额",
-                "净销售金额", "实销金额占比", "退款率", "product_tags"
+                "货号", "master_category", "launch_date", "吊牌价", "总库存", "总仓库存",
+                "发货金额", "发货件数", "发货件均价", "发货折扣率", "发货金额占比",
+                "退货金额", "退货件数", "净销售金额", "实销件数", "实销件均价",
+                "实销金额占比", "退款率", "product_tags"
             ]].copy()
             export_df = pd.merge(
                 detail_agg,
@@ -1128,9 +1155,13 @@ with col_export:
             }, inplace=True)
             export_df["商品标签"] = export_df["商品标签"].map(product_tags_text)
             final_cols = [
-                "货号", "商品分类", "上新时间", "总库存", "总仓库存", "发货金额", "发货金额占比", "退货金额",
-                "净销售金额", "实销金额占比", "退款率", "商品标签",
-                "明细类型", group_name, "明细发货金额", "明细退货金额", "明细净销售金额", "明细退款率"
+                "货号", "商品分类", "上新时间", "吊牌价", "总库存", "总仓库存",
+                "发货金额", "发货件数", "发货件均价", "发货折扣率", "发货金额占比",
+                "退货金额", "退货件数", "净销售金额", "实销件数", "实销件均价",
+                "实销金额占比", "退款率", "商品标签",
+                "明细类型", group_name, "明细发货金额", "明细发货件数", "明细发货件均价",
+                "明细退货金额", "明细退货件数", "明细净销售金额", "明细实销件数",
+                "明细实销件均价", "明细退款率"
             ]
             export_df = export_df[final_cols]
             sheet_name = f"货号{group_name}明细"
@@ -1139,7 +1170,7 @@ with col_export:
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
             export_df.to_excel(writer, index=False, sheet_name=sheet_name)
             worksheet = writer.sheets[sheet_name]
-            for percentage_column in ["发货金额占比", "实销金额占比"]:
+            for percentage_column in ["发货金额占比", "实销金额占比", "发货折扣率"]:
                 if percentage_column in export_df.columns:
                     column_index = export_df.columns.get_loc(percentage_column) + 1
                     for row_index in range(2, len(export_df) + 2):
@@ -1152,6 +1183,25 @@ with col_export:
             key="download_export",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
+
+with st.expander("查看件数、件均价、吊牌价与折扣率", expanded=True):
+    price_columns = [
+        "货号", "发货件数", "发货件均价", "退货件数", "实销件数", "实销件均价", "吊牌价", "发货折扣率"
+    ]
+    price_display = page_df[price_columns].copy()
+    price_display["发货折扣率"] = price_display["发货折扣率"] * 100
+    st.dataframe(
+        price_display,
+        width="stretch",
+        hide_index=True,
+        column_config={
+            "发货件均价": st.column_config.NumberColumn(format="¥%.2f"),
+            "实销件均价": st.column_config.NumberColumn(format="¥%.2f"),
+            "吊牌价": st.column_config.NumberColumn(format="¥%.2f"),
+            "发货折扣率": st.column_config.NumberColumn(format="%.2f%%"),
+        },
+    )
+    st.caption("金额为 0 的赠品不计件、不参与件均价；实销件数≤0时不显示实销件均价。")
 
 # ---------- 显示表格 ----------
 cols = st.columns([1.3, 0.5, 0.9, 0.8, 0.9, 0.7, 0.9, 0.9, 0.7, 0.7, 0.7, 0.65, 0.65, 0.55, 0.55])
@@ -1202,8 +1252,15 @@ for idx, row in page_df.iterrows():
             shop_detail = detail_df.groupby(["_detail_type", "_detail_value"], dropna=False).agg(
                 发货金额=("ship_amount", "sum"),
                 退货金额=("return_amount", "sum"),
-                净销售金额=("net_amount", "sum")
+                净销售金额=("net_amount", "sum"),
+                发货件数=("ship_units", "sum"),
+                退货件数=("return_units", "sum"),
             ).reset_index().rename(columns={"_detail_type": "明细类型", "_detail_value": "明细对象"})
+            shop_detail["实销件数"] = shop_detail["发货件数"] - shop_detail["退货件数"]
+            shop_detail["发货件均价"] = shop_detail["发货金额"].div(shop_detail["发货件数"].replace(0, np.nan))
+            shop_detail["实销件均价"] = shop_detail["净销售金额"].div(
+                shop_detail["实销件数"].where(shop_detail["实销件数"] > 0, np.nan)
+            )
             shop_detail["退款率"] = shop_detail.apply(
                 lambda r: f"{(r['退货金额']/r['发货金额']*100):.2f}%" if r['发货金额'] != 0 else "-", axis=1
             )
