@@ -67,8 +67,8 @@ def _clean_column_state(value) -> list[dict]:
 
 
 @st.fragment
-def layout_controls(page_key: str, table_key: str, columns: list[str]) -> tuple[list[str], list[dict]]:
-    """Render metric/template controls and return visible columns plus AG Grid state."""
+def _render_layout_controls(page_key: str, table_key: str, columns: list[str]) -> None:
+    """Render only the interactive settings panel in an isolated fragment."""
     username = _username()
     state_key = f"__table_layout_{page_key}_{table_key}_{username}"
     pending_key = f"__table_layout_pending_{page_key}_{table_key}_{username}"
@@ -182,6 +182,50 @@ def layout_controls(page_key: str, table_key: str, columns: list[str]) -> tuple[
 
         st.caption(f"当前表格显示 {len(visible)}/{len(columns)} 项；未点击应用前，表格保持不变。")
 
+    return None
+
+
+def layout_controls(page_key: str, table_key: str, columns: list[str]) -> tuple[list[str], list[dict]]:
+    """Read the applied layout in the main page and render settings separately."""
+    username = _username()
+    state_key = f"__table_layout_{page_key}_{table_key}_{username}"
+    pending_key = f"__table_layout_pending_{page_key}_{table_key}_{username}"
+    checkbox_prefix = f"layout_metric_{page_key}_{table_key}_{username}_"
+
+    def checkbox_key(column: str) -> str:
+        digest = hashlib.md5(str(column).encode("utf-8")).hexdigest()[:12]
+        return f"{checkbox_prefix}{digest}"
+
+    rows = load_table_layouts(username, page_key, table_key)
+    lookup = {row["template_name"]: row.get("config") or {} for row in rows}
+    if state_key not in st.session_state:
+        default_row = next((row for row in rows if row.get("is_default")), None)
+        st.session_state[state_key] = lookup.get(AUTO_TEMPLATE) or (
+            (default_row or {}).get("config") or {}
+        )
+
+    pending = st.session_state.pop(pending_key, None)
+    if isinstance(pending, dict):
+        st.session_state[state_key] = pending
+        pending_visible = [
+            column for column in pending.get("visible_columns", columns) if column in columns
+        ] or list(columns)
+        for column in columns:
+            st.session_state[checkbox_key(column)] = column in pending_visible
+
+    current = dict(st.session_state.get(state_key) or {})
+    visible = [column for column in current.get("visible_columns", columns) if column in columns]
+    if not visible:
+        visible = list(columns)
+    for column in columns:
+        key = checkbox_key(column)
+        if key not in st.session_state:
+            st.session_state[key] = column in visible
+
+    # The fragment owns only the controls. The table and page navigation read
+    # their state here in the normal app flow, so fragment reruns cannot trap
+    # sidebar navigation or replace the page's return values.
+    _render_layout_controls(page_key, table_key, columns)
     return visible, _clean_column_state(current.get("columns_state"))
 
 
