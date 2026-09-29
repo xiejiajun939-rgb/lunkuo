@@ -7,8 +7,9 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-from core.db import load_dimension_mapping, load_product_sales
+from core.db import load_dimension_mapping, load_product_master, load_product_sales, load_product_tag_periods
 from core.promotion import daily_promotion_date_bounds, load_daily_promotion_rows
+from core.product_tags import active_product_tags, product_tags_text
 from core.theme import page_header
 from core.utils import clear_cache_on_page_change
 from core.inventory import attach_inventory_summary
@@ -60,11 +61,47 @@ if promotion.empty:
     st.stop()
 
 shop_options = sorted(promotion["shop_name"].dropna().astype(str).unique())
-selected_shops = st.multiselect("抖音店铺", shop_options, default=shop_options, key="promotion_reference_shops_daily")
+master = load_product_master()
+tag_period_frame = load_product_tag_periods()
+tag_periods = {
+    row["tag_name"]: (row["start_date"], row["end_date"])
+    for row in tag_period_frame.to_dict("records")
+}
+tag_map = {}
+if not master.empty and {"style_code", "tags"}.issubset(master.columns):
+    master = master.copy()
+    master["style_code"] = master["style_code"].fillna("").astype(str).str.strip().str.upper()
+    tag_map = master[master["style_code"] != ""].drop_duplicates("style_code", keep="last").set_index("style_code")["tags"].to_dict()
+
+filter_cols = st.columns([2, 1, 2])
+selected_shops = filter_cols[0].multiselect(
+    "抖音店铺", shop_options, default=shop_options, key="promotion_reference_shops_daily"
+)
+show_inactive_tags = filter_cols[1].checkbox(
+    "包含已失效标签", value=False, key="promotion_show_inactive_tags"
+)
+tag_options = sorted({
+    tag for value in tag_map.values()
+    for tag in active_product_tags(value, tag_periods, include_inactive=show_inactive_tags)
+})
+selected_tags = filter_cols[2].multiselect(
+    "商品标签", tag_options, key="promotion_product_tag_filter"
+)
 if not selected_shops:
     st.warning("请至少选择一个店铺。")
     st.stop()
 promotion = promotion[promotion["shop_name"].isin(selected_shops)].copy()
+promotion["style_code"] = promotion["style_code"].fillna("").astype(str).str.strip().str.upper()
+promotion["product_tags"] = promotion["style_code"].map(tag_map).map(
+    lambda value: active_product_tags(value, tag_periods, include_inactive=show_inactive_tags)
+)
+if selected_tags:
+    promotion = promotion[promotion["product_tags"].map(
+        lambda tags: all(tag in tags for tag in selected_tags)
+    )]
+if promotion.empty:
+    st.info("当前店铺与标签条件下暂无推广商品数据。")
+    st.stop()
 
 # Promotion filenames carry the platform shop name, while actual-sales rows use
 # the internal shop name.  Reuse the maintained mapping before joining them.
@@ -112,6 +149,11 @@ promo_summary = promotion.groupby(["shop_name", "sales_shop_name", "style_code"]
 detail = promo_summary.merge(overall, on=["sales_shop_name", "style_code"], how="outer").merge(
     small, on=["sales_shop_name", "style_code"], how="left")
 detail["shop_name"] = detail["shop_name"].fillna(detail["sales_shop_name"])
+detail["商品标签"] = detail["style_code"].map(tag_map).map(
+    lambda value: product_tags_text(
+        active_product_tags(value, tag_periods, include_inactive=show_inactive_tags)
+    )
+)
 numeric_columns = ["impressions", "clicks", "spend", "gross_gmv", "gross_orders", "user_paid_amount",
                    "overall_ship", "overall_return", "overall_actual", "small_shop_ship", "small_shop_return", "small_shop_actual"]
 for column in numeric_columns:
@@ -140,12 +182,12 @@ display = detail.rename(columns={
     "clicks": "推广点击", "ctr": "推广CTR", "gross_gmv": "推广成交金额",
     "gross_orders": "推广成交订单", "user_paid_amount": "用户实际支付", "paid_roi": "推广支付ROI",
     "spend_to_small_shop_actual": "消耗/小店实销",
-})[["抖音店铺", "货号", "商品名称", "整体发货", "小店发货", "直播发货", "整体实销", "小店实销", "直播实销",
+})[["抖音店铺", "货号", "商品名称", "商品标签", "整体发货", "小店发货", "直播发货", "整体实销", "小店实销", "直播实销",
     "小店贡献率", "推广消耗", "推广展示", "推广点击", "推广CTR", "推广成交金额", "推广成交订单", "用户实际支付",
     "推广支付ROI", "消耗/小店实销"]]
 
 style_display = display.groupby("货号", as_index=False).agg({
-    "商品名称": "first", "抖音店铺": "nunique", "整体发货": "sum", "小店发货": "sum", "直播发货": "sum",
+    "商品名称": "first", "商品标签": "first", "抖音店铺": "nunique", "整体发货": "sum", "小店发货": "sum", "直播发货": "sum",
     "整体实销": "sum", "小店实销": "sum", "直播实销": "sum", "推广消耗": "sum", "推广展示": "sum",
     "推广点击": "sum", "推广成交金额": "sum", "推广成交订单": "sum", "用户实际支付": "sum",
 }).rename(columns={"抖音店铺": "覆盖店铺数"})
