@@ -608,6 +608,11 @@ session_kpis["ROI"] = session_kpis["商品支付金额"].div(
     session_kpis["投放消耗观察值"].replace(0, pd.NA)
 )
 
+# Shared baseline used by both the overview and single-session review.
+# Keep it outside section-specific rendering so every section can be opened
+# directly without depending on another section having rendered first.
+valid_rooms = session_kpis[session_kpis["直播间观看人数"] > 0].copy()
+
 live_sections = {
     "决策总览": "先看经营问题、机会和下一场建议",
     "开播选品": "安排开场、极速流和稳定复销商品",
@@ -701,7 +706,6 @@ if active_section == list(live_sections)[0]:
     funnel_cards[5].metric("ROI", f"{overall_spend_output:.2f}" if overall_spend_output is not None else "—")
     st.caption("ROI为经营观察指标：平台支付金额 ÷ 投放消耗观察值；投放消耗取“店铺绑定”和“店铺被投”两者较大值。")
 
-    valid_rooms = session_kpis[session_kpis["直播间观看人数"] > 0].copy()
     non_product_rules = [
         ("曝光承接偏弱", "曝光进入率", "直播间曝光人数", "优化封面、标题、开场内容和进房承接", False),
         ("停留偏弱", "人均观看时长", "直播间观看人数", "优化开场节奏和内容钩子，减少无效停顿", False),
