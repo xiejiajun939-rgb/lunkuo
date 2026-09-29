@@ -671,7 +671,7 @@ review_tab = section_target("单场复盘")
 product_tab = section_target("商品决策")
 compare_tab = section_target("主播对比")
 
-with decision_tab:
+if active_section == list(live_sections)[0]:
     st.subheader("本周期经营结论")
     decision_records = []
     total_exposure = session_kpis["直播间曝光人数"].sum()
@@ -870,7 +870,7 @@ with decision_tab:
     trend_columns = [x for x in ["平台支付", "发货", "退货", "实销"] if x in daily_platform]
     st.plotly_chart(px.line(daily_platform.sort_values("直播日期"), x="直播日期", y=trend_columns, markers=True, title="历史经营趋势"), width="stretch")
 
-with review_tab:
+if active_section == list(live_sections)[2]:
     labels = sessions.sort_values("start_time", ascending=False).assign(
         场次=lambda frame: frame["start_time"].dt.strftime("%m-%d %H:%M") + "｜" + frame["shop_name"] + "｜" + frame["anchor_name"]
     )
@@ -976,15 +976,21 @@ with review_tab:
         show_table(pd.DataFrame(room_actions))
     else:
         st.info("本场未触发高优先级规则，可进入商品明细继续检查。")
-    detail_tabs = st.tabs(["商品平台表现", "商品讲解区间", "渠道流量", "全部直播指标"])
-    with detail_tabs[0]:
+    detail_view = st.segmented_control(
+        "本场明细",
+        ["商品平台表现", "商品讲解区间", "渠道流量", "全部直播指标"],
+        default="商品平台表现",
+        key="live_session_detail_view",
+        label_visibility="collapsed",
+    )
+    if detail_view == "商品平台表现":
         show_table(
             room_products[["style_code", "product_name", "click_users", "sold_units", "paid_amount", "pre_ship_refund_amount", "post_ship_refund_amount"]].sort_values("paid_amount", ascending=False),
             table_key="session_products",
         )
-    with detail_tabs[1]:
+    elif detail_view == "商品讲解区间":
         show_table(talks[talks["live_room_id"].astype(str) == room].sort_values("talk_start_epoch") if not talks.empty else pd.DataFrame())
-    with detail_tabs[2]:
+    elif detail_view == "渠道流量":
         room_channels = channels[channels["live_room_id"].astype(str) == room].copy() if not channels.empty else pd.DataFrame()
         if room_channels.empty:
             st.info("本场暂无渠道流量数据。")
@@ -1005,10 +1011,10 @@ with review_tab:
             )
             show_table(detail_channels.sort_values("paid_amount", ascending=False))
             st.caption("渠道投放指标用于经营观察；投放归因口径与平台支付口径可能不同，不作为财务ROI。")
-    with detail_tabs[3]:
+    else:
         show_table(metrics[metrics["live_room_id"].astype(str) == room][["module", "metric_name", "raw_value", "comparison_display"]])
 
-with compare_tab:
+if active_section == list(live_sections)[4]:
     room_compare = sessions.groupby(["shop_name", "anchor_name"], as_index=False).agg(场次=("live_room_id", "nunique"), 直播小时=("duration_seconds", lambda x: x.sum()/3600))
     performance = products.groupby(["shop_name", "anchor_name"], as_index=False).agg(商品点击=("click_users", "sum"), 成交件数=("sold_units", "sum"), 平台支付=("paid_amount", "sum"))
     room_compare = room_compare.merge(performance, on=["shop_name", "anchor_name"], how="left")
@@ -1077,14 +1083,14 @@ def render_session_trend(trend_frame: pd.DataFrame) -> None:
     ), width="stretch", key="session_trend_chart")
 
 
-with decision_tab:
+if active_section == list(live_sections)[0]:
     st.markdown("#### 场次经营趋势")
     trend_frame = session_kpis.rename(columns={
         "商品支付金额": "平台支付", "商品点击人数": "商品点击", "商品成交件数": "成交件数",
     }).copy()
     render_session_trend(trend_frame)
 
-with product_tab:
+if active_section == list(live_sections)[3]:
     with st.form("product_decision_filters", clear_on_submit=False):
         product_filter_cols = st.columns([2, 1])
         with product_filter_cols[0]:
@@ -1291,7 +1297,7 @@ with product_tab:
                 st.markdown("##### 平台支付口径")
                 show_table(platform_style_structure.sort_values("平台支付金额", ascending=False))
 
-with selection_tab:
+if active_section == list(live_sections)[1]:
     st.subheader("开播前段商品销售排行")
     with st.form("opening_selection_filters", clear_on_submit=False):
         rank_cols = st.columns([1.2, 1.2, 1.4, 1.5])
@@ -1469,7 +1475,7 @@ with selection_tab:
             )
             show_table(evidence.sort_values("直播日期", ascending=False))
 
-with selection_tab:
+if active_section == list(live_sections)[1]:
     st.markdown("#### 商品机会类型")
     opportunity_help = {
         "开播阶段": "查看开播后前15／30／60／90分钟内表现较好的商品，辅助安排开场和前段排品。",
@@ -1574,7 +1580,7 @@ with selection_tab:
             )
             show_table(repeat_evidence.sort_values("直播日期", ascending=False))
 
-with product_tab:
+if active_section == list(live_sections)[3]:
     options = style_summary.sort_values("平台支付", ascending=False)["style_code"].astype(str).tolist()
     selected_style = st.selectbox("选择货号", options)
     inventory_row = style_summary[style_summary["style_code"].astype(str) == selected_style].iloc[0]
