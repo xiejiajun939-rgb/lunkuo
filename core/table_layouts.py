@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import hashlib
 import json
 
 import streamlit as st
@@ -69,8 +70,14 @@ def layout_controls(page_key: str, table_key: str, columns: list[str]) -> tuple[
     """Render metric/template controls and return visible columns plus AG Grid state."""
     username = _username()
     state_key = f"__table_layout_{page_key}_{table_key}_{username}"
-    visible_widget_key = f"layout_visible_{page_key}_{table_key}_{username}"
     pending_key = f"__table_layout_pending_{page_key}_{table_key}_{username}"
+    checkbox_pending_key = f"__table_layout_checkbox_pending_{page_key}_{table_key}_{username}"
+    checkbox_prefix = f"layout_metric_{page_key}_{table_key}_{username}_"
+
+    def checkbox_key(column: str) -> str:
+        digest = hashlib.md5(str(column).encode("utf-8")).hexdigest()[:12]
+        return f"{checkbox_prefix}{digest}"
+
     rows = load_table_layouts(username, page_key, table_key)
     lookup = {row["template_name"]: row.get("config") or {} for row in rows}
     if state_key not in st.session_state:
@@ -81,32 +88,62 @@ def layout_controls(page_key: str, table_key: str, columns: list[str]) -> tuple[
     pending = st.session_state.pop(pending_key, None)
     if isinstance(pending, dict):
         st.session_state[state_key] = pending
-        st.session_state[visible_widget_key] = [
+        pending_visible = [
             column for column in pending.get("visible_columns", columns) if column in columns
         ] or list(columns)
+        for column in columns:
+            st.session_state[checkbox_key(column)] = column in pending_visible
+    checkbox_pending = st.session_state.pop(checkbox_pending_key, None)
+    if isinstance(checkbox_pending, list):
+        pending_set = set(checkbox_pending)
+        for column in columns:
+            st.session_state[checkbox_key(column)] = column in pending_set
     current = dict(st.session_state.get(state_key) or {})
     visible = [column for column in current.get("visible_columns", columns) if column in columns]
     if not visible:
         visible = list(columns)
+    for column in columns:
+        key = checkbox_key(column)
+        if key not in st.session_state:
+            st.session_state[key] = column in visible
 
     with st.expander("⚙️ 指标显示与布局模板", expanded=False):
-        chosen = st.multiselect(
-            "选择显示指标",
-            columns,
-            default=visible,
-            key=visible_widget_key,
-        )
-        action_cols = st.columns([1, 1, 1])
-        if action_cols[0].button("全选指标", key=f"layout_all_{table_key}"):
-            current["visible_columns"] = list(columns)
-            save_table_layout(page_key, table_key, AUTO_TEMPLATE, current)
-            st.session_state[pending_key] = current
+        st.caption("可连续勾选多个指标；只有点击“应用显示设置”后，表格才会刷新。")
+        with st.form(f"layout_metrics_form_{page_key}_{table_key}_{username}"):
+            checkbox_columns = st.columns(3)
+            for index, column in enumerate(columns):
+                with checkbox_columns[index % len(checkbox_columns)]:
+                    st.checkbox(str(column), key=checkbox_key(column))
+            action_cols = st.columns([1.2, 1, 1, 1.4])
+            apply_visibility = action_cols[0].form_submit_button(
+                "应用显示设置", type="primary", width="stretch"
+            )
+            select_all = action_cols[1].form_submit_button("全选", width="stretch")
+            clear_all = action_cols[2].form_submit_button("全部取消", width="stretch")
+            reset_default = action_cols[3].form_submit_button("恢复系统默认", width="stretch")
+
+        if select_all:
+            st.session_state[checkbox_pending_key] = list(columns)
             st.rerun()
-        if action_cols[1].button("恢复系统默认", key=f"layout_reset_{table_key}"):
+        if clear_all:
+            st.session_state[checkbox_pending_key] = []
+            st.rerun()
+        if reset_default:
             delete_table_layout(page_key, table_key, AUTO_TEMPLATE)
             st.session_state[pending_key] = {"visible_columns": list(columns)}
             st.rerun()
-        action_cols[2].caption(f"已显示 {len(chosen)}/{len(columns)} 项")
+        chosen = [column for column in columns if st.session_state.get(checkbox_key(column), False)]
+        if apply_visibility:
+            if not chosen:
+                st.warning("请至少勾选一个指标后再应用。")
+            else:
+                current["visible_columns"] = chosen
+                st.session_state[state_key] = current
+                save_table_layout(page_key, table_key, AUTO_TEMPLATE, current)
+                visible = chosen
+                st.success(f"已应用，共显示 {len(chosen)}/{len(columns)} 项。")
+        else:
+            st.caption(f"当前已显示 {len(visible)}/{len(columns)} 项")
 
         named = [name for name in lookup if name != AUTO_TEMPLATE]
         template_cols = st.columns([1.5, 1, 1, 1])
@@ -138,11 +175,6 @@ def layout_controls(page_key: str, table_key: str, columns: list[str]) -> tuple[
             save_table_layout(page_key, table_key, template_name, current)
             st.success(f"已保存模板“{template_name}”。")
 
-    if chosen != visible:
-        current["visible_columns"] = chosen or visible
-        st.session_state[state_key] = current
-        save_table_layout(page_key, table_key, AUTO_TEMPLATE, current)
-        visible = current["visible_columns"]
     return visible, _clean_column_state(current.get("columns_state"))
 
 
