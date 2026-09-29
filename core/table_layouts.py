@@ -66,12 +66,12 @@ def _clean_column_state(value) -> list[dict]:
     ]
 
 
+@st.fragment
 def layout_controls(page_key: str, table_key: str, columns: list[str]) -> tuple[list[str], list[dict]]:
     """Render metric/template controls and return visible columns plus AG Grid state."""
     username = _username()
     state_key = f"__table_layout_{page_key}_{table_key}_{username}"
     pending_key = f"__table_layout_pending_{page_key}_{table_key}_{username}"
-    checkbox_pending_key = f"__table_layout_checkbox_pending_{page_key}_{table_key}_{username}"
     checkbox_prefix = f"layout_metric_{page_key}_{table_key}_{username}_"
 
     def checkbox_key(column: str) -> str:
@@ -93,11 +93,6 @@ def layout_controls(page_key: str, table_key: str, columns: list[str]) -> tuple[
         ] or list(columns)
         for column in columns:
             st.session_state[checkbox_key(column)] = column in pending_visible
-    checkbox_pending = st.session_state.pop(checkbox_pending_key, None)
-    if isinstance(checkbox_pending, list):
-        pending_set = set(checkbox_pending)
-        for column in columns:
-            st.session_state[checkbox_key(column)] = column in pending_set
     current = dict(st.session_state.get(state_key) or {})
     visible = [column for column in current.get("visible_columns", columns) if column in columns]
     if not visible:
@@ -108,72 +103,84 @@ def layout_controls(page_key: str, table_key: str, columns: list[str]) -> tuple[
             st.session_state[key] = column in visible
 
     with st.expander("⚙️ 指标显示与布局模板", expanded=False):
-        st.caption("可连续勾选多个指标；只有点击“应用显示设置”后，表格才会刷新。")
+        st.caption("勾选指标、输入名称和选择模板都不会刷新直播数据；只有应用到表格时才更新表格。")
         with st.form(f"layout_metrics_form_{page_key}_{table_key}_{username}"):
             checkbox_columns = st.columns(3)
             for index, column in enumerate(columns):
                 with checkbox_columns[index % len(checkbox_columns)]:
                     st.checkbox(str(column), key=checkbox_key(column))
-            action_cols = st.columns([1.2, 1, 1, 1.4])
-            apply_visibility = action_cols[0].form_submit_button(
-                "应用显示设置", type="primary", width="stretch"
+            batch_mode = st.radio(
+                "批量设置（应用时生效）",
+                ["按上方勾选", "全选", "恢复系统默认"],
+                horizontal=True,
+                key=f"layout_batch_{page_key}_{table_key}_{username}",
             )
-            select_all = action_cols[1].form_submit_button("全选", width="stretch")
-            clear_all = action_cols[2].form_submit_button("全部取消", width="stretch")
-            reset_default = action_cols[3].form_submit_button("恢复系统默认", width="stretch")
+            named = [name for name in lookup if name != AUTO_TEMPLATE]
+            template_cols = st.columns([1.4, 1])
+            selected_template = template_cols[0].selectbox(
+                "已有模板", named, index=None, placeholder="选择模板",
+                key=f"layout_template_{page_key}_{table_key}_{username}",
+            )
+            template_name = template_cols[1].text_input(
+                "新模板名称", placeholder="例如：主播周复盘",
+                key=f"layout_name_{page_key}_{table_key}_{username}",
+            ).strip()
+            action_cols = st.columns([1.35, 1.2, 1, 1, 1])
+            apply_visibility = action_cols[0].form_submit_button(
+                "应用到表格", type="primary", width="stretch"
+            )
+            save_template = action_cols[1].form_submit_button("保存为模板", width="stretch")
+            apply_template = action_cols[2].form_submit_button("应用模板", width="stretch")
+            set_default = action_cols[3].form_submit_button("设为默认", width="stretch")
+            delete_template = action_cols[4].form_submit_button("删除模板", width="stretch")
 
-        if select_all:
-            st.session_state[checkbox_pending_key] = list(columns)
-            st.rerun()
-        if clear_all:
-            st.session_state[checkbox_pending_key] = []
-            st.rerun()
-        if reset_default:
-            delete_table_layout(page_key, table_key, AUTO_TEMPLATE)
-            st.session_state[pending_key] = {"visible_columns": list(columns)}
-            st.rerun()
-        chosen = [column for column in columns if st.session_state.get(checkbox_key(column), False)]
+        checked = [column for column in columns if st.session_state.get(checkbox_key(column), False)]
+        chosen = list(columns) if batch_mode in {"全选", "恢复系统默认"} else checked
+        draft = dict(current)
+        draft["visible_columns"] = chosen
+
         if apply_visibility:
             if not chosen:
-                st.warning("请至少勾选一个指标后再应用。")
+                st.warning("请至少保留一个指标；不能把表格全部隐藏。")
             else:
-                current["visible_columns"] = chosen
-                st.session_state[state_key] = current
-                save_table_layout(page_key, table_key, AUTO_TEMPLATE, current)
-                visible = chosen
-                st.success(f"已应用，共显示 {len(chosen)}/{len(columns)} 项。")
-        else:
-            st.caption(f"当前已显示 {len(visible)}/{len(columns)} 项")
+                if batch_mode == "恢复系统默认":
+                    delete_table_layout(page_key, table_key, AUTO_TEMPLATE)
+                else:
+                    save_table_layout(page_key, table_key, AUTO_TEMPLATE, draft)
+                st.session_state[pending_key] = draft
+                st.rerun(scope="app")
+        elif save_template:
+            if not template_name:
+                st.warning("请先填写新模板名称。")
+            elif not chosen:
+                st.warning("请至少保留一个指标后再保存模板。")
+            else:
+                save_table_layout(page_key, table_key, template_name, draft)
+                st.success(f"已保存模板“{template_name}”，直播数据未重新加载。")
+        elif apply_template:
+            if not selected_template:
+                st.warning("请先选择已有模板。")
+            else:
+                applied = dict(lookup[selected_template])
+                save_table_layout(page_key, table_key, AUTO_TEMPLATE, applied)
+                st.session_state[pending_key] = applied
+                st.rerun(scope="app")
+        elif set_default:
+            if not selected_template:
+                st.warning("请先选择已有模板。")
+            else:
+                save_table_layout(
+                    page_key, table_key, selected_template, lookup[selected_template], is_default=True
+                )
+                st.success(f"已将“{selected_template}”设为默认，直播数据未重新加载。")
+        elif delete_template:
+            if not selected_template:
+                st.warning("请先选择已有模板。")
+            else:
+                delete_table_layout(page_key, table_key, selected_template)
+                st.success(f"已删除模板“{selected_template}”，直播数据未重新加载。")
 
-        named = [name for name in lookup if name != AUTO_TEMPLATE]
-        template_cols = st.columns([1.5, 1, 1, 1])
-        selected_template = template_cols[0].selectbox(
-            "已有模板", named, index=None, placeholder="选择模板",
-            key=f"layout_template_{table_key}",
-        )
-        if template_cols[1].button("应用", disabled=not selected_template, key=f"layout_apply_{table_key}"):
-            applied = dict(lookup.get(selected_template) or {})
-            save_table_layout(page_key, table_key, AUTO_TEMPLATE, applied)
-            st.session_state[pending_key] = applied
-            st.rerun()
-        if template_cols[2].button("设为默认", disabled=not selected_template, key=f"layout_default_{table_key}"):
-            save_table_layout(
-                page_key, table_key, selected_template, lookup[selected_template], is_default=True
-            )
-            save_table_layout(page_key, table_key, AUTO_TEMPLATE, lookup[selected_template])
-            st.session_state[pending_key] = dict(lookup[selected_template])
-            st.rerun()
-        if template_cols[3].button("删除", disabled=not selected_template, key=f"layout_delete_{table_key}"):
-            delete_table_layout(page_key, table_key, selected_template)
-            st.rerun()
-
-        save_cols = st.columns([2, 1])
-        template_name = save_cols[0].text_input(
-            "新模板名称", placeholder="例如：主播周复盘", key=f"layout_name_{table_key}"
-        ).strip()
-        if save_cols[1].button("保存为模板", disabled=not template_name, key=f"layout_save_{table_key}"):
-            save_table_layout(page_key, table_key, template_name, current)
-            st.success(f"已保存模板“{template_name}”。")
+        st.caption(f"当前表格显示 {len(visible)}/{len(columns)} 项；未点击应用前，表格保持不变。")
 
     return visible, _clean_column_state(current.get("columns_state"))
 
