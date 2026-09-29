@@ -133,6 +133,66 @@ _GRID_CSS = {
 }
 
 
+_ZH_CN_LOCALE_TEXT = {
+    "selectAll": "全选",
+    "selectAllSearchResults": "全选搜索结果",
+    "searchOoo": "搜索…",
+    "blanks": "空白",
+    "noMatches": "没有匹配项",
+    "filterOoo": "筛选…",
+    "equals": "等于",
+    "notEqual": "不等于",
+    "blank": "为空",
+    "notBlank": "不为空",
+    "empty": "请选择",
+    "lessThan": "小于",
+    "greaterThan": "大于",
+    "lessThanOrEqual": "小于或等于",
+    "greaterThanOrEqual": "大于或等于",
+    "inRange": "介于",
+    "inRangeStart": "起始值",
+    "inRangeEnd": "结束值",
+    "contains": "包含",
+    "notContains": "不包含",
+    "startsWith": "开头是",
+    "endsWith": "结尾是",
+    "andCondition": "并且",
+    "orCondition": "或者",
+    "applyFilter": "应用",
+    "resetFilter": "重置",
+    "clearFilter": "清除",
+    "cancelFilter": "取消",
+    "textFilter": "文字筛选",
+    "numberFilter": "数字筛选",
+    "dateFilter": "日期筛选",
+    "setFilter": "选项筛选",
+    "columns": "指标列",
+    "filters": "筛选条件",
+    "noRowsToShow": "暂无数据",
+    "loadingOoo": "正在加载…",
+    "page": "第",
+    "to": "至",
+    "of": "共",
+    "nextPage": "下一页",
+    "lastPage": "最后一页",
+    "firstPage": "第一页",
+    "previousPage": "上一页",
+    "pageSizeSelectorLabel": "每页行数",
+    "ariaSearch": "搜索",
+    "ariaFilterInput": "筛选值",
+    "sortAscending": "升序",
+    "sortDescending": "降序",
+    "sortUnSort": "取消排序",
+    "pinColumn": "固定列",
+    "pinLeft": "固定在左侧",
+    "pinRight": "固定在右侧",
+    "noPin": "取消固定",
+    "autosizeThisColumn": "自动调整当前列宽",
+    "autosizeAllColumns": "自动调整全部列宽",
+    "resetColumns": "恢复默认列",
+}
+
+
 def _style_column(frame: pd.DataFrame) -> str | None:
     for candidate in ("货号", "style_code", "商品货号"):
         if candidate in frame.columns:
@@ -180,6 +240,7 @@ def render_inventory_grid(
         suppressRowClickSelection=True,
         rowHeight=52,
         headerHeight=44,
+        localeText=_ZH_CN_LOCALE_TEXT,
     )
     builder.configure_column("__inventory_style", hide=True)
     builder.configure_column("__inventory_click", hide=True)
