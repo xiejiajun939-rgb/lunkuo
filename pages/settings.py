@@ -11,7 +11,7 @@ from core.utils import clear_cache_on_page_change
 from core.app_config import load_carousel_config, save_carousel_config, upload_carousel_image
 from core.settings_panels import render_account_management, render_mapping_management
 from core.theme import page_header
-from core.promotion import completed_week_starts, parse_promotion_file, save_promotion_rows, week_label
+from core.promotion import parse_daily_promotion_file, save_daily_promotion_rows
 from core.live_analytics import (
     import_douyin_live_workbook,
     preview_douyin_live_workbook,
@@ -420,42 +420,29 @@ with tab_upload:
                     st.success(f"已保存 {total} 个组织目标。")
 
     st.markdown("### 推广参考数据")
-    st.caption("每个文件对应一个抖音店铺和一个完整自然周；周期固定为周日—周六。")
+    st.caption("每日上传“店铺名_商品_YYYY-MM-DD.xlsx”；店铺和日期自动从文件名识别，素材文件不会导入。")
     with st.container(border=True):
-        promotion_mapping = load_dimension_mapping()
-        promotion_shop_options = (
-            sorted(promotion_mapping["shop_name"].dropna().astype(str).str.strip().unique())
-            if not promotion_mapping.empty and "shop_name" in promotion_mapping.columns else []
+        promo_files = st.file_uploader(
+            "每日店铺推广商品数据（支持多文件）", type=["xlsx", "xls"],
+            accept_multiple_files=True, key="settings_promotion_daily_files",
         )
-        promo_col1, promo_col2 = st.columns(2)
-        with promo_col1:
-            promo_shop = st.selectbox(
-                "抖音店铺名称", promotion_shop_options,
-                index=None, placeholder="选择数据罗盘中的店铺",
-            )
-        with promo_col2:
-            promo_week = st.selectbox(
-                "推广数据周期", completed_week_starts(), format_func=week_label,
-                key="settings_promotion_week",
-            )
-        promo_file = st.file_uploader(
-            "店铺推广商品数据", type=["xlsx", "xls"], key="settings_promotion_file"
-        )
-        if st.button("上传推广数据", type="primary", key="settings_upload_promotion"):
-            if not promo_file:
-                st.warning("请先选择推广文件。")
-            elif not promo_shop:
-                st.warning("请选择抖音店铺名称。")
+        if st.button("上传每日推广数据", type="primary", key="settings_upload_promotion_daily"):
+            if not promo_files:
+                st.warning("请先选择推广商品文件。")
             else:
-                try:
-                    rows = parse_promotion_file(
-                        io.BytesIO(promo_file.getvalue()), promo_shop, promo_week, promo_file.name
-                    )
-                    count = save_promotion_rows(rows)
+                imported, failures = [], []
+                for promo_file in promo_files:
+                    try:
+                        rows = parse_daily_promotion_file(io.BytesIO(promo_file.getvalue()), promo_file.name)
+                        count = save_daily_promotion_rows(rows)
+                        imported.append(f"{promo_file.name}：{count} 条")
+                    except Exception as exc:
+                        failures.append(f"{promo_file.name}：{exc}")
+                if imported:
                     callbacks["mark_data_changed"]()
-                    st.success(f"已保存 {count} 条推广商品数据：{promo_shop}，{week_label(promo_week)}")
-                except Exception as exc:
-                    st.error(f"推广数据上传失败：{exc}")
+                    st.success("已更新每日推广数据：\n" + "\n".join(imported))
+                if failures:
+                    st.error("以下文件未导入：\n" + "\n".join(failures))
 
 with tab_tools:
     st.markdown("### 缓存与数据维护")
