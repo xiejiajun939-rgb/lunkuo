@@ -276,10 +276,14 @@ def render_inventory_grid(
         theme="streamlit",
         custom_css=_GRID_CSS,
         allow_unsafe_jscode=True,
-        update_on=(
-            ["cellValueChanged", "columnMoved", "columnResized", "columnVisible", "columnPinned", "sortChanged"]
-            if remember_layout else ["cellValueChanged"]
-        ),
+        # AG Grid emits resize/visibility/pin/sort events while restoring its
+        # initial column state.  Asking Streamlit to rerun for those events
+        # creates an initialise -> rerun -> initialise loop on the live page.
+        # Visibility remains controlled by the account-scoped metric selector
+        # above the grid.  Do not subscribe to column lifecycle events here:
+        # applyColumnState can emit columnMoved as well as resize/visibility
+        # events, so even columnMoved alone can recreate the rerun loop.
+        update_on=["cellValueChanged"],
         columns_state=columns_state or None,
         data_return_mode=DataReturnMode.CUSTOM,
         custom_jscode_for_grid_return=_CLICK_COLLECTOR,
