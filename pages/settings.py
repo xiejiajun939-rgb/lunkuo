@@ -55,63 +55,12 @@ div[data-testid="stVerticalBlockBorderWrapper"] { border-radius: 16px; }
 .settings-subtitle {color:#64748b;margin-bottom:18px}
 </style>
 """, unsafe_allow_html=True)
-page_header("系统设置", "集中管理首页、数据文件、账号权限与业务配置", "SYSTEM ADMINISTRATION", "管理员")
+page_header("系统设置", "管理数据导入、库存、目标、账号权限与组织映射", "SYSTEM ADMINISTRATION", "管理员")
 
-tab_home, tab_upload, tab_tools, tab_accounts, tab_access, tab_mapping = st.tabs([
-    "🖼️ 首页与轮播", "📤 文件与目标", "🧰 数据工具", "👥 账号与权限", "🧾 访问记录", "🗂️ 映射关系"
+tab_upload, tab_tools, tab_accounts, tab_access, tab_mapping = st.tabs([
+    "📤 文件与目标", "🧰 数据工具", "👥 账号与权限", "🧾 访问记录", "🗂️ 映射关系"
 ])
 
-with tab_home:
-    st.markdown("### 首页轮播广告位")
-    st.caption("可直接上传图片，也可填写公开图片 URL；留空时显示默认渐变背景。")
-    uploaded_banners = st.file_uploader(
-        "上传轮播图片（建议 1600×1200）",
-        type=["png", "jpg", "jpeg", "webp"],
-        accept_multiple_files=True,
-        key="carousel_images",
-    )
-    carousel_config = load_carousel_config()
-    slides_df = pd.DataFrame(carousel_config.get("slides", []))
-    for col in ["image_url", "title", "subtitle", "link_url"]:
-        if col not in slides_df.columns:
-            slides_df[col] = ""
-    edited_slides = st.data_editor(
-        slides_df[["image_url", "title", "subtitle", "link_url"]],
-        num_rows="dynamic",
-        width="stretch",
-        column_config={
-            "image_url": st.column_config.TextColumn("图片 URL / 已上传图片", help="建议使用 4:3 图片，例如 1600×1200"),
-            "title": st.column_config.TextColumn("主标题"),
-            "subtitle": st.column_config.TextColumn("副标题"),
-            "link_url": st.column_config.LinkColumn("点击跳转 URL"),
-        },
-        key="carousel_editor",
-    )
-    interval = st.slider("自动切换间隔（秒）", 2, 20, int(carousel_config.get("interval_seconds", 5)))
-    if st.button("💾 保存轮播设置", type="primary", key="save_carousel"):
-        records = []
-        for record in edited_slides.fillna("").to_dict(orient="records"):
-            if any(str(v).strip() for v in record.values()):
-                records.append({k: str(v).strip() for k, v in record.items()})
-        for uploaded in uploaded_banners or []:
-            try:
-                image_url = upload_carousel_image(uploaded)
-            except Exception as exc:
-                st.error(f"图片上传失败：{exc}")
-                st.stop()
-            records.append({
-                "image_url": image_url,
-                "title": uploaded.name.rsplit(".", 1)[0],
-                "subtitle": "",
-                "link_url": "",
-            })
-        if not records:
-            records = [{"image_url": "", "title": "欢迎使用数据罗盘", "subtitle": "经营数据与运营决策工作台", "link_url": ""}]
-        try:
-            save_carousel_config({"interval_seconds": interval, "slides": records})
-            st.success("轮播设置已保存到 Supabase，返回主页即可查看。")
-        except Exception as exc:
-            st.error(f"轮播设置保存失败：{exc}")
 
 with tab_upload:
     st.markdown("### 销售数据")

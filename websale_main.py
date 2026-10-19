@@ -814,27 +814,15 @@ else:
         allowed = perms[""]
     allowed_labels = allowed
 
-pages_to_show = []
-for label, path in all_pages.items():
-    if label == "⚙️ 系统设置" and role != "admin":
-        continue
-    if label == "🏢 组织与部门分析" and current_suffix != "_all":
-        continue
-    # 新页面添加任何特殊限制（例如只在全部数据源显示）可在此添加
-    # 但商品分析助手不限数据源，所以不需要额外条件
-    if label == "🏠 主页" or label in allowed_labels:
-        pages_to_show.append(Page(path, title=label, default=(label == "🏠 主页")))
+# 后台仅注册管理页面，分析页不再可通过旧站导航或路径访问。
+# all_pages 保留完整权限目录，供现有账号及新版前台兼容使用。
+pages_to_show = [Page("pages/home.py", title="🏠 主页", default=True)]
+if role == "admin":
+    pages_to_show.extend([
+        Page("pages/export.py", title="📚 商品信息管理"),
+        Page("pages/settings.py", title="⚙️ 系统设置"),
+    ])
 
-# ... 其余部分不变
-
-if not pages_to_show:
-    pages_to_show = [
-        Page("pages/home.py", title="🏠 主页", default=True),
-        Page("pages/dashboard.py", title="📊 经营驾驶舱"),
-        Page("pages/daily_detail.py", title="📋 每日明细"),
-        Page("pages/product_page.py", title="📦 商品分析"),
-        Page("pages/product_monthly_report.py", title="📑 商品月度复盘"),
-    ]
 
 # 页面执行前注册管理员工具回调，供系统设置页复用
 st.session_state["_admin_callbacks"] = {
