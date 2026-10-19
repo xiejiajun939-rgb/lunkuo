@@ -2,7 +2,7 @@
 import streamlit as st
 from core.theme import page_header
 
-page_header("数据罗盘管理后台", "数据维护与经营分析分工协作", "ADMINISTRATION", "管理后台")
+page_header("xiejiajun数据后台管理", "统一管理数据导入、商品资料、库存与账号权限", "XIEJIAJUN DATA ADMINISTRATION", "管理后台")
 st.link_button("打开新版经营分析", "https://xiaodian-data-compass.app.workbuddy.host/")
 if st.session_state.get("role") == "admin":
     st.info("数据上传、库存维护、账号权限和组织映射，请进入「系统设置」；商品资料与标签，请进入「商品信息管理」。")

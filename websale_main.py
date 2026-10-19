@@ -43,7 +43,7 @@ def safe_rerun():
         st.rerun()
 
 st.set_page_config(
-    page_title="数据罗盘",
+    page_title="xiejiajun数据后台管理",
     layout="wide",
     page_icon="assets/logo.svg",
     menu_items={
@@ -295,7 +295,7 @@ def login():
     div[data-testid="stForm"]{padding:26px!important;border:1px solid #dbe6ef!important;border-radius:20px!important;background:#fff!important;box-shadow:0 18px 45px rgba(16,48,82,.1)!important}
     div[data-testid="stForm"] div:has(>div[data-testid="stFormSubmitButton"]),div[data-testid="stFormSubmitButton"]{display:block!important;width:100%!important}div[data-testid="stFormSubmitButton"] button{width:100%!important;margin-top:8px;color:#fff!important;border:1px solid #00f0ff!important;background:#0d1117!important;box-shadow:0 6px 18px rgba(0,240,255,.22)!important}div[data-testid="stFormSubmitButton"] button:hover{border-color:#67f7ff!important;background:#121a22!important;box-shadow:0 8px 24px rgba(0,240,255,.32)!important}div[data-testid="stFormSubmitButton"] button p{color:#fff!important}
     </style>
-    <div class="login-brand"><div class="login-mark"><svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" aria-label="数据罗盘 X Logo"><rect width="32" height="32" rx="6" fill="#0D1117"/><path d="M8 8L24 24M24 8L8 24" stroke="#00F0FF" stroke-width="3.5" stroke-linecap="round"/><circle cx="16" cy="16" r="2.5" fill="#FFFFFF"/></svg></div><div class="login-title">数据罗盘</div><div class="login-sub">LUNKUO BUSINESS INTELLIGENCE</div></div>
+    <div class="login-brand"><div class="login-mark"><svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" aria-label="xiejiajun数据后台管理 Logo"><rect width="32" height="32" rx="6" fill="#0D1117"/><path d="M8 8L24 24M24 8L8 24" stroke="#00F0FF" stroke-width="3.5" stroke-linecap="round"/><circle cx="16" cy="16" r="2.5" fill="#FFFFFF"/></svg></div><div class="login-title">xiejiajun数据后台管理</div><div class="login-sub">XIEJIAJUN DATA ADMINISTRATION</div></div>
     """, unsafe_allow_html=True)
     with st.form("login_form"):
         username = st.text_input("用户名")
