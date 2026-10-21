@@ -79,6 +79,20 @@ def save_platform_products(client, records):
         raise ValueError('没有已校验记录')
     return client.rpc('replace_douyin_platform_file', {'p_rows':records}).execute().data
 
+def uploaded_platform_dates(client):
+    """Read stored date/shop/scope combinations, including beyond the API row limit."""
+    found, offset = set(), 0
+    while True:
+        rows = (client.table(TABLE).select('report_date,shop_name,scope,product_id')
+                .order('report_date', desc=True).order('shop_name').order('scope')
+                .order('product_id').range(offset, offset + 999).execute().data)
+        if not rows:
+            break
+        found.update((r['report_date'], r['shop_name'], r['scope']) for r in rows)
+        offset += len(rows)
+    return [{'数据日期': day, '店铺': shop, '范围': scope}
+            for day, shop, scope in sorted(found, key=lambda r: (-date.fromisoformat(r[0]).toordinal(), r[1], r[2]))]
+
 def render_platform_import():
     import os
     import io
@@ -86,8 +100,30 @@ def render_platform_import():
     from supabase import create_client
     st.markdown('### 抖音平台商品数据（全部 / 商品卡）')
     st.caption('单日导出，按日期、平台店铺、范围独立替换；全部包含商品卡，不相加。先预览校验，再确认导入。')
+    url = os.environ.get('SUPABASE_URL') or st.secrets.get('SUPABASE_URL')
+    secret = os.environ.get('SUPABASE_SERVICE_ROLE_KEY') or st.secrets.get('SUPABASE_SERVICE_ROLE_KEY')
+    dates_area = st.container()
+
+    def show_uploaded_dates():
+        with dates_area:
+            st.markdown('#### 数据库中已上传的日期')
+            if not url or not secret:
+                st.warning('尚未配置服务端数据库密钥，无法查询已上传日期。')
+                return
+            try:
+                entries = uploaded_platform_dates(create_client(url, secret))
+                if entries:
+                    st.dataframe(entries, use_container_width=True, hide_index=True)
+                else:
+                    st.info('数据库中暂无已上传的抖音平台数据。')
+            except Exception:
+                st.warning('已上传日期查询失败，请稍后刷新重试；这不代表数据未上传。')
+
+    # Render after import so this run includes newly persisted dates.
+    st.button('刷新已上传日期', key='platform_products_refresh_dates')
     files = st.file_uploader('平台商品列表 Excel', type=['xlsx'], accept_multiple_files=True, key='platform_products_files')
     if not files:
+        show_uploaded_dates()
         return
     previews, errors, grains = [], [], set()
     for file in files:
@@ -103,6 +139,7 @@ def render_platform_import():
             errors.append(f'{file.name}：{exc}')
     if errors:
         st.error('\n'.join(errors))
+        show_uploaded_dates()
         return
     confirmed = st.checkbox('确认替换以上文件对应日期、店铺及范围的数据', key='platform_products_confirm')
     if st.button('确认导入平台商品数据', key='platform_products_save', disabled=not confirmed):
@@ -110,6 +147,7 @@ def render_platform_import():
         secret = os.environ.get('SUPABASE_SERVICE_ROLE_KEY') or st.secrets.get('SUPABASE_SERVICE_ROLE_KEY')
         if not url or not secret:
             st.error('请先部署平台商品数据表，并配置服务端 SUPABASE_URL 和 SUPABASE_SERVICE_ROLE_KEY。')
+            show_uploaded_dates()
             return
         client = create_client(url, secret)
         for name, records in previews:
@@ -119,3 +157,4 @@ def render_platform_import():
             except Exception:
                 st.error(f'{name} 导入失败；此前成功文件仍保留。该文件通过事务保护，不会留下半份数据，可修复后重试。')
                 break
+    show_uploaded_dates()
