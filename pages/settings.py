@@ -57,8 +57,8 @@ div[data-testid="stVerticalBlockBorderWrapper"] { border-radius: 16px; }
 """, unsafe_allow_html=True)
 page_header("系统设置", "管理数据导入、库存、目标、账号权限与组织映射", "SYSTEM ADMINISTRATION", "管理员")
 
-tab_upload, tab_tools, tab_accounts, tab_access, tab_mapping = st.tabs([
-    "📤 文件与目标", "🧰 数据工具", "👥 账号与权限", "🧾 访问记录", "🗂️ 映射关系"
+tab_upload, tab_platform, tab_tools, tab_accounts, tab_access, tab_mapping = st.tabs([
+    "📤 文件与目标", "🛍️ 抖音平台数据", "🧰 数据工具", "👥 账号与权限", "🧾 访问记录", "🗂️ 映射关系"
 ])
 
 
@@ -393,6 +393,8 @@ with tab_upload:
                 if failures:
                     st.error("以下文件未导入：\n" + "\n".join(failures))
 
+with tab_platform:
+    st.caption("平台数据导入入口 · 版本 2026-10-21 · 全部 / 商品卡")
     from core.platform_products import render_platform_import
     render_platform_import()
 
