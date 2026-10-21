@@ -393,6 +393,9 @@ with tab_upload:
                 if failures:
                     st.error("以下文件未导入：\n" + "\n".join(failures))
 
+    from core.platform_products import render_platform_import
+    render_platform_import()
+
 with tab_tools:
     st.markdown("### 缓存与数据维护")
     col_refresh, col_clear = st.columns(2)
