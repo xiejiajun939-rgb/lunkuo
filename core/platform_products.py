@@ -101,14 +101,16 @@ def render_platform_import():
     st.markdown('### 抖音平台商品数据（全部 / 商品卡）')
     st.caption('单日导出，按日期、平台店铺、范围独立替换；全部包含商品卡，不相加。先预览校验，再确认导入。')
     url = os.environ.get('SUPABASE_URL') or st.secrets.get('SUPABASE_URL')
-    secret = os.environ.get('SUPABASE_SERVICE_ROLE_KEY') or st.secrets.get('SUPABASE_SERVICE_ROLE_KEY')
+    secret = (os.environ.get('SUPABASE_SECRET_KEY') or st.secrets.get('SUPABASE_SECRET_KEY')
+              or os.environ.get('SUPABASE_SERVICE_ROLE_KEY') or st.secrets.get('SUPABASE_SERVICE_ROLE_KEY')
+              or os.environ.get('SUPABASE_KEY') or st.secrets.get('SUPABASE_KEY'))
     dates_area = st.container()
 
     def show_uploaded_dates():
         with dates_area:
             st.markdown('#### 数据库中已上传的日期')
             if not url or not secret:
-                st.warning('尚未配置服务端数据库密钥，无法查询已上传日期。')
+                st.warning('数据库连接配置缺失，无法查询已上传日期，请检查现有 SUPABASE_URL 和 SUPABASE_KEY。')
                 return
             try:
                 entries = uploaded_platform_dates(create_client(url, secret))
@@ -143,10 +145,8 @@ def render_platform_import():
         return
     confirmed = st.checkbox('确认替换以上文件对应日期、店铺及范围的数据', key='platform_products_confirm')
     if st.button('确认导入平台商品数据', key='platform_products_save', disabled=not confirmed):
-        url = os.environ.get('SUPABASE_URL') or st.secrets.get('SUPABASE_URL')
-        secret = os.environ.get('SUPABASE_SERVICE_ROLE_KEY') or st.secrets.get('SUPABASE_SERVICE_ROLE_KEY')
         if not url or not secret:
-            st.error('请先部署平台商品数据表，并配置服务端 SUPABASE_URL 和 SUPABASE_SERVICE_ROLE_KEY。')
+            st.error('请检查后台现有 SUPABASE_URL 和 SUPABASE_KEY 数据库连接配置。')
             show_uploaded_dates()
             return
         client = create_client(url, secret)
@@ -155,6 +155,6 @@ def render_platform_import():
                 count = save_platform_products(client, records)
                 st.success(f'{name}：成功保存 {count} 条')
             except Exception:
-                st.error(f'{name} 导入失败；此前成功文件仍保留。该文件通过事务保护，不会留下半份数据，可修复后重试。')
+                st.error(f'{name} 未能确认导入结果，请刷新已上传日期核对后再重试；此前成功文件仍保留。')
                 break
     show_uploaded_dates()
