@@ -101,14 +101,15 @@ def render_platform_import():
     st.markdown('### 抖音平台商品数据（全部 / 商品卡）')
     st.caption('单日导出，按日期、平台店铺、范围独立替换；全部包含商品卡，不相加。先预览校验，再确认导入。')
     url = os.environ.get('SUPABASE_URL') or st.secrets.get('SUPABASE_URL')
-    secret = os.environ.get('SUPABASE_SERVICE_ROLE_KEY') or st.secrets.get('SUPABASE_SERVICE_ROLE_KEY')
+    secret = (os.environ.get('SUPABASE_SECRET_KEY') or st.secrets.get('SUPABASE_SECRET_KEY')
+              or os.environ.get('SUPABASE_SERVICE_ROLE_KEY') or st.secrets.get('SUPABASE_SERVICE_ROLE_KEY'))
     dates_area = st.container()
 
     def show_uploaded_dates():
         with dates_area:
             st.markdown('#### 数据库中已上传的日期')
             if not url or not secret:
-                st.warning('尚未配置服务端数据库密钥，无法查询已上传日期。')
+                st.warning('尚未配置服务端数据库密钥，无法查询已上传日期。请在 Streamlit 应用的 Settings → Secrets 中配置 SUPABASE_SECRET_KEY（Supabase 的 Secret key），保存后刷新。现有 SUPABASE_KEY 公开密钥不能替代；请勿将密钥发送到聊天或写入代码。')
                 return
             try:
                 entries = uploaded_platform_dates(create_client(url, secret))
@@ -146,7 +147,7 @@ def render_platform_import():
         url = os.environ.get('SUPABASE_URL') or st.secrets.get('SUPABASE_URL')
         secret = os.environ.get('SUPABASE_SERVICE_ROLE_KEY') or st.secrets.get('SUPABASE_SERVICE_ROLE_KEY')
         if not url or not secret:
-            st.error('请先部署平台商品数据表，并配置服务端 SUPABASE_URL 和 SUPABASE_SERVICE_ROLE_KEY。')
+            st.error('请在 Streamlit Settings → Secrets 配置 SUPABASE_URL 和 SUPABASE_SECRET_KEY（也兼容旧版 SUPABASE_SERVICE_ROLE_KEY），保存后重试。')
             show_uploaded_dates()
             return
         client = create_client(url, secret)
