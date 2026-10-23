@@ -7,6 +7,9 @@ from core.db import load_dimension_mapping
 
 def render_account_management(supabase, all_pages):
     st.markdown("### 👥 账号管理与权限设置")
+    st.markdown("#### 管理员密码更改")
+    st.caption("管理员为各站通用账号。改密必须验证旧密码与安全口令；修改后各站重新登录，子账号及权限不变。")
+    st.link_button("打开统一管理员密码更改", "https://zhibo-data-compass.zhibo-data-compass.workers.dev/account-security")
     st.caption("创建子账号并设置可访问页面及店铺、主播数据范围。")
     try:
         rows = supabase.table("sub_accounts").select("*").order("username").execute().data or []
@@ -18,7 +21,9 @@ def render_account_management(supabase, all_pages):
         username = st.text_input("用户名", key="account_new_username")
         password = st.text_input("密码", type="password", key="account_new_password")
         if st.button("创建子账号", type="primary", key="account_create"):
-            if not username.strip() or not password:
+            if username.strip().lower() == "admin":
+                st.warning("管理员为保留账号，请使用统一密码更改入口。")
+            elif not username.strip() or not password:
                 st.warning("请输入用户名和密码。")
             else:
                 try:
@@ -45,6 +50,8 @@ def render_account_management(supabase, all_pages):
 
     for row in rows:
         username = row["username"]
+        if username == "admin":
+            continue
         with st.expander(f"账号：{username}"):
             permissions = row.get("permissions") or {}
             current_pages = permissions.get("_all", permissions.get("", []))
@@ -69,7 +76,7 @@ def render_account_management(supabase, all_pages):
                 if st.button("💾 保存权限", type="primary", key=f"account_save_{username}"):
                     try:
                         supabase.table("sub_accounts").update({
-                            "permissions": {"_all": selected_pages},
+                            "permissions": {**permissions, "_all": selected_pages},
                             "filter_platform": selected_platform,
                             "filter_shop_names": selected_shops,
                         }).eq("username", username).execute()

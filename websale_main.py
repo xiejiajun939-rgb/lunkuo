@@ -178,6 +178,8 @@ def load_sub_accounts_from_db():
         return {}
 
 def save_sub_account_to_db(username, info):
+    if username == "admin":
+        return False, "管理员密码只能通过统一安全入口更改"
     if supabase is None:
         return False, "Supabase 未连接"
     try:
@@ -196,6 +198,8 @@ def save_sub_account_to_db(username, info):
         return False, str(e)
 
 def delete_sub_account_from_db(username):
+    if username == "admin":
+        return False, "不能删除统一管理员账号"
     if supabase is None:
         return False, "Supabase 未连接"
     try:
@@ -205,14 +209,12 @@ def delete_sub_account_from_db(username):
         return False, str(e)
 
 def get_all_users():
-    users = {
-        "admin": {"password": "1234567890", "role": "admin"},
-        "XDZ01": {"password": "94949468", "role": "user"},
-        "ZBZ01": {"password": "123456", "role": "user"}
-    }
-    if "sub_users" in st.session_state:
-        for username, info in st.session_state.sub_users.items():
-            users[username] = info
+    # Account credentials come from the shared database, never built-in defaults.
+    users = load_sub_accounts_from_db()
+    row = supabase.table("sub_accounts").select("username,password").eq("username", "admin").single().execute().data
+    if not row:
+        raise RuntimeError("统一管理员账号暂不可用，未回退旧密码")
+    users["admin"] = {"password": row["password"], "role": "admin"}
     return users
 
 
@@ -265,6 +267,8 @@ def restore_login_from_cookie():
     st.session_state.authenticated = True
     st.session_state.username = username
     st.session_state.role = user["role"]
+    if username == "admin":
+        st.session_state["_admin_credential_hash"] = user["password"]
     st.session_state.table_suffix = "_all"
     if not st.session_state.get("_audit_login_recorded"):
         record_access_event(
@@ -308,6 +312,8 @@ def login():
                 st.session_state.authenticated = True
                 st.session_state.username = username
                 st.session_state.role = users[username]["role"]
+                if username == "admin":
+                    st.session_state["_admin_credential_hash"] = users[username]["password"]
                 # 系统现在只有一个统一数据源
                 st.session_state.table_suffix = "_all"
                 record_access_event(
@@ -347,6 +353,10 @@ if st.session_state.get("_skip_cookie_restore"):
         st.session_state.pop("_skip_cookie_restore", None)
 elif not st.session_state.authenticated:
     restore_login_from_cookie()
+if st.session_state.authenticated and st.session_state.get("username") == "admin":
+    current_admin = get_all_users()["admin"]["password"]
+    if st.session_state.get("_admin_credential_hash") != current_admin:
+        clear_login_state()
 if not st.session_state.authenticated:
     login()
     st.stop()
