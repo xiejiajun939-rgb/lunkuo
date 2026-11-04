@@ -10,6 +10,7 @@ from core.db import init_supabase, load_dimension_mapping
 from core.utils import clear_cache_on_page_change
 from core.app_config import load_carousel_config, save_carousel_config, upload_carousel_image
 from core.settings_panels import render_account_management, render_mapping_management
+from core.passwords import preserve_or_hash_password
 from core.theme import page_header
 from core.promotion import parse_daily_promotion_file, save_daily_promotion_rows
 from core.live_analytics import (
@@ -531,7 +532,7 @@ def save_sub_account_to_db(username, info):
     try:
         data = {
             "username": username,
-            "password": info["password"],
+            "password": preserve_or_hash_password(info["password"]),
             "role": info["role"],
             "default_suffix": "_all",  # 兼容数据库现有字段
             "permissions": info.get("permissions", {}),

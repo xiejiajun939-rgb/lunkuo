@@ -31,6 +31,7 @@ from core.ai import get_siliconflow_client, get_ai_summary
 from core.theme import apply_global_theme
 from core.price_adjustments import infer_platform, save_adjustments, apply_order_adjustments
 from core.access_audit import record_access_event, record_page_visit
+from core.auth_tokens import signing_key, signature, create_token, read_token
 
 # 防抖
 if "last_rerun" not in st.session_state:
@@ -219,30 +220,20 @@ def get_all_users():
 
 
 def _auth_token_signature(username, expires_at, password):
-    key = hashlib.sha256(f"lunkuo-auth-v1|{username}|{password}".encode("utf-8")).digest()
-    message = f"{username}|{expires_at}".encode("utf-8")
-    return hmac.new(key, message, hashlib.sha256).hexdigest()
+    return signature(username, expires_at, password, signing_key(st.secrets.get("AUTH_COOKIE_SECRET")))
 
 
 def create_auth_token(username, password):
-    expires_at = int(time.time()) + AUTH_COOKIE_DAYS * 24 * 60 * 60
-    payload = {
-        "u": username,
-        "exp": expires_at,
-        "sig": _auth_token_signature(username, expires_at, password),
-    }
-    encoded = base64.urlsafe_b64encode(
-        json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-    ).decode("ascii")
-    return encoded.rstrip("=")
+    return create_token(username, password, signing_key(st.secrets.get("AUTH_COOKIE_SECRET")), AUTH_COOKIE_DAYS * 86400)
 
 
 def verify_auth_token(token):
     if not token:
         return None
     try:
-        padded = token + "=" * (-len(token) % 4)
-        payload = json.loads(base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8"))
+        payload = read_token(token, AUTH_COOKIE_DAYS * 86400)
+        if payload is None:
+            return None
         username = str(payload["u"])
         expires_at = int(payload["exp"])
         if expires_at <= int(time.time()):
@@ -291,6 +282,7 @@ def clear_login_state():
         st.session_state.pop(key, None)
 
 def login():
+    st.markdown('<span data-auth-security="2" aria-hidden="true"></span>', unsafe_allow_html=True)
     st.markdown("""
     <style>
     section[data-testid="stSidebar"]{display:none!important}
