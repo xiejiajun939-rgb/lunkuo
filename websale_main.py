@@ -20,14 +20,10 @@ import secrets
 import numpy as np
 import extra_streamlit_components as stx
 from supabase import create_client
-import plotly.express as px
-import plotly.graph_objects as go
-from openai import OpenAI
 
 # ========== 导入公共模块 ==========
 from core.db import init_supabase, get_table_name, load_product_sales, load_product_master, load_dimension_mapping, save_org_targets
 from core.utils import extract_anchor, parse_product_code, date_quick_buttons, apply_data_permission
-from core.ai import get_siliconflow_client, get_ai_summary
 from core.theme import apply_global_theme
 from core.price_adjustments import infer_platform, save_adjustments, apply_order_adjustments
 from core.access_audit import record_access_event, record_page_visit
@@ -219,6 +215,17 @@ def get_all_users():
     return users
 
 
+def get_account(username):
+    """Read only the current account; never cache credential revocation checks."""
+    response = supabase.table("sub_accounts").select("username,password,role,permissions,filter_platform,filter_shop_names").eq("username", username).maybe_single().execute()
+    row = getattr(response, "data", None)
+    if not row:
+        return None
+    if username == "admin":
+        row["role"] = "admin"
+    return row
+
+
 def _auth_token_signature(username, expires_at, password):
     return signature(username, expires_at, password, signing_key(st.secrets.get("AUTH_COOKIE_SECRET")))
 
@@ -238,8 +245,7 @@ def verify_auth_token(token):
         expires_at = int(payload["exp"])
         if expires_at <= int(time.time()):
             return None
-        users = get_all_users()
-        user = users.get(username)
+        user = get_account(username)
         if not user:
             return None
         expected = _auth_token_signature(username, expires_at, user["password"])
@@ -258,6 +264,7 @@ def restore_login_from_cookie():
     st.session_state.authenticated = True
     st.session_state.username = username
     st.session_state.role = user["role"]
+    st.session_state.sub_users = {username: user}
     if username == "admin":
         st.session_state["_admin_credential_hash"] = user["password"]
     st.session_state.table_suffix = "_all"
@@ -282,7 +289,7 @@ def clear_login_state():
         st.session_state.pop(key, None)
 
 def login():
-    st.markdown('<span data-auth-security="2" aria-hidden="true"></span>', unsafe_allow_html=True)
+    st.markdown('<span data-auth-security="2" data-admin-loading="lazy-v1" aria-hidden="true"></span>', unsafe_allow_html=True)
     st.markdown("""
     <style>
     section[data-testid="stSidebar"]{display:none!important}
@@ -299,13 +306,15 @@ def login():
         keep_login = st.checkbox("7天内保持登录", value=True)
         submitted = st.form_submit_button("登录工作台", type="primary")
         if submitted:
-            users = get_all_users()
-            if username in users and verify_password(password, users[username]["password"]):
+            username = username.strip()
+            user = get_account(username)
+            if user and verify_password(password, user["password"]):
                 st.session_state.authenticated = True
                 st.session_state.username = username
-                st.session_state.role = users[username]["role"]
+                st.session_state.role = user["role"]
+                st.session_state.sub_users = {username: user}
                 if username == "admin":
-                    st.session_state["_admin_credential_hash"] = users[username]["password"]
+                    st.session_state["_admin_credential_hash"] = user["password"]
                 # 系统现在只有一个统一数据源
                 st.session_state.table_suffix = "_all"
                 record_access_event(
@@ -317,7 +326,7 @@ def login():
                 if keep_login:
                     cookie_manager.set(
                         AUTH_COOKIE_NAME,
-                        create_auth_token(username, users[username]["password"]),
+                        create_auth_token(username, user["password"]),
                         key="auth_cookie_set",
                         path="/",
                         expires_at=datetime.now() + timedelta(days=AUTH_COOKIE_DAYS),
@@ -326,7 +335,6 @@ def login():
                     )
                 elif cookie_manager.get(AUTH_COOKIE_NAME):
                     cookie_manager.delete(AUTH_COOKIE_NAME, key="auth_cookie_forget")
-                st.cache_data.clear()
                 st.rerun()
             else:
                 record_access_event(
@@ -337,7 +345,7 @@ def login():
 
 # ========== 初始化 session_state ==========
 if "sub_users" not in st.session_state:
-    st.session_state.sub_users = load_sub_accounts_from_db()
+    st.session_state.sub_users = {}
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
 if st.session_state.get("_skip_cookie_restore"):
@@ -346,8 +354,8 @@ if st.session_state.get("_skip_cookie_restore"):
 elif not st.session_state.authenticated:
     restore_login_from_cookie()
 if st.session_state.authenticated and st.session_state.get("username") == "admin":
-    current_admin = get_all_users()["admin"]["password"]
-    if st.session_state.get("_admin_credential_hash") != current_admin:
+    current_admin = get_account("admin")
+    if not current_admin or st.session_state.get("_admin_credential_hash") != current_admin["password"]:
         clear_login_state()
 if not st.session_state.authenticated:
     login()
@@ -779,8 +787,7 @@ def mark_data_changed():
     st.session_state._cache_version = st.session_state._data_version
 
 # ========== 页面初始化 ==========
-if st.session_state.target_dict == {}:
-    st.session_state.target_dict = load_targets("_all")
+# Targets are loaded only by explicit target-management operations, not at entry.
 
 # ========== 构建导航页面（根据权限动态显示） ==========
 from streamlit import navigation, Page

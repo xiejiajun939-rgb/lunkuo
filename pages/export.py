@@ -14,6 +14,7 @@ from core.db import (
 )
 from core.product_tags import normalize_product_tags, product_tags_text
 from core.utils import clear_cache_on_page_change
+from core.admin_downloads import excel_bytes
 from core.theme import page_header
 from core.inventory import attach_inventory_summary
 from core.interactive_inventory_grid import render_inventory_grid
@@ -180,12 +181,19 @@ def _refresh_sales_style_audit():
 
 
 page_header("商品信息管理", "维护商品档案、自定义标签与批量导入导出", "PRODUCT MASTER DATA", "管理员")
+st.caption("各页签按需加载；切换页签前，请先保存当前修改。")
 tab_manage, tab_upload, tab_tags, tab_export = st.tabs([
     "🔎 查询与维护", "📤 批量上传", "🏷️ 商品标签", "📥 数据导出"
-])
+], key="admin_products_section", on_change="rerun")
 
-with st.spinner("正在加载商品库..."):
-    master_df = load_product_master()
+needs_master = (tab_manage.open or tab_tags.open or tab_export.open
+                or isinstance(st.session_state.get("product_master_sold_styles"), pd.DataFrame))
+if needs_master:
+    with st.spinner("正在加载商品库..."):
+        master_df = load_product_master()
+else:
+    # Uploads upsert only supplied fields; a full catalogue is not needed.
+    master_df = pd.DataFrame(columns=EDIT_COLUMNS)
 for col in EDIT_COLUMNS:
     if col not in master_df.columns:
         master_df[col] = [] if col == "tags" else None
@@ -205,7 +213,8 @@ if audit_loaded:
 else:
     sold_styles_df = pd.DataFrame(columns=["style_code"])
     catalog_df = master_df.copy()
-catalog_df = attach_inventory_summary(catalog_df, "style_code")
+if tab_manage.open:
+    catalog_df = attach_inventory_summary(catalog_df, "style_code")
 catalog_df["tags"] = catalog_df["tags"].fillna("")
 catalog_df["launch_date"] = pd.to_datetime(catalog_df["launch_date"], errors="coerce")
 style_text = catalog_df["style_code"].fillna("").astype(str).str.strip().str.upper()
@@ -223,505 +232,500 @@ catalog_df["filter_year"] = (
     year_source.fillna("").astype(str).str.strip().replace("", pd.NA).fillna(parsed_year)
 )
 
-with tab_manage:
-    audit_action, audit_note = st.columns([1, 3])
-    with audit_action:
-        if st.button(
-            "🔄 重新核对销售货号" if audit_loaded else "🔍 核对销售未建档商品",
-            key="refresh_product_sales_audit",
-            width="stretch",
-        ):
-            _refresh_sales_style_audit()
-            st.rerun()
-    with audit_note:
-        if audit_loaded:
-            st.caption(f"本次会话已核对 {len(sold_styles_df):,} 个销售货号；页面操作不会重复扫描。")
-        else:
-            st.caption("默认只加载商品库，不扫描历史销售。需要检查未建档商品时再点击左侧按钮。")
-
-    total_count = len(catalog_df)
-    missing_record_count = int(catalog_df["id"].isna().sum()) if total_count and audit_loaded else 0
-    missing_image_count = int(_is_missing(catalog_df["image_url"]).sum()) if total_count else 0
-    missing_category_count = int(_is_missing(catalog_df["category"]).sum()) if total_count else 0
-    current_year_launches = int(catalog_df["launch_date"].dt.year.eq(date.today().year).sum())
-    c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("商品库档案", f"{len(master_df):,}")
-    c2.metric("尚未建立档案", f"{missing_record_count:,}" if audit_loaded else "未核对")
-    c3.metric("缺少图片", f"{missing_image_count:,}")
-    c4.metric("缺少品类", f"{missing_category_count:,}")
-    c5.metric(f"{date.today().year}年上新", f"{current_year_launches:,}")
-
-    with st.container(border=True):
-        col_search, col_year, col_brand, col_category, col_tags, col_missing = st.columns(
-            [1.3, 0.8, 0.8, 1, 1, 1.3]
-        )
-        with col_search:
-            keyword = st.text_input("搜索货号", placeholder="支持部分货号", key="master_keyword")
-        with col_year:
-            years = sorted(v for v in catalog_df["filter_year"].dropna().astype(str).unique() if v)
-            selected_years = st.multiselect("筛选年份", years, key="master_years")
-        with col_brand:
-            brands = sorted(v for v in catalog_df["filter_brand"].dropna().astype(str).unique() if v)
-            selected_brands = st.multiselect("筛选品牌", brands, key="master_brands")
-        with col_category:
-            categories = sorted(v for v in catalog_df["category"].dropna().astype(str).str.strip().unique() if v)
-            selected_categories = st.multiselect("筛选品类", categories, key="master_categories")
-        with col_tags:
-            all_tags = sorted({
-                tag for value in catalog_df["tags"]
-                for tag in normalize_product_tags(value)
-            })
-            selected_tags = st.multiselect("筛选标签", all_tags, key="master_tags")
-        with col_missing:
-            missing_filter_options = ["缺少图片", "缺少品类", "任意资料缺失"]
-            if audit_loaded:
-                missing_filter_options.insert(0, "尚未建立商品档案")
-            missing_filters = st.multiselect(
-                "缺失资料筛选", missing_filter_options,
-                key="master_missing_filters",
-            )
-        launch_filter_col1, launch_filter_col2, launch_filter_col3 = st.columns([1, 1, 2])
-        with launch_filter_col1:
-            current_year_only = st.checkbox(
-                f"仅显示 {date.today().year} 年上新的商品",
-                value=False,
-                key="master_current_year_launch_only",
-            )
-        with launch_filter_col2:
-            use_launch_date_filter = st.checkbox(
-                "按上新时间范围筛选",
-                value=False,
-                key="master_use_launch_date_filter",
-            )
-        with launch_filter_col3:
-            launch_dates = catalog_df["launch_date"].dropna()
-            default_launch_start = (
-                launch_dates.min().date() if not launch_dates.empty else date.today()
-            )
-            default_launch_end = (
-                launch_dates.max().date() if not launch_dates.empty else date.today()
-            )
-            launch_date_range = st.date_input(
-                "筛选上新时间",
-                value=(default_launch_start, default_launch_end),
-                disabled=not use_launch_date_filter,
-                key="master_launch_date_range",
-            )
-
-    filtered = catalog_df.copy()
-    if keyword.strip():
-        filtered = filtered[filtered["style_code"].astype("string").str.contains(
-            keyword.strip(), case=False, na=False, regex=False
-        )]
-    if selected_years:
-        filtered = filtered[filtered["filter_year"].astype(str).isin(selected_years)]
-    if selected_brands:
-        filtered = filtered[filtered["filter_brand"].astype(str).isin(selected_brands)]
-    if selected_categories:
-        filtered = filtered[filtered["category"].astype(str).isin(selected_categories)]
-    if selected_tags:
-        filtered = filtered[filtered["tags"].map(
-            lambda value: all(tag in normalize_product_tags(value) for tag in selected_tags)
-        )]
-    if current_year_only:
-        filtered = filtered[filtered["launch_date"].dt.year.eq(date.today().year)]
-    if use_launch_date_filter and isinstance(launch_date_range, (tuple, list)) and len(launch_date_range) == 2:
-        launch_start, launch_end = launch_date_range
-        filtered = filtered[
-            filtered["launch_date"].between(
-                pd.Timestamp(launch_start), pd.Timestamp(launch_end), inclusive="both"
-            )
-        ]
-    missing_image = _is_missing(filtered["image_url"])
-    missing_category = _is_missing(filtered["category"])
-    missing_record = filtered["id"].isna()
-    if "任意资料缺失" in missing_filters:
-        filtered = filtered[missing_record | missing_image | missing_category]
-    else:
-        mask = pd.Series(True, index=filtered.index)
-        if "尚未建立商品档案" in missing_filters:
-            mask &= missing_record
-        if "缺少图片" in missing_filters:
-            mask &= missing_image
-        if "缺少品类" in missing_filters:
-            mask &= missing_category
-        filtered = filtered[mask]
-
-    st.caption(f"筛选结果：{len(filtered):,} 条")
-    page_col, size_col, _ = st.columns([1, 1, 3])
-    with size_col:
-        page_size = st.selectbox("每页数量", [50, 100, 200, 500], index=1, key="master_page_size")
-    page_count = max(1, math.ceil(len(filtered) / page_size))
-    if st.session_state.get("master_page_number", 1) > page_count:
-        st.session_state.master_page_number = 1
-    with page_col:
-        page_number = st.number_input("页码", 1, page_count, 1, key="master_page_number")
-    start = (int(page_number) - 1) * page_size
-    current_page = filtered.iloc[start:start + page_size].copy().reset_index(drop=True)
-    page_df = current_page[EDIT_COLUMNS].copy()
-    page_df.insert(0, "选择删除", False)
-
-    edited_df = st.data_editor(
-        page_df, width="stretch", hide_index=True, num_rows="dynamic",
-        column_config={
-            "选择删除": st.column_config.CheckboxColumn("删除", default=False),
-            "id": st.column_config.NumberColumn("ID", disabled=True),
-            "style_code": st.column_config.TextColumn("商品货号", required=True),
-            "launch_date": st.column_config.DateColumn("上新时间", format="YYYY-MM-DD"),
-            "image_url": st.column_config.LinkColumn("图片地址", display_text="查看图片"),
-            "category": st.column_config.TextColumn("品类"),
-            "tags": st.column_config.TextColumn("商品标签", help="多个标签用逗号分隔，例如：秋季新品，主推品"),
-        }, key="product_master_editor",
-    )
-
-    if not current_page.empty:
-        st.caption("当前页库存：点击总库存或总仓库存数字查看颜色 × 尺码明细。")
-        inventory_columns = [
-            column for column in ["style_code", "image_url", "总库存", "总仓库存"]
-            if column in current_page.columns
-        ]
-        render_inventory_grid(
-            current_page[inventory_columns],
-            f"master_inventory_grid_{page_number}_{page_size}",
-            pinned_columns=("style_code", "image_url"),
-        )
-
-    action_save, action_delete, confirm_col = st.columns([1, 1, 2])
-    with action_save:
-        if st.button("💾 保存本页修改", type="primary", width="stretch"):
-            try:
-                count = _upsert_records(edited_df[~edited_df["选择删除"]].to_dict("records"))
-                st.cache_data.clear()
-                st.success(f"已保存 {count} 条商品信息。")
+if tab_manage.open:
+    with tab_manage:
+        audit_action, audit_note = st.columns([1, 3])
+        with audit_action:
+            if st.button(
+                "🔄 重新核对销售货号" if audit_loaded else "🔍 核对销售未建档商品",
+                key="refresh_product_sales_audit",
+                width="stretch",
+            ):
+                _refresh_sales_style_audit()
                 st.rerun()
-            except Exception as exc:
-                st.error(f"保存失败：{exc}")
-    with confirm_col:
-        confirm_delete = st.checkbox("我确认删除勾选的商品（删除后不可恢复）")
-    with action_delete:
-        if st.button("🗑️ 删除勾选商品", width="stretch"):
-            delete_ids = [int(v) for v in edited_df.loc[edited_df["选择删除"], "id"].dropna()]
-            if not delete_ids:
-                st.warning("请先勾选需要删除的商品。")
-            elif not confirm_delete:
-                st.warning("请先勾选删除确认。")
+        with audit_note:
+            if audit_loaded:
+                st.caption(f"本次会话已核对 {len(sold_styles_df):,} 个销售货号；页面操作不会重复扫描。")
             else:
+                st.caption("默认只加载商品库，不扫描历史销售。需要检查未建档商品时再点击左侧按钮。")
+
+        total_count = len(catalog_df)
+        missing_record_count = int(catalog_df["id"].isna().sum()) if total_count and audit_loaded else 0
+        missing_image_count = int(_is_missing(catalog_df["image_url"]).sum()) if total_count else 0
+        missing_category_count = int(_is_missing(catalog_df["category"]).sum()) if total_count else 0
+        current_year_launches = int(catalog_df["launch_date"].dt.year.eq(date.today().year).sum())
+        c1, c2, c3, c4, c5 = st.columns(5)
+        c1.metric("商品库档案", f"{len(master_df):,}")
+        c2.metric("尚未建立档案", f"{missing_record_count:,}" if audit_loaded else "未核对")
+        c3.metric("缺少图片", f"{missing_image_count:,}")
+        c4.metric("缺少品类", f"{missing_category_count:,}")
+        c5.metric(f"{date.today().year}年上新", f"{current_year_launches:,}")
+
+        with st.container(border=True):
+            col_search, col_year, col_brand, col_category, col_tags, col_missing = st.columns(
+                [1.3, 0.8, 0.8, 1, 1, 1.3]
+            )
+            with col_search:
+                keyword = st.text_input("搜索货号", placeholder="支持部分货号", key="master_keyword")
+            with col_year:
+                years = sorted(v for v in catalog_df["filter_year"].dropna().astype(str).unique() if v)
+                selected_years = st.multiselect("筛选年份", years, key="master_years")
+            with col_brand:
+                brands = sorted(v for v in catalog_df["filter_brand"].dropna().astype(str).unique() if v)
+                selected_brands = st.multiselect("筛选品牌", brands, key="master_brands")
+            with col_category:
+                categories = sorted(v for v in catalog_df["category"].dropna().astype(str).str.strip().unique() if v)
+                selected_categories = st.multiselect("筛选品类", categories, key="master_categories")
+            with col_tags:
+                all_tags = sorted({
+                    tag for value in catalog_df["tags"]
+                    for tag in normalize_product_tags(value)
+                })
+                selected_tags = st.multiselect("筛选标签", all_tags, key="master_tags")
+            with col_missing:
+                missing_filter_options = ["缺少图片", "缺少品类", "任意资料缺失"]
+                if audit_loaded:
+                    missing_filter_options.insert(0, "尚未建立商品档案")
+                missing_filters = st.multiselect(
+                    "缺失资料筛选", missing_filter_options,
+                    key="master_missing_filters",
+                )
+            launch_filter_col1, launch_filter_col2, launch_filter_col3 = st.columns([1, 1, 2])
+            with launch_filter_col1:
+                current_year_only = st.checkbox(
+                    f"仅显示 {date.today().year} 年上新的商品",
+                    value=False,
+                    key="master_current_year_launch_only",
+                )
+            with launch_filter_col2:
+                use_launch_date_filter = st.checkbox(
+                    "按上新时间范围筛选",
+                    value=False,
+                    key="master_use_launch_date_filter",
+                )
+            with launch_filter_col3:
+                launch_dates = catalog_df["launch_date"].dropna()
+                default_launch_start = (
+                    launch_dates.min().date() if not launch_dates.empty else date.today()
+                )
+                default_launch_end = (
+                    launch_dates.max().date() if not launch_dates.empty else date.today()
+                )
+                launch_date_range = st.date_input(
+                    "筛选上新时间",
+                    value=(default_launch_start, default_launch_end),
+                    disabled=not use_launch_date_filter,
+                    key="master_launch_date_range",
+                )
+
+        filtered = catalog_df.copy()
+        if keyword.strip():
+            filtered = filtered[filtered["style_code"].astype("string").str.contains(
+                keyword.strip(), case=False, na=False, regex=False
+            )]
+        if selected_years:
+            filtered = filtered[filtered["filter_year"].astype(str).isin(selected_years)]
+        if selected_brands:
+            filtered = filtered[filtered["filter_brand"].astype(str).isin(selected_brands)]
+        if selected_categories:
+            filtered = filtered[filtered["category"].astype(str).isin(selected_categories)]
+        if selected_tags:
+            filtered = filtered[filtered["tags"].map(
+                lambda value: all(tag in normalize_product_tags(value) for tag in selected_tags)
+            )]
+        if current_year_only:
+            filtered = filtered[filtered["launch_date"].dt.year.eq(date.today().year)]
+        if use_launch_date_filter and isinstance(launch_date_range, (tuple, list)) and len(launch_date_range) == 2:
+            launch_start, launch_end = launch_date_range
+            filtered = filtered[
+                filtered["launch_date"].between(
+                    pd.Timestamp(launch_start), pd.Timestamp(launch_end), inclusive="both"
+                )
+            ]
+        missing_image = _is_missing(filtered["image_url"])
+        missing_category = _is_missing(filtered["category"])
+        missing_record = filtered["id"].isna()
+        if "任意资料缺失" in missing_filters:
+            filtered = filtered[missing_record | missing_image | missing_category]
+        else:
+            mask = pd.Series(True, index=filtered.index)
+            if "尚未建立商品档案" in missing_filters:
+                mask &= missing_record
+            if "缺少图片" in missing_filters:
+                mask &= missing_image
+            if "缺少品类" in missing_filters:
+                mask &= missing_category
+            filtered = filtered[mask]
+
+        st.caption(f"筛选结果：{len(filtered):,} 条")
+        page_col, size_col, _ = st.columns([1, 1, 3])
+        with size_col:
+            page_size = st.selectbox("每页数量", [50, 100, 200, 500], index=1, key="master_page_size")
+        page_count = max(1, math.ceil(len(filtered) / page_size))
+        if st.session_state.get("master_page_number", 1) > page_count:
+            st.session_state.master_page_number = 1
+        with page_col:
+            page_number = st.number_input("页码", 1, page_count, 1, key="master_page_number")
+        start = (int(page_number) - 1) * page_size
+        current_page = filtered.iloc[start:start + page_size].copy().reset_index(drop=True)
+        page_df = current_page[EDIT_COLUMNS].copy()
+        page_df.insert(0, "选择删除", False)
+
+        edited_df = st.data_editor(
+            page_df, width="stretch", hide_index=True, num_rows="dynamic",
+            column_config={
+                "选择删除": st.column_config.CheckboxColumn("删除", default=False),
+                "id": st.column_config.NumberColumn("ID", disabled=True),
+                "style_code": st.column_config.TextColumn("商品货号", required=True),
+                "launch_date": st.column_config.DateColumn("上新时间", format="YYYY-MM-DD"),
+                "image_url": st.column_config.LinkColumn("图片地址", display_text="查看图片"),
+                "category": st.column_config.TextColumn("品类"),
+                "tags": st.column_config.TextColumn("商品标签", help="多个标签用逗号分隔，例如：秋季新品，主推品"),
+            }, key="product_master_editor",
+        )
+
+        if not current_page.empty:
+            st.caption("当前页库存：点击总库存或总仓库存数字查看颜色 × 尺码明细。")
+            inventory_columns = [
+                column for column in ["style_code", "image_url", "总库存", "总仓库存"]
+                if column in current_page.columns
+            ]
+            render_inventory_grid(
+                current_page[inventory_columns],
+                f"master_inventory_grid_{page_number}_{page_size}",
+                pinned_columns=("style_code", "image_url"),
+            )
+
+        action_save, action_delete, confirm_col = st.columns([1, 1, 2])
+        with action_save:
+            if st.button("💾 保存本页修改", type="primary", width="stretch"):
                 try:
-                    for offset in range(0, len(delete_ids), 200):
-                        supabase.table("product_master").delete().in_("id", delete_ids[offset:offset + 200]).execute()
+                    count = _upsert_records(edited_df[~edited_df["选择删除"]].to_dict("records"))
                     st.cache_data.clear()
-                    st.success(f"已删除 {len(delete_ids)} 条商品信息。")
+                    st.success(f"已保存 {count} 条商品信息。")
                     st.rerun()
                 except Exception as exc:
-                    st.error(f"删除失败：{exc}")
-
-with tab_upload:
-    st.markdown("### 批量上传商品信息")
-    st.caption("支持 Excel/CSV；同货号会更新，新货号会新增，并识别常用中英文列名。")
-    if audit_loaded:
-        unregistered_template = catalog_df[catalog_df["id"].isna()][["style_code"]].copy()
-    else:
-        unregistered_template = pd.DataFrame(columns=["style_code"])
-    unregistered_template["image_url"] = ""
-    unregistered_template["category"] = ""
-    unregistered_template["tags"] = ""
-    unregistered_template["launch_date"] = ""
-    unregistered_template = unregistered_template.rename(columns={
-        "style_code": "货号",
-        "image_url": "图片地址",
-        "category": "品类",
-        "tags": "商品标签",
-        "launch_date": "上新时间",
-    })
-    pending_buffer = io.BytesIO()
-    with pd.ExcelWriter(pending_buffer, engine="openpyxl") as writer:
-        unregistered_template.to_excel(writer, index=False, sheet_name="待维护商品")
-
-    template = pd.DataFrame(columns=["style_code", "launch_date", "image_url", "category", "tags"])
-    template_buffer = io.BytesIO()
-    with pd.ExcelWriter(template_buffer, engine="openpyxl") as writer:
-        template.to_excel(writer, index=False, sheet_name="商品信息")
-    download_pending, download_blank = st.columns(2)
-    with download_pending:
-        if audit_loaded:
-            st.download_button(
-                f"📋 下载待维护商品模板（{len(unregistered_template):,} 条）",
-                pending_buffer.getvalue(),
-                file_name=f"待维护商品_{date.today().strftime('%Y%m%d')}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                type="primary",
-                width="stretch",
-            )
-        elif st.button("🔍 先核对并生成待维护模板", key="audit_for_template", width="stretch"):
-            _refresh_sales_style_audit()
-            st.rerun()
-    with download_blank:
-        st.download_button(
-            "📄 下载空白上传模板", template_buffer.getvalue(), file_name="product_master_upload_template.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", width="stretch",
-        )
-    uploaded_file = st.file_uploader("选择商品信息文件", type=["xlsx", "xls", "csv"], key="master_upload")
-    if uploaded_file is not None:
-        try:
-            raw_upload = pd.read_csv(uploaded_file) if uploaded_file.name.lower().endswith(".csv") else pd.read_excel(uploaded_file)
-            normalized_upload = _normalize_upload(raw_upload)
-            st.info(f"识别到 {len(normalized_upload):,} 个有效货号。")
-            st.dataframe(normalized_upload.head(20), width="stretch", hide_index=True)
-            if st.button("📤 确认上传并更新商品库", type="primary"):
-                count = _upsert_records(
-                    normalized_upload.to_dict("records"),
-                    provided_fields=normalized_upload.attrs.get("provided_fields", set()),
-                )
-                st.cache_data.clear()
-                st.success(f"上传完成，共处理 {count} 条商品信息。")
-                st.rerun()
-        except Exception as exc:
-            st.error(f"文件处理失败：{exc}")
-
-with tab_tags:
-    st.markdown("### 🏷️ 自定义商品标签")
-    st.caption("标签名称可自由创建；一个商品可同时拥有多个标签，例如：秋季新品、主推品、渠道专属款。")
-    tag_flash = st.session_state.pop("product_tag_flash", None)
-    if tag_flash:
-        st.success(tag_flash)
-    product_tag_names = {
-        tag for value in master_df["tags"]
-        for tag in normalize_product_tags(value)
-    }
-    tag_period_df = load_product_tag_periods()
-    period_tag_names = set(
-        tag_period_df.get("tag_name", pd.Series(dtype=str)).dropna().astype(str).str.strip()
-    )
-    current_tags = sorted(product_tag_names | {tag for tag in period_tag_names if tag})
-    if current_tags:
-        st.write("当前标签：" + "　".join(f"`{tag}`" for tag in current_tags))
-        period_view = pd.DataFrame({"标签名称": current_tags})
-        if not tag_period_df.empty:
-            period_view = period_view.merge(
-                tag_period_df.rename(columns={
-                    "tag_name": "标签名称",
-                    "start_date": "开始日期",
-                    "end_date": "结束日期",
-                }),
-                on="标签名称",
-                how="left",
-            )
-        else:
-            period_view["开始日期"] = None
-            period_view["结束日期"] = None
-        today = date.today()
-        period_view["状态"] = period_view.apply(
-            lambda row: (
-                "长期有效（旧标签）"
-                if pd.isna(row["开始日期"]) or pd.isna(row["结束日期"])
-                else "未生效"
-                if today < row["开始日期"]
-                else "已失效"
-                if today > row["结束日期"]
-                else "生效中"
-            ),
-            axis=1,
-        )
-        st.dataframe(period_view, hide_index=True, width="stretch")
-
-        with st.container(border=True):
-            st.markdown("#### 直接修改标签商品")
-            st.caption("选择已有标签后，可直接勾选或取消商品。保存时只修改当前标签，不影响商品的其他标签。")
-            edit_tag = st.selectbox(
-                "选择已有标签",
-                current_tags,
-                index=None,
-                placeholder="请选择需要维护的标签",
-                key="edit_existing_product_tag",
-            )
-            if edit_tag:
-                edit_search_col, edit_scope_col = st.columns([2, 1])
-                with edit_search_col:
-                    edit_keyword = st.text_input(
-                        "搜索货号",
-                        placeholder="输入完整或部分货号",
-                        key="edit_existing_tag_keyword",
-                    ).strip().upper()
-                with edit_scope_col:
-                    edit_scope = st.radio(
-                        "显示范围", ["全部商品", "仅已关联"], horizontal=True,
-                        key="edit_existing_tag_scope",
-                    )
-
-                editable_products = master_df.copy()
-                editable_products["style_code"] = (
-                    editable_products["style_code"].fillna("").astype(str).str.strip().str.upper()
-                )
-                editable_products = editable_products[editable_products["style_code"] != ""].drop_duplicates(
-                    "style_code", keep="last"
-                )
-                editable_products["关联当前标签"] = editable_products["tags"].map(
-                    lambda value: edit_tag in normalize_product_tags(value)
-                )
-                linked_count = int(editable_products["关联当前标签"].sum())
-                if edit_keyword:
-                    editable_products = editable_products[
-                        editable_products["style_code"].str.contains(edit_keyword, regex=False)
-                    ]
-                if edit_scope == "仅已关联":
-                    editable_products = editable_products[editable_products["关联当前标签"]]
-
-                st.info(
-                    f"“{edit_tag}”当前关联 {linked_count:,} 个商品；本表显示 {len(editable_products):,} 个商品。"
-                )
-                editor_columns = [
-                    column for column in ["关联当前标签", "style_code", "image_url", "category", "launch_date", "tags"]
-                    if column in editable_products.columns
-                ]
-                original_links = editable_products.set_index("style_code")["关联当前标签"].to_dict()
-                edited_links = st.data_editor(
-                    editable_products[editor_columns],
-                    width="stretch",
-                    hide_index=True,
-                    disabled=[column for column in editor_columns if column != "关联当前标签"],
-                    column_config={
-                        "关联当前标签": st.column_config.CheckboxColumn("关联当前标签"),
-                        "style_code": st.column_config.TextColumn("货号"),
-                        "image_url": st.column_config.ImageColumn("图片"),
-                        "category": st.column_config.TextColumn("品类"),
-                        "launch_date": st.column_config.DateColumn("上新日期", format="YYYY-MM-DD"),
-                        "tags": st.column_config.TextColumn("现有全部标签"),
-                    },
-                    key=f"existing_tag_product_editor_{edit_tag}",
-                )
-                changed_links = {
-                    str(row["style_code"]).strip().upper(): bool(row["关联当前标签"])
-                    for row in edited_links.to_dict("records")
-                    if bool(row["关联当前标签"]) != bool(original_links.get(str(row["style_code"]).strip().upper()))
-                }
-                if changed_links:
-                    add_count = sum(changed_links.values())
-                    remove_count = len(changed_links) - add_count
-                    st.caption(f"待保存：新增关联 {add_count:,} 个，移除关联 {remove_count:,} 个。")
-                if st.button(
-                    "💾 保存当前标签的商品修改",
-                    type="primary",
-                    disabled=not changed_links,
-                    key="save_existing_tag_product_links",
-                ):
-                    try:
-                        count = _update_tag_product_links(edit_tag, changed_links, master_df)
-                        st.cache_data.clear()
-                        st.session_state.product_tag_flash = (
-                            f"已保存“{edit_tag}”的商品关联，共更新 {count:,} 个商品。"
-                        )
-                        st.rerun()
-                    except Exception as exc:
-                        st.error(f"保存标签商品失败：{exc}")
-
-        with st.container(border=True):
-            st.markdown("#### 删除现有标签")
-            delete_tag = st.selectbox(
-                "选择要删除的标签",
-                current_tags,
-                index=None,
-                placeholder="请选择标签",
-                key="delete_product_tag_name",
-            )
-            affected_count = int(master_df["tags"].map(
-                lambda value: delete_tag in normalize_product_tags(value) if delete_tag else False
-            ).sum())
-            if delete_tag:
-                st.warning(
-                    f"删除“{delete_tag}”后，将从 {affected_count:,} 个商品中同步移除该标签。"
-                )
-            confirm_tag_delete = st.checkbox(
-                "我确认从所有关联商品中删除这个标签",
-                key="confirm_product_tag_delete",
-            )
-            if st.button(
-                "🗑️ 删除标签",
-                disabled=not delete_tag,
-                key="delete_product_tag",
-            ):
-                if not confirm_tag_delete:
+                    st.error(f"保存失败：{exc}")
+        with confirm_col:
+            confirm_delete = st.checkbox("我确认删除勾选的商品（删除后不可恢复）")
+        with action_delete:
+            if st.button("🗑️ 删除勾选商品", width="stretch"):
+                delete_ids = [int(v) for v in edited_df.loc[edited_df["选择删除"], "id"].dropna()]
+                if not delete_ids:
+                    st.warning("请先勾选需要删除的商品。")
+                elif not confirm_delete:
                     st.warning("请先勾选删除确认。")
                 else:
                     try:
-                        count = _delete_tag_from_products(delete_tag, master_df)
+                        for offset in range(0, len(delete_ids), 200):
+                            supabase.table("product_master").delete().in_("id", delete_ids[offset:offset + 200]).execute()
                         st.cache_data.clear()
-                        st.session_state.product_tag_flash = (
-                            f"已删除标签“{delete_tag}”，并从 {count:,} 个商品中同步移除。"
-                        )
+                        st.success(f"已删除 {len(delete_ids)} 条商品信息。")
                         st.rerun()
                     except Exception as exc:
-                        st.error(f"删除标签失败：{exc}")
+                        st.error(f"删除失败：{exc}")
 
-    tag_name = st.text_input("标签名称", placeholder="例如：秋季新品", key="custom_tag_name").strip()
-    operation = st.radio("批量操作", ["添加标签", "移除标签"], horizontal=True, key="custom_tag_operation")
-    tag_start = tag_end = None
-    if operation == "添加标签":
-        period_start_col, period_end_col = st.columns(2)
-        with period_start_col:
-            tag_start = st.date_input(
-                "活动开始日期", value=date.today(), key="custom_tag_start_date"
-            )
-        with period_end_col:
-            tag_end = st.date_input(
-                "活动结束日期",
-                value=date.today() + timedelta(days=30),
-                min_value=tag_start,
-                key="custom_tag_end_date",
-            )
-    style_text = st.text_area(
-        "商品货号",
-        placeholder="每行一个货号，也支持逗号分隔",
-        height=180,
-        key="custom_tag_styles",
-    )
-    if st.button("应用标签", type="primary", key="apply_custom_tag"):
-        style_codes = sorted({
-            code.strip().upper()
-            for code in style_text.replace("，", ",").replace("\n", ",").split(",")
-            if code.strip()
-        })
-        if not tag_name or not style_codes:
-            st.warning("请输入标签名称和至少一个商品货号。")
-        elif operation == "添加标签" and tag_start > tag_end:
-            st.warning("活动结束日期不能早于开始日期。")
+if tab_upload.open:
+    with tab_upload:
+        st.markdown("### 批量上传商品信息")
+        st.caption("支持 Excel/CSV；同货号会更新，新货号会新增，并识别常用中英文列名。")
+        if audit_loaded:
+            unregistered_template = catalog_df[catalog_df["id"].isna()][["style_code"]].copy()
         else:
-            try:
-                if operation == "添加标签":
-                    supabase.table("product_tag_periods").upsert({
-                        "tag_name": tag_name,
-                        "start_date": tag_start.isoformat(),
-                        "end_date": tag_end.isoformat(),
-                        "updated_at": datetime.now(timezone.utc).isoformat(),
-                    }, on_conflict="tag_name").execute()
-                lookup = master_df.set_index("style_code")["tags"].to_dict()
-                records = []
-                for style_code in style_codes:
-                    tags = normalize_product_tags(lookup.get(style_code))
-                    if operation == "添加标签" and tag_name not in tags:
-                        tags.append(tag_name)
-                    elif operation == "移除标签":
-                        tags = [tag for tag in tags if tag != tag_name]
-                    records.append({"style_code": style_code, "tags": tags})
-                for offset in range(0, len(records), 500):
-                    supabase.table("product_master").upsert(
-                        records[offset:offset + 500], on_conflict="style_code"
-                    ).execute()
-                st.cache_data.clear()
-                st.session_state.product_tag_flash = (
-                    f"操作成功：已为 {len(records)} 个商品{operation}“{tag_name}”。"
-                )
-                st.rerun()
-            except Exception as exc:
-                st.error(f"标签更新失败：{exc}")
+            unregistered_template = pd.DataFrame(columns=["style_code"])
+        unregistered_template["image_url"] = ""
+        unregistered_template["category"] = ""
+        unregistered_template["tags"] = ""
+        unregistered_template["launch_date"] = ""
+        unregistered_template = unregistered_template.rename(columns={
+            "style_code": "货号",
+            "image_url": "图片地址",
+            "category": "品类",
+            "tags": "商品标签",
+            "launch_date": "上新时间",
+        })
 
-with tab_export:
-    st.markdown("### 导出商品库")
-    st.write(f"当前商品库共有 **{len(master_df):,}** 条记录。")
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        master_df.to_excel(writer, index=False, sheet_name="商品库")
-    st.download_button(
-        "📥 导出全部商品库数据 (Excel)", output.getvalue(),
-        file_name=f"product_master_{date.today().strftime('%Y%m%d')}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", type="primary",
-    )
+        template = pd.DataFrame(columns=["style_code", "launch_date", "image_url", "category", "tags"])
+        download_pending, download_blank = st.columns(2)
+        with download_pending:
+            if audit_loaded:
+                st.download_button(
+                    f"📋 下载待维护商品模板（{len(unregistered_template):,} 条）",
+                    lambda frame=unregistered_template: excel_bytes(frame, "待维护商品"),
+                    file_name=f"待维护商品_{date.today().strftime('%Y%m%d')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    type="primary",
+                    width="stretch",
+                )
+            elif st.button("🔍 先核对并生成待维护模板", key="audit_for_template", width="stretch"):
+                _refresh_sales_style_audit()
+                st.rerun()
+        with download_blank:
+            st.download_button(
+                "📄 下载空白上传模板", lambda frame=template: excel_bytes(frame, "商品信息"), file_name="product_master_upload_template.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", width="stretch",
+            )
+        uploaded_file = st.file_uploader("选择商品信息文件", type=["xlsx", "xls", "csv"], key="master_upload")
+        if uploaded_file is not None:
+            try:
+                raw_upload = pd.read_csv(uploaded_file) if uploaded_file.name.lower().endswith(".csv") else pd.read_excel(uploaded_file)
+                normalized_upload = _normalize_upload(raw_upload)
+                st.info(f"识别到 {len(normalized_upload):,} 个有效货号。")
+                st.dataframe(normalized_upload.head(20), width="stretch", hide_index=True)
+                if st.button("📤 确认上传并更新商品库", type="primary"):
+                    count = _upsert_records(
+                        normalized_upload.to_dict("records"),
+                        provided_fields=normalized_upload.attrs.get("provided_fields", set()),
+                    )
+                    st.cache_data.clear()
+                    st.success(f"上传完成，共处理 {count} 条商品信息。")
+                    st.rerun()
+            except Exception as exc:
+                st.error(f"文件处理失败：{exc}")
+
+if tab_tags.open:
+    with tab_tags:
+        st.markdown("### 🏷️ 自定义商品标签")
+        st.caption("标签名称可自由创建；一个商品可同时拥有多个标签，例如：秋季新品、主推品、渠道专属款。")
+        tag_flash = st.session_state.pop("product_tag_flash", None)
+        if tag_flash:
+            st.success(tag_flash)
+        product_tag_names = {
+            tag for value in master_df["tags"]
+            for tag in normalize_product_tags(value)
+        }
+        tag_period_df = load_product_tag_periods()
+        period_tag_names = set(
+            tag_period_df.get("tag_name", pd.Series(dtype=str)).dropna().astype(str).str.strip()
+        )
+        current_tags = sorted(product_tag_names | {tag for tag in period_tag_names if tag})
+        if current_tags:
+            st.write("当前标签：" + "　".join(f"`{tag}`" for tag in current_tags))
+            period_view = pd.DataFrame({"标签名称": current_tags})
+            if not tag_period_df.empty:
+                period_view = period_view.merge(
+                    tag_period_df.rename(columns={
+                        "tag_name": "标签名称",
+                        "start_date": "开始日期",
+                        "end_date": "结束日期",
+                    }),
+                    on="标签名称",
+                    how="left",
+                )
+            else:
+                period_view["开始日期"] = None
+                period_view["结束日期"] = None
+            today = date.today()
+            period_view["状态"] = period_view.apply(
+                lambda row: (
+                    "长期有效（旧标签）"
+                    if pd.isna(row["开始日期"]) or pd.isna(row["结束日期"])
+                    else "未生效"
+                    if today < row["开始日期"]
+                    else "已失效"
+                    if today > row["结束日期"]
+                    else "生效中"
+                ),
+                axis=1,
+            )
+            st.dataframe(period_view, hide_index=True, width="stretch")
+
+            with st.container(border=True):
+                st.markdown("#### 直接修改标签商品")
+                st.caption("选择已有标签后，可直接勾选或取消商品。保存时只修改当前标签，不影响商品的其他标签。")
+                edit_tag = st.selectbox(
+                    "选择已有标签",
+                    current_tags,
+                    index=None,
+                    placeholder="请选择需要维护的标签",
+                    key="edit_existing_product_tag",
+                )
+                if edit_tag:
+                    edit_search_col, edit_scope_col = st.columns([2, 1])
+                    with edit_search_col:
+                        edit_keyword = st.text_input(
+                            "搜索货号",
+                            placeholder="输入完整或部分货号",
+                            key="edit_existing_tag_keyword",
+                        ).strip().upper()
+                    with edit_scope_col:
+                        edit_scope = st.radio(
+                            "显示范围", ["全部商品", "仅已关联"], horizontal=True,
+                            key="edit_existing_tag_scope",
+                        )
+
+                    editable_products = master_df.copy()
+                    editable_products["style_code"] = (
+                        editable_products["style_code"].fillna("").astype(str).str.strip().str.upper()
+                    )
+                    editable_products = editable_products[editable_products["style_code"] != ""].drop_duplicates(
+                        "style_code", keep="last"
+                    )
+                    editable_products["关联当前标签"] = editable_products["tags"].map(
+                        lambda value: edit_tag in normalize_product_tags(value)
+                    )
+                    linked_count = int(editable_products["关联当前标签"].sum())
+                    if edit_keyword:
+                        editable_products = editable_products[
+                            editable_products["style_code"].str.contains(edit_keyword, regex=False)
+                        ]
+                    if edit_scope == "仅已关联":
+                        editable_products = editable_products[editable_products["关联当前标签"]]
+
+                    st.info(
+                        f"“{edit_tag}”当前关联 {linked_count:,} 个商品；本表显示 {len(editable_products):,} 个商品。"
+                    )
+                    editor_columns = [
+                        column for column in ["关联当前标签", "style_code", "image_url", "category", "launch_date", "tags"]
+                        if column in editable_products.columns
+                    ]
+                    original_links = editable_products.set_index("style_code")["关联当前标签"].to_dict()
+                    edited_links = st.data_editor(
+                        editable_products[editor_columns],
+                        width="stretch",
+                        hide_index=True,
+                        disabled=[column for column in editor_columns if column != "关联当前标签"],
+                        column_config={
+                            "关联当前标签": st.column_config.CheckboxColumn("关联当前标签"),
+                            "style_code": st.column_config.TextColumn("货号"),
+                            "image_url": st.column_config.ImageColumn("图片"),
+                            "category": st.column_config.TextColumn("品类"),
+                            "launch_date": st.column_config.DateColumn("上新日期", format="YYYY-MM-DD"),
+                            "tags": st.column_config.TextColumn("现有全部标签"),
+                        },
+                        key=f"existing_tag_product_editor_{edit_tag}",
+                    )
+                    changed_links = {
+                        str(row["style_code"]).strip().upper(): bool(row["关联当前标签"])
+                        for row in edited_links.to_dict("records")
+                        if bool(row["关联当前标签"]) != bool(original_links.get(str(row["style_code"]).strip().upper()))
+                    }
+                    if changed_links:
+                        add_count = sum(changed_links.values())
+                        remove_count = len(changed_links) - add_count
+                        st.caption(f"待保存：新增关联 {add_count:,} 个，移除关联 {remove_count:,} 个。")
+                    if st.button(
+                        "💾 保存当前标签的商品修改",
+                        type="primary",
+                        disabled=not changed_links,
+                        key="save_existing_tag_product_links",
+                    ):
+                        try:
+                            count = _update_tag_product_links(edit_tag, changed_links, master_df)
+                            st.cache_data.clear()
+                            st.session_state.product_tag_flash = (
+                                f"已保存“{edit_tag}”的商品关联，共更新 {count:,} 个商品。"
+                            )
+                            st.rerun()
+                        except Exception as exc:
+                            st.error(f"保存标签商品失败：{exc}")
+
+            with st.container(border=True):
+                st.markdown("#### 删除现有标签")
+                delete_tag = st.selectbox(
+                    "选择要删除的标签",
+                    current_tags,
+                    index=None,
+                    placeholder="请选择标签",
+                    key="delete_product_tag_name",
+                )
+                affected_count = int(master_df["tags"].map(
+                    lambda value: delete_tag in normalize_product_tags(value) if delete_tag else False
+                ).sum())
+                if delete_tag:
+                    st.warning(
+                        f"删除“{delete_tag}”后，将从 {affected_count:,} 个商品中同步移除该标签。"
+                    )
+                confirm_tag_delete = st.checkbox(
+                    "我确认从所有关联商品中删除这个标签",
+                    key="confirm_product_tag_delete",
+                )
+                if st.button(
+                    "🗑️ 删除标签",
+                    disabled=not delete_tag,
+                    key="delete_product_tag",
+                ):
+                    if not confirm_tag_delete:
+                        st.warning("请先勾选删除确认。")
+                    else:
+                        try:
+                            count = _delete_tag_from_products(delete_tag, master_df)
+                            st.cache_data.clear()
+                            st.session_state.product_tag_flash = (
+                                f"已删除标签“{delete_tag}”，并从 {count:,} 个商品中同步移除。"
+                            )
+                            st.rerun()
+                        except Exception as exc:
+                            st.error(f"删除标签失败：{exc}")
+
+        tag_name = st.text_input("标签名称", placeholder="例如：秋季新品", key="custom_tag_name").strip()
+        operation = st.radio("批量操作", ["添加标签", "移除标签"], horizontal=True, key="custom_tag_operation")
+        tag_start = tag_end = None
+        if operation == "添加标签":
+            period_start_col, period_end_col = st.columns(2)
+            with period_start_col:
+                tag_start = st.date_input(
+                    "活动开始日期", value=date.today(), key="custom_tag_start_date"
+                )
+            with period_end_col:
+                tag_end = st.date_input(
+                    "活动结束日期",
+                    value=date.today() + timedelta(days=30),
+                    min_value=tag_start,
+                    key="custom_tag_end_date",
+                )
+        style_text = st.text_area(
+            "商品货号",
+            placeholder="每行一个货号，也支持逗号分隔",
+            height=180,
+            key="custom_tag_styles",
+        )
+        if st.button("应用标签", type="primary", key="apply_custom_tag"):
+            style_codes = sorted({
+                code.strip().upper()
+                for code in style_text.replace("，", ",").replace("\n", ",").split(",")
+                if code.strip()
+            })
+            if not tag_name or not style_codes:
+                st.warning("请输入标签名称和至少一个商品货号。")
+            elif operation == "添加标签" and tag_start > tag_end:
+                st.warning("活动结束日期不能早于开始日期。")
+            else:
+                try:
+                    if operation == "添加标签":
+                        supabase.table("product_tag_periods").upsert({
+                            "tag_name": tag_name,
+                            "start_date": tag_start.isoformat(),
+                            "end_date": tag_end.isoformat(),
+                            "updated_at": datetime.now(timezone.utc).isoformat(),
+                        }, on_conflict="tag_name").execute()
+                    lookup = master_df.set_index("style_code")["tags"].to_dict()
+                    records = []
+                    for style_code in style_codes:
+                        tags = normalize_product_tags(lookup.get(style_code))
+                        if operation == "添加标签" and tag_name not in tags:
+                            tags.append(tag_name)
+                        elif operation == "移除标签":
+                            tags = [tag for tag in tags if tag != tag_name]
+                        records.append({"style_code": style_code, "tags": tags})
+                    for offset in range(0, len(records), 500):
+                        supabase.table("product_master").upsert(
+                            records[offset:offset + 500], on_conflict="style_code"
+                        ).execute()
+                    st.cache_data.clear()
+                    st.session_state.product_tag_flash = (
+                        f"操作成功：已为 {len(records)} 个商品{operation}“{tag_name}”。"
+                    )
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"标签更新失败：{exc}")
+
+if tab_export.open:
+    with tab_export:
+        st.markdown("### 导出商品库")
+        st.write(f"当前商品库共有 **{len(master_df):,}** 条记录。")
+        st.download_button(
+            "📥 导出全部商品库数据 (Excel)", lambda frame=master_df: excel_bytes(frame, "商品库"),
+            file_name=f"product_master_{date.today().strftime('%Y%m%d')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", type="primary",
+        )

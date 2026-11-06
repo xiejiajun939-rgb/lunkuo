@@ -11,6 +11,7 @@ from core.utils import clear_cache_on_page_change
 from core.app_config import load_carousel_config, save_carousel_config, upload_carousel_image
 from core.settings_panels import render_account_management, render_mapping_management
 from core.passwords import preserve_or_hash_password
+from core.admin_downloads import adjustment_template_bytes
 from core.theme import page_header
 from core.promotion import parse_daily_promotion_file, save_daily_promotion_rows
 from core.live_analytics import (
@@ -57,444 +58,428 @@ div[data-testid="stVerticalBlockBorderWrapper"] { border-radius: 16px; }
 </style>
 """, unsafe_allow_html=True)
 page_header("系统设置", "管理数据导入、库存、目标、账号权限与组织映射", "SYSTEM ADMINISTRATION", "管理员")
+st.caption("各页签按需加载；切换页签前，请先完成或保存当前操作。")
 
 tab_upload, tab_platform, tab_tools, tab_accounts, tab_access, tab_mapping = st.tabs([
     "📤 文件与目标", "🛍️ 抖音平台数据", "🧰 数据工具", "👥 账号与权限", "🧾 访问记录", "🗂️ 映射关系"
-])
+], key="admin_settings_section", on_change="rerun")
 
 
-with tab_upload:
-    st.markdown("### 销售数据")
-    col_online, col_offline = st.columns(2)
-    with col_online:
+if tab_upload.open:
+    with tab_upload:
+        st.markdown("### 销售数据")
+        col_online, col_offline = st.columns(2)
+        with col_online:
+            with st.container(border=True):
+                st.markdown("#### 线上订单")
+                order_files = st.file_uploader("订单 Excel", type=["xlsx", "xls"], accept_multiple_files=True, key="settings_orders")
+                if st.button("上传线上订单", type="primary", key="settings_upload_orders"):
+                    if not order_files:
+                        st.warning("请先选择文件。")
+                    elif not callbacks:
+                        st.error("管理工具尚未初始化，请刷新页面。")
+                    else:
+                        successes = 0
+                        for uploaded in order_files:
+                            ok, msg = callbacks["process_uploaded_file"](io.BytesIO(uploaded.getvalue()), "_all", uploaded.name)
+                            st.write(f"{'✅' if ok else '❌'} {uploaded.name}：{msg}")
+                            successes += int(ok)
+                        if successes:
+                            callbacks["mark_data_changed"]()
+        with col_offline:
+            with st.container(border=True):
+                st.markdown("#### 线下收入")
+                offline_files = st.file_uploader("线下收入 Excel", type=["xlsx", "xls"], accept_multiple_files=True, key="settings_offline")
+                if st.button("上传线下收入", type="primary", key="settings_upload_offline"):
+                    if not offline_files:
+                        st.warning("请先选择文件。")
+                    else:
+                        total = 0
+                        for uploaded in offline_files:
+                            df = pd.read_excel(uploaded, header=1)
+                            required = ["日期", "金额/时间", "备注", "组织名称"]
+                            if not all(col in df.columns for col in required):
+                                st.error(f"{uploaded.name} 缺少必要列。")
+                                continue
+                            count = callbacks["save_offline_sales"](df)
+                            total += count
+                            st.write(f"✅ {uploaded.name}：{count} 条")
+                        if total:
+                            callbacks["mark_data_changed"]()
+
+        st.markdown("### 库存数据上传")
         with st.container(border=True):
-            st.markdown("#### 线上订单")
-            order_files = st.file_uploader("订单 Excel", type=["xlsx", "xls"], accept_multiple_files=True, key="settings_orders")
-            if st.button("上传线上订单", type="primary", key="settings_upload_orders"):
-                if not order_files:
-                    st.warning("请先选择文件。")
+            st.markdown("#### 每日全量库存")
+            st.caption(
+                "每天上传一次完整库存表。系统只保存商品库中已存在的货号；正式导入成功后，"
+                "当前库存会整盘替换，不会与前一天或同一天旧数据累计。"
+            )
+            inventory_date = st.date_input("库存日期", value=date.today(), key="settings_inventory_date")
+            inventory_file = st.file_uploader(
+                "库存 Excel", type=["xlsx", "xls"], key="settings_inventory_file"
+            )
+            if inventory_file is not None:
+                try:
+                    inventory_frame, inventory_stats = parse_inventory_workbook(inventory_file, inventory_date)
+                    metric_columns = st.columns(5)
+                    metric_columns[0].metric("原始记录", f"{inventory_stats['source_rows']:,}")
+                    metric_columns[1].metric("原始货号", f"{inventory_stats['source_styles']:,}")
+                    metric_columns[2].metric("匹配货号", f"{inventory_stats['matched_styles']:,}")
+                    metric_columns[3].metric("跳过货号", f"{inventory_stats['skipped_styles']:,}")
+                    metric_columns[4].metric("保存明细", f"{inventory_stats['saved_rows']:,}")
+                    if inventory_stats["negative_rows"]:
+                        st.warning(f"匹配后的库存中有 {inventory_stats['negative_rows']:,} 条负库存，将保留并在明细中显示。")
+                    if inventory_stats["invalid_qty_rows"]:
+                        st.warning(f"有 {inventory_stats['invalid_qty_rows']:,} 条可用数无法识别，已跳过。")
+                    with st.expander("查看未匹配、不会保存的货号"):
+                        skipped = inventory_stats["skipped_style_codes"]
+                        st.write("、".join(skipped[:500]) if skipped else "无")
+                        if len(skipped) > 500:
+                            st.caption(f"仅显示前500个，共 {len(skipped):,} 个。")
+                    confirm_inventory = st.checkbox(
+                        f"我确认用 {inventory_date} 的完整库存替换当前库存",
+                        key="confirm_inventory_replace",
+                    )
+                    if st.button(
+                        "正式导入并整盘替换库存",
+                        type="primary",
+                        disabled=not confirm_inventory,
+                        key="settings_replace_inventory",
+                    ):
+                        with st.spinner("正在写入新库存，完成前旧库存仍保持可用……"):
+                            result = save_inventory_snapshot(
+                                inventory_frame, inventory_date, inventory_file.name, inventory_stats
+                            )
+                        st.cache_data.clear()
+                        if callbacks:
+                            callbacks["mark_data_changed"]()
+                        st.success(
+                            f"库存替换完成：{result['matched_styles']:,} 个货号，"
+                            f"{result['saved_rows']:,} 条仓库色码明细；"
+                            f"未匹配的 {result['skipped_styles']:,} 个货号没有保存。"
+                        )
+                except Exception as exc:
+                    st.error(f"库存文件预检失败：{exc}")
+
+        st.markdown("### 直播数据上传")
+        with st.container(border=True):
+            st.markdown("#### 抖音店铺后台直播工作簿")
+            st.caption("仅支持抖音店铺后台导出的新版直播数据 Excel，不再接收巨量百应 ZIP 旧格式。")
+            st.caption(
+                "上传“罗盘_账号_时间_房间号.xlsx”。系统读取场次概览、核心指标、渠道流量、"
+                "货品明细和商品讲解，通过商品名称识别货号，再与数据罗盘实销关联。"
+            )
+            douyin_live_files = st.file_uploader(
+                "抖音直播间数据 Excel",
+                type=["xlsx"],
+                accept_multiple_files=True,
+                key="settings_douyin_live_workbooks",
+            )
+            if douyin_live_files:
+                previews = []
+                preview_failed = False
+                for uploaded in douyin_live_files:
+                    try:
+                        preview = preview_douyin_live_workbook(uploaded)
+                        preview["文件"] = uploaded.name
+                        previews.append(preview)
+                    except Exception as exc:
+                        preview_failed = True
+                        st.error(f"{uploaded.name}：{exc}")
+                if previews:
+                    preview_df = pd.DataFrame(previews).rename(columns={
+                        "room_id": "房间号", "platform_account_name": "平台店铺／账号",
+                        "shop_name": "反查店铺", "anchor_name": "主播账号",
+                        "start_time": "开播时间", "end_time": "关播时间", "metrics": "指标数",
+                        "products": "商品数", "channels": "渠道数", "talks": "讲解区间数",
+                        "matched": "已识别货号", "unmatched": "待确认货号",
+                    })
+                    st.dataframe(preview_df, width="stretch", hide_index=True)
+                    if any(row["shop_name"] == "待维护店铺" for row in previews):
+                        st.warning("存在无法从平台店铺映射反查实销店铺的文件，请先到“映射关系”维护后再导入。")
+                        preview_failed = True
+                    confirm_douyin_import = st.checkbox(
+                        "我已核对房间号、主播账号、反查店铺和货号识别结果",
+                        key="confirm_douyin_live_import",
+                    )
+                    if st.button(
+                        "正式导入抖音直播工作簿",
+                        type="primary",
+                        disabled=preview_failed or not confirm_douyin_import,
+                        key="settings_import_douyin_live_workbooks",
+                    ):
+                        imported, skipped = 0, 0
+                        totals = {"products": 0, "matched": 0, "unmatched": 0}
+                        failed = []
+                        for uploaded in douyin_live_files:
+                            try:
+                                result = import_douyin_live_workbook(uploaded)
+                                skipped += int(bool(result.get("skipped")))
+                                imported += int(not result.get("skipped"))
+                                for key in totals:
+                                    totals[key] += int(result.get(key, 0))
+                            except Exception as exc:
+                                failed.append(f"{uploaded.name}：{exc}")
+                        st.cache_data.clear()
+                        if callbacks:
+                            callbacks["mark_data_changed"]()
+                        st.success(
+                            f"导入完成：新增或更新 {imported} 场，重复文件跳过 {skipped} 场；"
+                            f"商品 {totals['products']} 条，已识别货号 {totals['matched']} 条，"
+                            f"待确认 {totals['unmatched']} 条。"
+                        )
+                        for message in failed:
+                            st.error(message)
+
+            # 旧版巨量百应 ZIP 上传已停用；保留下面的历史解析代码但不再渲染入口。
+            live_archive = None
+            if live_archive is not None:
+                try:
+                    if live_archive.size > 500 * 1024 * 1024:
+                        raise ValueError("ZIP 超过 500MB，请只保留直播数据库和商品明细 Excel。")
+                    with tempfile.TemporaryDirectory(prefix="lunkuo_live_preview_") as temp_dir:
+                        extract_root = Path(temp_dir)
+                        with zipfile.ZipFile(io.BytesIO(live_archive.getvalue())) as archive:
+                            members = archive.infolist()
+                            if len(members) > 5000:
+                                raise ValueError("ZIP 内文件过多，请只保留必要文件。")
+                            total_size = sum(member.file_size for member in members)
+                            if total_size > 1024 * 1024 * 1024:
+                                raise ValueError("ZIP 解压后超过 1GB，已停止处理。")
+                            root_resolved = extract_root.resolve()
+                            for member in members:
+                                target = (extract_root / member.filename).resolve()
+                                if target != root_resolved and root_resolved not in target.parents:
+                                    raise ValueError(f"ZIP 包含不安全路径：{member.filename}")
+                            archive.extractall(extract_root)
+
+                        preview = preview_live_folder(extract_root)
+                        preview_cols = st.columns(4)
+                        preview_cols[0].metric("识别场次", preview["sessions"])
+                        preview_cols[1].metric("平台指标", preview["metrics"])
+                        preview_cols[2].metric("商品明细文件", preview["product_files"])
+                        preview_cols[3].metric("商品明细行数", preview["product_rows"])
+                        st.write(f"**主播账号：** {', '.join(preview['anchors']) or '未识别'}")
+                        st.write(f"**数据时间：** {preview['start_time']:%Y-%m-%d %H:%M} 至 {preview['end_time']:%Y-%m-%d %H:%M}")
+                        st.write(f"**识别格式：** {preview['source_type']}")
+                        if preview["database_path"]:
+                            st.write(f"**直播数据库：** `{preview['database_path']}`")
+                        if preview["missing_rooms"]:
+                            st.error(f"缺少 {len(preview['missing_rooms'])} 场商品明细，不能正式导入。")
+                            st.code("\n".join(preview["missing_rooms"][:30]))
+                        else:
+                            st.success("预检通过：每个场次都找到了对应商品明细。")
+                            confirm_live_import = st.checkbox(
+                                "我已核对主播、时间范围和场次数，确认写入直播数据库",
+                                key="confirm_live_import",
+                            )
+                            if st.button(
+                                "正式导入直播数据",
+                                type="primary",
+                                disabled=not confirm_live_import,
+                                key="settings_import_live_data",
+                            ):
+                                result = import_live_folder(extract_root)
+                                st.cache_data.clear()
+                                if callbacks:
+                                    callbacks["mark_data_changed"]()
+                                st.success(
+                                    f"导入完成：{result['sessions']} 场、{result['metrics']} 项指标、"
+                                    f"{result['products']} 条商品记录；识别货号 {result['matched']} 条，"
+                                    f"待确认 {result['unmatched']} 条。"
+                                )
+                except zipfile.BadZipFile:
+                    st.error("文件不是有效的 ZIP 压缩包。")
+                except Exception as exc:
+                    st.error(f"直播数据预检失败：{exc}")
+
+        st.markdown("### 退差价归属")
+        with st.container(border=True):
+            st.caption("每月 1 日上传上月退差价表。必需列：订单号、金额（负数）；系统自动匹配平台、店铺、主播、部门和阿米巴组织，并归入上月最后一天。")
+            st.download_button(
+                "下载退差价匹配模板",
+                data=adjustment_template_bytes,
+                file_name="退差价归属匹配模板.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="download_adjustment_mapping_template",
+            )
+            adjustment_mapping_file = st.file_uploader(
+                "退差价匹配表", type=["xlsx", "xls"], key="settings_adjustment_mapping"
+            )
+            if st.button("上传并匹配退差价", key="settings_apply_adjustment_mapping"):
+                if adjustment_mapping_file is None:
+                    st.warning("请先选择匹配表")
                 elif not callbacks:
-                    st.error("管理工具尚未初始化，请刷新页面。")
+                    st.error("管理工具尚未初始化，请刷新页面")
                 else:
-                    successes = 0
-                    for uploaded in order_files:
-                        ok, msg = callbacks["process_uploaded_file"](io.BytesIO(uploaded.getvalue()), "_all", uploaded.name)
-                        st.write(f"{'✅' if ok else '❌'} {uploaded.name}：{msg}")
-                        successes += int(ok)
-                    if successes:
+                    mapping_df = pd.read_excel(adjustment_mapping_file)
+                    result = callbacks["apply_adjustment_mapping"](mapping_df)
+                    if result["updated"]:
                         callbacks["mark_data_changed"]()
-    with col_offline:
-        with st.container(border=True):
-            st.markdown("#### 线下收入")
-            offline_files = st.file_uploader("线下收入 Excel", type=["xlsx", "xls"], accept_multiple_files=True, key="settings_offline")
-            if st.button("上传线下收入", type="primary", key="settings_upload_offline"):
-                if not offline_files:
-                    st.warning("请先选择文件。")
-                else:
+                        st.success(f"已按订单归属 {result['updated']} 条退差价，并替换 {result.get('deleted', 0)} 条自媒体综合 C 单")
+                    for error in result["errors"]:
+                        st.warning(error)
+
+        st.markdown("### 目标文件")
+        col_shop, col_org = st.columns(2)
+        with col_shop:
+            with st.container(border=True):
+                st.markdown("#### 店铺目标")
+                target_files = st.file_uploader("店铺目标 Excel", type=["xlsx", "xls"], accept_multiple_files=True, key="settings_targets")
+                if st.button("上传店铺目标", key="settings_upload_targets"):
+                    for uploaded in target_files or []:
+                        ok, msg = callbacks["load_target_file"](io.BytesIO(uploaded.getvalue()), "_all")
+                        st.write(f"{'✅' if ok else '❌'} {uploaded.name}：{msg}")
+                    if target_files:
+                        callbacks["mark_data_changed"]()
+        with col_org:
+            with st.container(border=True):
+                st.markdown("#### 组织目标")
+                org_files = st.file_uploader("组织目标 Excel", type=["xlsx", "xls"], accept_multiple_files=True, key="settings_org_targets")
+                if st.button("上传组织目标", key="settings_upload_org_targets"):
                     total = 0
-                    for uploaded in offline_files:
-                        df = pd.read_excel(uploaded, header=1)
-                        required = ["日期", "金额/时间", "备注", "组织名称"]
-                        if not all(col in df.columns for col in required):
-                            st.error(f"{uploaded.name} 缺少必要列。")
-                            continue
-                        count = callbacks["save_offline_sales"](df)
-                        total += count
-                        st.write(f"✅ {uploaded.name}：{count} 条")
+                    for uploaded in org_files or []:
+                        df = pd.read_excel(uploaded, header=None)
+                        names = df.iloc[:, 0].astype(str).str.strip()
+                        values = pd.to_numeric(df.iloc[:, 1], errors="coerce")
+                        targets = {name: value for name, value in zip(names, values) if pd.notna(value) and name not in ["", "nan", "None"]}
+                        callbacks["save_org_targets"](targets, "_all")
+                        total += len(targets)
                     if total:
                         callbacks["mark_data_changed"]()
+                        st.success(f"已保存 {total} 个组织目标。")
 
-    st.markdown("### 库存数据上传")
-    with st.container(border=True):
-        st.markdown("#### 每日全量库存")
-        st.caption(
-            "每天上传一次完整库存表。系统只保存商品库中已存在的货号；正式导入成功后，"
-            "当前库存会整盘替换，不会与前一天或同一天旧数据累计。"
-        )
-        inventory_date = st.date_input("库存日期", value=date.today(), key="settings_inventory_date")
-        inventory_file = st.file_uploader(
-            "库存 Excel", type=["xlsx", "xls"], key="settings_inventory_file"
-        )
-        if inventory_file is not None:
-            try:
-                inventory_frame, inventory_stats = parse_inventory_workbook(inventory_file, inventory_date)
-                metric_columns = st.columns(5)
-                metric_columns[0].metric("原始记录", f"{inventory_stats['source_rows']:,}")
-                metric_columns[1].metric("原始货号", f"{inventory_stats['source_styles']:,}")
-                metric_columns[2].metric("匹配货号", f"{inventory_stats['matched_styles']:,}")
-                metric_columns[3].metric("跳过货号", f"{inventory_stats['skipped_styles']:,}")
-                metric_columns[4].metric("保存明细", f"{inventory_stats['saved_rows']:,}")
-                if inventory_stats["negative_rows"]:
-                    st.warning(f"匹配后的库存中有 {inventory_stats['negative_rows']:,} 条负库存，将保留并在明细中显示。")
-                if inventory_stats["invalid_qty_rows"]:
-                    st.warning(f"有 {inventory_stats['invalid_qty_rows']:,} 条可用数无法识别，已跳过。")
-                with st.expander("查看未匹配、不会保存的货号"):
-                    skipped = inventory_stats["skipped_style_codes"]
-                    st.write("、".join(skipped[:500]) if skipped else "无")
-                    if len(skipped) > 500:
-                        st.caption(f"仅显示前500个，共 {len(skipped):,} 个。")
-                confirm_inventory = st.checkbox(
-                    f"我确认用 {inventory_date} 的完整库存替换当前库存",
-                    key="confirm_inventory_replace",
-                )
-                if st.button(
-                    "正式导入并整盘替换库存",
-                    type="primary",
-                    disabled=not confirm_inventory,
-                    key="settings_replace_inventory",
-                ):
-                    with st.spinner("正在写入新库存，完成前旧库存仍保持可用……"):
-                        result = save_inventory_snapshot(
-                            inventory_frame, inventory_date, inventory_file.name, inventory_stats
-                        )
-                    st.cache_data.clear()
-                    if callbacks:
-                        callbacks["mark_data_changed"]()
-                    st.success(
-                        f"库存替换完成：{result['matched_styles']:,} 个货号，"
-                        f"{result['saved_rows']:,} 条仓库色码明细；"
-                        f"未匹配的 {result['skipped_styles']:,} 个货号没有保存。"
-                    )
-            except Exception as exc:
-                st.error(f"库存文件预检失败：{exc}")
-
-    st.markdown("### 直播数据上传")
-    with st.container(border=True):
-        st.markdown("#### 抖音店铺后台直播工作簿")
-        st.caption("仅支持抖音店铺后台导出的新版直播数据 Excel，不再接收巨量百应 ZIP 旧格式。")
-        st.caption(
-            "上传“罗盘_账号_时间_房间号.xlsx”。系统读取场次概览、核心指标、渠道流量、"
-            "货品明细和商品讲解，通过商品名称识别货号，再与数据罗盘实销关联。"
-        )
-        douyin_live_files = st.file_uploader(
-            "抖音直播间数据 Excel",
-            type=["xlsx"],
-            accept_multiple_files=True,
-            key="settings_douyin_live_workbooks",
-        )
-        if douyin_live_files:
-            previews = []
-            preview_failed = False
-            for uploaded in douyin_live_files:
-                try:
-                    preview = preview_douyin_live_workbook(uploaded)
-                    preview["文件"] = uploaded.name
-                    previews.append(preview)
-                except Exception as exc:
-                    preview_failed = True
-                    st.error(f"{uploaded.name}：{exc}")
-            if previews:
-                preview_df = pd.DataFrame(previews).rename(columns={
-                    "room_id": "房间号", "platform_account_name": "平台店铺／账号",
-                    "shop_name": "反查店铺", "anchor_name": "主播账号",
-                    "start_time": "开播时间", "end_time": "关播时间", "metrics": "指标数",
-                    "products": "商品数", "channels": "渠道数", "talks": "讲解区间数",
-                    "matched": "已识别货号", "unmatched": "待确认货号",
-                })
-                st.dataframe(preview_df, width="stretch", hide_index=True)
-                if any(row["shop_name"] == "待维护店铺" for row in previews):
-                    st.warning("存在无法从平台店铺映射反查实销店铺的文件，请先到“映射关系”维护后再导入。")
-                    preview_failed = True
-                confirm_douyin_import = st.checkbox(
-                    "我已核对房间号、主播账号、反查店铺和货号识别结果",
-                    key="confirm_douyin_live_import",
-                )
-                if st.button(
-                    "正式导入抖音直播工作簿",
-                    type="primary",
-                    disabled=preview_failed or not confirm_douyin_import,
-                    key="settings_import_douyin_live_workbooks",
-                ):
-                    imported, skipped = 0, 0
-                    totals = {"products": 0, "matched": 0, "unmatched": 0}
-                    failed = []
-                    for uploaded in douyin_live_files:
+        st.markdown("### 推广参考数据")
+        st.caption("每日上传“店铺名_商品_YYYY-MM-DD.xlsx”；店铺和日期自动从文件名识别，素材文件不会导入。")
+        with st.container(border=True):
+            promo_files = st.file_uploader(
+                "每日店铺推广商品数据（支持多文件）", type=["xlsx", "xls"],
+                accept_multiple_files=True, key="settings_promotion_daily_files",
+            )
+            if st.button("上传每日推广数据", type="primary", key="settings_upload_promotion_daily"):
+                if not promo_files:
+                    st.warning("请先选择推广商品文件。")
+                else:
+                    imported, failures = [], []
+                    for promo_file in promo_files:
                         try:
-                            result = import_douyin_live_workbook(uploaded)
-                            skipped += int(bool(result.get("skipped")))
-                            imported += int(not result.get("skipped"))
-                            for key in totals:
-                                totals[key] += int(result.get(key, 0))
+                            rows = parse_daily_promotion_file(io.BytesIO(promo_file.getvalue()), promo_file.name)
+                            count = save_daily_promotion_rows(rows)
+                            imported.append(f"{promo_file.name}：{count} 条")
                         except Exception as exc:
-                            failed.append(f"{uploaded.name}：{exc}")
-                    st.cache_data.clear()
-                    if callbacks:
+                            failures.append(f"{promo_file.name}：{exc}")
+                    if imported:
                         callbacks["mark_data_changed"]()
-                    st.success(
-                        f"导入完成：新增或更新 {imported} 场，重复文件跳过 {skipped} 场；"
-                        f"商品 {totals['products']} 条，已识别货号 {totals['matched']} 条，"
-                        f"待确认 {totals['unmatched']} 条。"
-                    )
-                    for message in failed:
-                        st.error(message)
+                        st.success("已更新每日推广数据：\n" + "\n".join(imported))
+                    if failures:
+                        st.error("以下文件未导入：\n" + "\n".join(failures))
 
-        # 旧版巨量百应 ZIP 上传已停用；保留下面的历史解析代码但不再渲染入口。
-        live_archive = None
-        if live_archive is not None:
-            try:
-                if live_archive.size > 500 * 1024 * 1024:
-                    raise ValueError("ZIP 超过 500MB，请只保留直播数据库和商品明细 Excel。")
-                with tempfile.TemporaryDirectory(prefix="lunkuo_live_preview_") as temp_dir:
-                    extract_root = Path(temp_dir)
-                    with zipfile.ZipFile(io.BytesIO(live_archive.getvalue())) as archive:
-                        members = archive.infolist()
-                        if len(members) > 5000:
-                            raise ValueError("ZIP 内文件过多，请只保留必要文件。")
-                        total_size = sum(member.file_size for member in members)
-                        if total_size > 1024 * 1024 * 1024:
-                            raise ValueError("ZIP 解压后超过 1GB，已停止处理。")
-                        root_resolved = extract_root.resolve()
-                        for member in members:
-                            target = (extract_root / member.filename).resolve()
-                            if target != root_resolved and root_resolved not in target.parents:
-                                raise ValueError(f"ZIP 包含不安全路径：{member.filename}")
-                        archive.extractall(extract_root)
+if tab_platform.open:
+    with tab_platform:
+        st.caption("平台数据导入入口 · 版本 2026-10-21 · 全部 / 商品卡")
+        from core.platform_products import render_platform_import
+        render_platform_import()
 
-                    preview = preview_live_folder(extract_root)
-                    preview_cols = st.columns(4)
-                    preview_cols[0].metric("识别场次", preview["sessions"])
-                    preview_cols[1].metric("平台指标", preview["metrics"])
-                    preview_cols[2].metric("商品明细文件", preview["product_files"])
-                    preview_cols[3].metric("商品明细行数", preview["product_rows"])
-                    st.write(f"**主播账号：** {', '.join(preview['anchors']) or '未识别'}")
-                    st.write(f"**数据时间：** {preview['start_time']:%Y-%m-%d %H:%M} 至 {preview['end_time']:%Y-%m-%d %H:%M}")
-                    st.write(f"**识别格式：** {preview['source_type']}")
-                    if preview["database_path"]:
-                        st.write(f"**直播数据库：** `{preview['database_path']}`")
-                    if preview["missing_rooms"]:
-                        st.error(f"缺少 {len(preview['missing_rooms'])} 场商品明细，不能正式导入。")
-                        st.code("\n".join(preview["missing_rooms"][:30]))
-                    else:
-                        st.success("预检通过：每个场次都找到了对应商品明细。")
-                        confirm_live_import = st.checkbox(
-                            "我已核对主播、时间范围和场次数，确认写入直播数据库",
-                            key="confirm_live_import",
-                        )
-                        if st.button(
-                            "正式导入直播数据",
-                            type="primary",
-                            disabled=not confirm_live_import,
-                            key="settings_import_live_data",
-                        ):
-                            result = import_live_folder(extract_root)
-                            st.cache_data.clear()
-                            if callbacks:
-                                callbacks["mark_data_changed"]()
-                            st.success(
-                                f"导入完成：{result['sessions']} 场、{result['metrics']} 项指标、"
-                                f"{result['products']} 条商品记录；识别货号 {result['matched']} 条，"
-                                f"待确认 {result['unmatched']} 条。"
-                            )
-            except zipfile.BadZipFile:
-                st.error("文件不是有效的 ZIP 压缩包。")
-            except Exception as exc:
-                st.error(f"直播数据预检失败：{exc}")
-
-    st.markdown("### 退差价归属")
-    with st.container(border=True):
-        st.caption("每月 1 日上传上月退差价表。必需列：订单号、金额（负数）；系统自动匹配平台、店铺、主播、部门和阿米巴组织，并归入上月最后一天。")
-        template_output = io.BytesIO()
-        template_df = pd.DataFrame({
-            "订单号": ["16083112505226"],
-            "金额": [-100.00],
-        })
-        instruction_df = pd.DataFrame({
-            "填写说明": [
-                "订单号填写平台业务订单号，不是 C 开头的财务单据号",
-                "金额必须填写负数",
-                "系统会从数据库自动匹配平台、店铺、主播、部门和阿米巴组织",
-                "同一订单号可以填写多行，系统会先合计该订单的退差价金额",
-                "只有各平台上传金额与上月自媒体综合 C 单完全平账时才会替换",
-                "请删除示例行后再上传",
-            ]
-        })
-        with pd.ExcelWriter(template_output, engine="openpyxl") as writer:
-            template_df.to_excel(writer, sheet_name="退差价匹配", index=False)
-            instruction_df.to_excel(writer, sheet_name="填写说明", index=False)
-            writer.book["退差价匹配"].freeze_panes = "A2"
-            writer.book["填写说明"].column_dimensions["A"].width = 68
-            for sheet in writer.book.worksheets:
-                for cell in sheet[1]:
-                    cell.font = cell.font.copy(bold=True)
-        st.download_button(
-            "下载退差价匹配模板",
-            data=template_output.getvalue(),
-            file_name="退差价归属匹配模板.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            key="download_adjustment_mapping_template",
-        )
-        adjustment_mapping_file = st.file_uploader(
-            "退差价匹配表", type=["xlsx", "xls"], key="settings_adjustment_mapping"
-        )
-        if st.button("上传并匹配退差价", key="settings_apply_adjustment_mapping"):
-            if adjustment_mapping_file is None:
-                st.warning("请先选择匹配表")
-            elif not callbacks:
-                st.error("管理工具尚未初始化，请刷新页面")
-            else:
-                mapping_df = pd.read_excel(adjustment_mapping_file)
-                result = callbacks["apply_adjustment_mapping"](mapping_df)
-                if result["updated"]:
+if tab_tools.open:
+    with tab_tools:
+        st.markdown("### 缓存与数据维护")
+        col_refresh, col_clear = st.columns(2)
+        with col_refresh:
+            with st.container(border=True):
+                st.markdown("#### 刷新缓存")
+                st.caption("数据展示异常时重新生成所有汇总缓存。")
+                if st.button("🔄 强制刷新所有数据", type="primary", key="settings_force_refresh"):
                     callbacks["mark_data_changed"]()
-                    st.success(f"已按订单归属 {result['updated']} 条退差价，并替换 {result.get('deleted', 0)} 条自媒体综合 C 单")
-                for error in result["errors"]:
-                    st.warning(error)
+                    st.success("缓存已刷新。")
+        with col_clear:
+            with st.container(border=True):
+                st.markdown("#### 清除店铺目标")
+                st.caption("此操作会删除当前全部店铺目标。")
+                if st.button("🗑️ 清除店铺目标", key="settings_clear_targets"):
+                    callbacks["clear_targets"]("_all")
+if tab_accounts.open:
+    with tab_accounts:
+        render_account_management(supabase, all_pages)
 
-    st.markdown("### 目标文件")
-    col_shop, col_org = st.columns(2)
-    with col_shop:
-        with st.container(border=True):
-            st.markdown("#### 店铺目标")
-            target_files = st.file_uploader("店铺目标 Excel", type=["xlsx", "xls"], accept_multiple_files=True, key="settings_targets")
-            if st.button("上传店铺目标", key="settings_upload_targets"):
-                for uploaded in target_files or []:
-                    ok, msg = callbacks["load_target_file"](io.BytesIO(uploaded.getvalue()), "_all")
-                    st.write(f"{'✅' if ok else '❌'} {uploaded.name}：{msg}")
-                if target_files:
-                    callbacks["mark_data_changed"]()
-    with col_org:
-        with st.container(border=True):
-            st.markdown("#### 组织目标")
-            org_files = st.file_uploader("组织目标 Excel", type=["xlsx", "xls"], accept_multiple_files=True, key="settings_org_targets")
-            if st.button("上传组织目标", key="settings_upload_org_targets"):
-                total = 0
-                for uploaded in org_files or []:
-                    df = pd.read_excel(uploaded, header=None)
-                    names = df.iloc[:, 0].astype(str).str.strip()
-                    values = pd.to_numeric(df.iloc[:, 1], errors="coerce")
-                    targets = {name: value for name, value in zip(names, values) if pd.notna(value) and name not in ["", "nan", "None"]}
-                    callbacks["save_org_targets"](targets, "_all")
-                    total += len(targets)
-                if total:
-                    callbacks["mark_data_changed"]()
-                    st.success(f"已保存 {total} 个组织目标。")
-
-    st.markdown("### 推广参考数据")
-    st.caption("每日上传“店铺名_商品_YYYY-MM-DD.xlsx”；店铺和日期自动从文件名识别，素材文件不会导入。")
-    with st.container(border=True):
-        promo_files = st.file_uploader(
-            "每日店铺推广商品数据（支持多文件）", type=["xlsx", "xls"],
-            accept_multiple_files=True, key="settings_promotion_daily_files",
-        )
-        if st.button("上传每日推广数据", type="primary", key="settings_upload_promotion_daily"):
-            if not promo_files:
-                st.warning("请先选择推广商品文件。")
-            else:
-                imported, failures = [], []
-                for promo_file in promo_files:
-                    try:
-                        rows = parse_daily_promotion_file(io.BytesIO(promo_file.getvalue()), promo_file.name)
-                        count = save_daily_promotion_rows(rows)
-                        imported.append(f"{promo_file.name}：{count} 条")
-                    except Exception as exc:
-                        failures.append(f"{promo_file.name}：{exc}")
-                if imported:
-                    callbacks["mark_data_changed"]()
-                    st.success("已更新每日推广数据：\n" + "\n".join(imported))
-                if failures:
-                    st.error("以下文件未导入：\n" + "\n".join(failures))
-
-with tab_platform:
-    st.caption("平台数据导入入口 · 版本 2026-10-21 · 全部 / 商品卡")
-    from core.platform_products import render_platform_import
-    render_platform_import()
-
-with tab_tools:
-    st.markdown("### 缓存与数据维护")
-    col_refresh, col_clear = st.columns(2)
-    with col_refresh:
-        with st.container(border=True):
-            st.markdown("#### 刷新缓存")
-            st.caption("数据展示异常时重新生成所有汇总缓存。")
-            if st.button("🔄 强制刷新所有数据", type="primary", key="settings_force_refresh"):
-                callbacks["mark_data_changed"]()
-                st.success("缓存已刷新。")
-    with col_clear:
-        with st.container(border=True):
-            st.markdown("#### 清除店铺目标")
-            st.caption("此操作会删除当前全部店铺目标。")
-            if st.button("🗑️ 清除店铺目标", key="settings_clear_targets"):
-                callbacks["clear_targets"]("_all")
-with tab_accounts:
-    render_account_management(supabase, all_pages)
-
-with tab_access:
-    st.markdown("### 账号访问记录")
-    st.caption("记录账号登录、登录失败、保持登录恢复、退出和页面访问。页面内筛选或刷新不会重复记为页面访问。")
-    default_start, default_end = default_audit_dates()
-    date_columns = st.columns(2)
-    audit_start = date_columns[0].date_input("开始日期", default_start, key="audit_start_date")
-    audit_end = date_columns[1].date_input("结束日期", default_end, key="audit_end_date")
-    if audit_start > audit_end:
-        st.error("开始日期不能晚于结束日期。")
-    else:
-        try:
-            audit_logs = load_access_logs(supabase, audit_start, audit_end)
-        except Exception as exc:
-            st.error(f"访问记录读取失败：{exc}")
-            audit_logs = pd.DataFrame()
-        if audit_logs.empty:
-            st.info("所选日期暂无访问记录。")
+if tab_access.open:
+    with tab_access:
+        st.markdown("### 账号访问记录")
+        st.caption("记录账号登录、登录失败、保持登录恢复、退出和页面访问。页面内筛选或刷新不会重复记为页面访问。")
+        default_start, default_end = default_audit_dates()
+        date_columns = st.columns(2)
+        audit_start = date_columns[0].date_input("开始日期", default_start, key="audit_start_date")
+        audit_end = date_columns[1].date_input("结束日期", default_end, key="audit_end_date")
+        if audit_start > audit_end:
+            st.error("开始日期不能晚于结束日期。")
         else:
-            filter_columns = st.columns(3)
-            selected_users = filter_columns[0].multiselect(
-                "账号", sorted(audit_logs["username"].dropna().astype(str).unique()), key="audit_users"
-            )
-            event_labels = {
-                "login": "登录成功", "login_failed": "登录失败", "login_restored": "保持登录恢复",
-                "logout": "退出登录", "page_view": "页面访问",
-            }
-            available_events = sorted(audit_logs["event_type"].dropna().astype(str).unique())
-            selected_events = filter_columns[1].multiselect(
-                "记录类型", available_events, format_func=lambda value: event_labels.get(value, value),
-                key="audit_events",
-            )
-            available_pages = sorted(
-                value for value in audit_logs["page_title"].dropna().astype(str).unique() if value.strip()
-            )
-            selected_pages = filter_columns[2].multiselect(
-                "页面", available_pages, key="audit_pages"
-            )
-            filtered_logs = audit_logs.copy()
-            if selected_users:
-                filtered_logs = filtered_logs[filtered_logs["username"].isin(selected_users)]
-            if selected_events:
-                filtered_logs = filtered_logs[filtered_logs["event_type"].isin(selected_events)]
-            if selected_pages:
-                filtered_logs = filtered_logs[filtered_logs["page_title"].isin(selected_pages)]
+            try:
+                audit_logs = load_access_logs(supabase, audit_start, audit_end)
+            except Exception as exc:
+                st.error(f"访问记录读取失败：{exc}")
+                audit_logs = pd.DataFrame()
+            if audit_logs.empty:
+                st.info("所选日期暂无访问记录。")
+            else:
+                filter_columns = st.columns(3)
+                selected_users = filter_columns[0].multiselect(
+                    "账号", sorted(audit_logs["username"].dropna().astype(str).unique()), key="audit_users"
+                )
+                event_labels = {
+                    "login": "登录成功", "login_failed": "登录失败", "login_restored": "保持登录恢复",
+                    "logout": "退出登录", "page_view": "页面访问",
+                }
+                available_events = sorted(audit_logs["event_type"].dropna().astype(str).unique())
+                selected_events = filter_columns[1].multiselect(
+                    "记录类型", available_events, format_func=lambda value: event_labels.get(value, value),
+                    key="audit_events",
+                )
+                available_pages = sorted(
+                    value for value in audit_logs["page_title"].dropna().astype(str).unique() if value.strip()
+                )
+                selected_pages = filter_columns[2].multiselect(
+                    "页面", available_pages, key="audit_pages"
+                )
+                filtered_logs = audit_logs.copy()
+                if selected_users:
+                    filtered_logs = filtered_logs[filtered_logs["username"].isin(selected_users)]
+                if selected_events:
+                    filtered_logs = filtered_logs[filtered_logs["event_type"].isin(selected_events)]
+                if selected_pages:
+                    filtered_logs = filtered_logs[filtered_logs["page_title"].isin(selected_pages)]
 
-            summary_columns = st.columns(4)
-            summary_columns[0].metric("记录数", f"{len(filtered_logs):,}")
-            summary_columns[1].metric("访问账号", f"{filtered_logs['username'].nunique():,}")
-            summary_columns[2].metric("登录成功", f"{filtered_logs['event_type'].isin(['login', 'login_restored']).sum():,}")
-            summary_columns[3].metric("登录失败", f"{(filtered_logs['event_type'] == 'login_failed').sum():,}")
+                summary_columns = st.columns(4)
+                summary_columns[0].metric("记录数", f"{len(filtered_logs):,}")
+                summary_columns[1].metric("访问账号", f"{filtered_logs['username'].nunique():,}")
+                summary_columns[2].metric("登录成功", f"{filtered_logs['event_type'].isin(['login', 'login_restored']).sum():,}")
+                summary_columns[3].metric("登录失败", f"{(filtered_logs['event_type'] == 'login_failed').sum():,}")
 
-            display_logs = filtered_logs.copy()
-            display_logs["记录类型"] = display_logs["event_type"].map(event_labels).fillna(display_logs["event_type"])
-            display_logs["访问时间"] = display_logs["created_at"].dt.strftime("%Y-%m-%d %H:%M:%S")
-            display_logs["结果"] = display_logs["success"].map({True: "成功", False: "失败"})
-            display_logs["详细信息"] = display_logs["details"].map(
-                lambda value: "；".join(f"{key}={item}" for key, item in value.items()) if isinstance(value, dict) else ""
-            )
-            display_logs = display_logs.rename(columns={
-                "username": "账号", "page_title": "页面", "session_id": "会话编号",
-                "ip_address": "IP地址", "user_agent": "浏览器与设备",
-            })[["访问时间", "账号", "记录类型", "结果", "页面", "IP地址", "浏览器与设备", "会话编号", "详细信息"]]
-            st.dataframe(display_logs, width="stretch", hide_index=True)
+                display_logs = filtered_logs.copy()
+                display_logs["记录类型"] = display_logs["event_type"].map(event_labels).fillna(display_logs["event_type"])
+                display_logs["访问时间"] = display_logs["created_at"].dt.strftime("%Y-%m-%d %H:%M:%S")
+                display_logs["结果"] = display_logs["success"].map({True: "成功", False: "失败"})
+                display_logs["详细信息"] = display_logs["details"].map(
+                    lambda value: "；".join(f"{key}={item}" for key, item in value.items()) if isinstance(value, dict) else ""
+                )
+                display_logs = display_logs.rename(columns={
+                    "username": "账号", "page_title": "页面", "session_id": "会话编号",
+                    "ip_address": "IP地址", "user_agent": "浏览器与设备",
+                })[["访问时间", "账号", "记录类型", "结果", "页面", "IP地址", "浏览器与设备", "会话编号", "详细信息"]]
+                st.dataframe(display_logs, width="stretch", hide_index=True)
 
-            export_buffer = io.BytesIO()
-            with pd.ExcelWriter(export_buffer, engine="openpyxl") as writer:
-                display_logs.to_excel(writer, index=False, sheet_name="访问记录")
-            st.download_button(
-                "下载当前访问记录",
-                export_buffer.getvalue(),
-                file_name=f"账号访问记录_{audit_start}_{audit_end}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                key="download_access_logs",
-            )
+                export_buffer = io.BytesIO()
+                with pd.ExcelWriter(export_buffer, engine="openpyxl") as writer:
+                    display_logs.to_excel(writer, index=False, sheet_name="访问记录")
+                st.download_button(
+                    "下载当前访问记录",
+                    export_buffer.getvalue(),
+                    file_name=f"账号访问记录_{audit_start}_{audit_end}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="download_access_logs",
+                )
 
-with tab_mapping:
-    render_mapping_management(supabase)
+if tab_mapping.open:
+    with tab_mapping:
+        render_mapping_management(supabase)
 
 # 新版系统设置到此结束；下方保留的旧版实现不再执行。
 st.stop()
