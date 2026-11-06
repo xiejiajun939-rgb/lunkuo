@@ -7,6 +7,13 @@ NEW_PAGES = {
     'promotion': ('推广参考', '📣 推广参考', ('推广参考',)),
 }
 DEFAULT_PAGES = ['daily', 'organization', 'products']
+LIVE_BUSINESS_PAGES = ['经营总览', '组织分析', '场次复盘', '时段与开场',
+                       '商品决策', '流量与人群', '我的选品车', '下场直播计划']
+
+
+def live_business_enabled(permissions):
+    values = permissions.get('_live_v3') if isinstance(permissions, dict) else None
+    return isinstance(values, list) and 'business' in values
 
 
 def permission_values(permissions):
@@ -26,7 +33,7 @@ def selected_pages(permissions):
             if any(alias in value for value in values for alias in aliases)]
 
 
-def merge_permissions(original, selected):
+def merge_permissions(original, selected, live_business=None):
     result = dict(original) if isinstance(original, dict) else {}
     # Preserve unknown historical grants and all policy metadata, including LK.
     values = [p for p in permission_values(original) if not recognized(p)]
@@ -34,6 +41,12 @@ def merge_permissions(original, selected):
     result['_all'] = list(dict.fromkeys(values))
     if '' in result:
         result[''] = list(result['_all'])
+    if live_business is not None:
+        old_live = result.get('_live_v3')
+        live_values = [item for item in old_live if item != 'business'] if isinstance(old_live, list) else []
+        if live_business:
+            live_values.append('business')
+        result['_live_v3'] = list(dict.fromkeys(live_values))
     return result
 
 

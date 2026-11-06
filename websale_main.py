@@ -289,7 +289,7 @@ def clear_login_state():
         st.session_state.pop(key, None)
 
 def login():
-    st.markdown('<span data-auth-security="2" data-admin-loading="lazy-v1" data-account-permissions="grouped-v1" aria-hidden="true"></span>', unsafe_allow_html=True)
+    st.markdown('<span data-auth-security="2" data-admin-loading="lazy-v1" data-account-permissions="grouped-v2" aria-hidden="true"></span>', unsafe_allow_html=True)
     st.markdown("""
     <style>
     section[data-testid="stSidebar"]{display:none!important}

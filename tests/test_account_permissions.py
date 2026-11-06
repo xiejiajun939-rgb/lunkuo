@@ -3,6 +3,7 @@ import unittest
 from core.account_permissions import (
     NEW_PAGES, DEFAULT_PAGES, merge_permissions, selected_pages,
     permission_values, visible_new_pages,
+    live_business_enabled, LIVE_BUSINESS_PAGES,
 )
 
 
@@ -51,6 +52,34 @@ class AccountPermissionTests(unittest.TestCase):
 
     def test_empty_all_overrides_legacy_key(self):
         self.assertEqual(permission_values({'_all': [], '': ['商品分析']}), [])
+
+    def test_live_is_not_implied_by_old_labels_or_all_small_shop_pages(self):
+        self.assertFalse(live_business_enabled({'_all': ['📡 直播经营分析']}))
+        self.assertFalse(live_business_enabled(merge_permissions({}, list(NEW_PAGES))))
+        self.assertEqual(len(LIVE_BUSINESS_PAGES), 8)
+
+    def test_live_business_can_be_enabled_without_small_shop_or_admin(self):
+        result = merge_permissions({}, [], True)
+        self.assertEqual(result['_all'], [])
+        self.assertEqual(result['_live_v3'], ['business'])
+        self.assertTrue(live_business_enabled(result))
+        self.assertNotIn('role', result)
+        self.assertNotIn('admin', result['_live_v3'])
+
+    def test_small_shop_changes_preserve_existing_live_capability(self):
+        original = {'_all': ['每日明细'], '_live_v3': ['business', 'future_capability']}
+        result = merge_permissions(original, [])
+        self.assertEqual(result['_live_v3'], original['_live_v3'])
+        self.assertTrue(live_business_enabled(result))
+
+    def test_revoking_live_keeps_small_shop_and_account_policy(self):
+        original = {'_all': ['每日明细'], '_live_v3': ['business', 'future_capability'],
+                    '_ui': {'defaultDailyScope': 'department'}}
+        result = merge_permissions(original, ['daily'], False)
+        self.assertFalse(live_business_enabled(result))
+        self.assertEqual(result['_live_v3'], ['future_capability'])
+        self.assertEqual(result['_all'], ['📋 每日明细'])
+        self.assertEqual(result['_ui'], original['_ui'])
 
 
 if __name__ == '__main__':
