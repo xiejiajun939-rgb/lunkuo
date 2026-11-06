@@ -4,6 +4,26 @@ import streamlit as st
 
 from core.db import load_dimension_mapping
 from core.passwords import hash_password
+from core.account_permissions import (
+    NEW_PAGES, DEFAULT_PAGES, permission_values, recognized,
+    selected_pages, merge_permissions, visible_new_pages,
+)
+
+
+def _new_site_permissions(key, defaults):
+    if key not in st.session_state:
+        st.session_state[key] = list(defaults)
+    all_col, clear_col = st.columns(2)
+    with all_col:
+        if st.button("全选新版普通页面", key=f"{key}_all"):
+            st.session_state[key] = list(NEW_PAGES)
+    with clear_col:
+        if st.button("清空新版页面", key=f"{key}_clear"):
+            st.session_state[key] = []
+    return st.multiselect(
+        "新版小店罗盘页面", list(NEW_PAGES),
+        format_func=lambda value: f"新版｜{NEW_PAGES[value][0]}", key=key,
+    )
 
 
 def render_account_management(supabase, all_pages):
@@ -12,6 +32,10 @@ def render_account_management(supabase, all_pages):
     st.caption("管理员为各站通用账号。改密必须验证旧密码与安全口令；修改后各站重新登录，子账号及权限不变。")
     st.link_button("打开统一管理员密码更改", "https://zhibo-data-compass.zhibo-data-compass.workers.dev/account-security")
     st.caption("创建子账号并设置可访问页面及店铺、主播数据范围。")
+    st.markdown("#### 新版小店罗盘：普通页面权限")
+    st.caption("适用于国内站和 Cloudflare 新版。商品分析与抖店数据目前联动授权；访问统计仅管理员可用，不包含在普通页面全选中。")
+    st.markdown("#### 旧版管理后台：仅管理员可用")
+    st.caption("系统设置、商品信息管理属于本后台。普通子账号不能通过勾选页面获得管理员权限；此处不会更改账号角色。")
     try:
         rows = supabase.table("sub_accounts").select("*").order("username").execute().data or []
     except Exception as exc:
@@ -21,6 +45,8 @@ def render_account_management(supabase, all_pages):
     with st.expander("➕ 创建新子账号"):
         username = st.text_input("用户名", key="account_new_username")
         password = st.text_input("密码", type="password", key="account_new_password")
+        new_pages = _new_site_permissions("account_new_site_pages", DEFAULT_PAGES)
+        st.caption("创建后可查看：" + ("、".join(visible_new_pages({}, new_pages)) or "未选择新版页面"))
         if st.button("创建子账号", type="primary", key="account_create"):
             if username.strip().lower() == "admin":
                 st.warning("管理员为保留账号，请使用统一密码更改入口。")
@@ -30,9 +56,8 @@ def render_account_management(supabase, all_pages):
                 try:
                     supabase.table("sub_accounts").insert({
                         "username": username.strip(), "password": hash_password(password), "role": "viewer",
-                        "default_suffix": "_all", "permissions": {"_all": [
-                            "📊 经营驾驶舱", "📋 每日明细", "📦 商品分析", "🔀 商品销售对比", "📈 销售分布与品牌"
-                        ]}, "filter_platform": "all", "filter_shop_names": [],
+                        "default_suffix": "_all", "permissions": merge_permissions({}, new_pages),
+                        "filter_platform": "all", "filter_shop_names": [],
                     }).execute()
                     st.success("子账号创建成功。")
                     st.rerun()
@@ -47,19 +72,25 @@ def render_account_management(supabase, all_pages):
     shop_names = []
     if not mapping.empty:
         shop_names = sorted(set(mapping["shop_name"].dropna()) | set(mapping["anchor_name"].dropna()))
-    page_options = [label for label in all_pages if label != "⚙️ 系统设置"]
 
     for row in rows:
         username = row["username"]
         if username == "admin":
             continue
         with st.expander(f"账号：{username}"):
-            permissions = row.get("permissions") or {}
-            current_pages = permissions.get("_all", permissions.get("", []))
-            selected_pages = st.multiselect(
-                "允许访问的页面", page_options,
-                default=[p for p in current_pages if p in page_options], key=f"account_pages_{username}",
-            )
+            permissions = row.get("permissions") if isinstance(row.get("permissions"), dict) else {}
+            chosen = _new_site_permissions(f"account_new_site_pages_{username}", selected_pages(permissions))
+            effective = visible_new_pages(permissions, chosen)
+            st.info("新版可进入页面（保存后生效）：" + ("、".join(effective) or "无"))
+            policy = permissions.get("_ui", {})
+            if isinstance(policy, dict) and isinstance(policy.get("pageAllowList"), list):
+                st.caption("该账号另有专属页面范围限制，以上预览已考虑该限制；原有部门维度等专属设置会保留。")
+            st.caption("旧版后台：" + ("该账号已有管理员角色，可使用系统设置和商品信息管理。" if row.get("role") == "admin" else "普通子账号，无管理员权限。"))
+            legacy = [value for value in permission_values(permissions) if not recognized(value)]
+            if legacy:
+                with st.expander("历史／其他站点兼容权限（原样保留）"):
+                    st.write("、".join(legacy))
+                    st.caption("这些是历史权限值，不代表新版菜单；保存新版权限时不会自动删除。")
             platform_options = ["all", "抖音", "视频号"]
             platform = row.get("filter_platform", "all")
             selected_platform = st.selectbox(
@@ -77,7 +108,7 @@ def render_account_management(supabase, all_pages):
                 if st.button("💾 保存权限", type="primary", key=f"account_save_{username}"):
                     try:
                         supabase.table("sub_accounts").update({
-                            "permissions": {**permissions, "_all": selected_pages},
+                            "permissions": merge_permissions(permissions, chosen),
                             "filter_platform": selected_platform,
                             "filter_shop_names": selected_shops,
                         }).eq("username", username).execute()
