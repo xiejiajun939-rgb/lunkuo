@@ -8,6 +8,6 @@
 
 实库核对：664组，总计312809条，最新2026-11-25；EXPLAIN ANALYZE约227.75毫秒（数据库端，不含网络）。
 
-测试：python -m unittest discover -s tests，31项通过。
+测试：python -m unittest discover -s tests，32项通过，包含Streamlit页面强制刷新、缓存命中及错误后历史结果保留测试。
 
 部署顺序：先部署只读SQL函数，再发布Streamlit代码。未改导入解析与保存函数；未上传、替换或删除业务数据。

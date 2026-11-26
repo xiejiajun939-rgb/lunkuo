@@ -152,7 +152,7 @@ def render_platform_import():
                 st.session_state[cache_key] = snapshot
                 entries = snapshot['entries']
                 if entries:
-                    st.dataframe(entries, use_container_width=True, hide_index=True)
+                    st.dataframe(entries, width='stretch', hide_index=True)
                     st.caption(f"最新数据日期：{max(e['数据日期'] for e in entries)}；"
                                f"共 {len(entries)} 组日期/店铺/范围。")
                 else:
@@ -168,7 +168,7 @@ def render_platform_import():
                 if previous is not None:
                     st.caption('以下为上次成功查询的历史结果，不代表本次刷新成功。')
                     if previous['entries']:
-                        st.dataframe(previous['entries'], use_container_width=True, hide_index=True)
+                        st.dataframe(previous['entries'], width='stretch', hide_index=True)
 
     # Render after import so this run includes newly persisted dates.
     files = st.file_uploader('平台商品列表 Excel', type=['xlsx'], accept_multiple_files=True, key='platform_products_files')
