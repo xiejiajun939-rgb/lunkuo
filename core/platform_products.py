@@ -3,9 +3,16 @@ from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 import re
+import hashlib
+import logging
+from time import monotonic, time
+from uuid import uuid4
 from openpyxl import load_workbook
 
 TABLE = 'douyin_platform_product_daily'
+DATES_RPC = 'get_douyin_platform_uploaded_dates'
+DATES_CACHE_SECONDS = 300
+logger = logging.getLogger(__name__)
 FILENAME = re.compile(r'^商品列表_(.+)_(全部|商品卡)_(\d{4}-\d{2}-\d{2})~(\d{4}-\d{2}-\d{2})\.xlsx$')
 STYLE = re.compile(r'(?<![A-Za-z0-9])([A-Za-z]\d{3}[A-Za-z]\d{3})(?![A-Za-z0-9])')
 TEXT_COLUMNS = {'统计周期', '商品名称', '商品编码', '载体', '品类', '自卖/合作', '上架时间'}
@@ -80,18 +87,38 @@ def save_platform_products(client, records):
     return client.rpc('replace_douyin_platform_file', {'p_rows':records}).execute().data
 
 def uploaded_platform_dates(client):
-    """Read stored date/shop/scope combinations, including beyond the API row limit."""
-    found, offset = set(), 0
-    while True:
-        rows = (client.table(TABLE).select('report_date,shop_name,scope,product_id')
-                .order('report_date', desc=True).order('shop_name').order('scope')
-                .order('product_id').range(offset, offset + 999).execute().data)
-        if not rows:
-            break
-        found.update((r['report_date'], r['shop_name'], r['scope']) for r in rows)
-        offset += len(rows)
-    return [{'数据日期': day, '店铺': shop, '范围': scope}
-            for day, shop, scope in sorted(found, key=lambda r: (-date.fromisoformat(r[0]).toordinal(), r[1], r[2]))]
+    """One aggregate RPC, not a scan of every product through the REST API.
+
+    The RPC returns a JSON array so PostgREST's table row cap cannot truncate
+    future histories with more than 1000 date/shop/scope combinations.
+    """
+    rows = client.rpc(DATES_RPC, {}).execute().data
+    if not isinstance(rows, list):
+        raise ValueError('Invalid uploaded-date aggregate response')
+    return [{'数据日期': row['report_date'], '店铺': row['shop_name'],
+             '范围': row['scope'], '数据库记录数': row['row_count']} for row in rows]
+
+
+def uploaded_dates_snapshot(client, cached=None, force=False, now=None):
+    """Cache successful reads only. Callers keep a stale snapshot on failure."""
+    now = time() if now is None else now
+    if (not force and cached is not None
+            and 0 <= now - cached['checked_at'] < DATES_CACHE_SECONDS):
+        return cached, True
+    started = monotonic()
+    entries = uploaded_platform_dates(client)
+    return {'entries': entries, 'checked_at': time(),
+            'elapsed': monotonic() - started}, False
+
+
+def log_dates_error(exc, elapsed):
+    """Keep useful diagnostics without logging credentials, URLs or payloads."""
+    incident = uuid4().hex[:12]
+    code = str(getattr(exc, 'code', '') or '')
+    code = code if re.fullmatch(r'[A-Za-z0-9_-]{1,32}', code) else 'unknown'
+    logger.error('platform_uploaded_dates_failed incident=%s code=%s type=%s elapsed=%.3fs',
+                 incident, code, type(exc).__name__, elapsed)
+    return incident
 
 def render_platform_import():
     import os
@@ -105,6 +132,10 @@ def render_platform_import():
               or os.environ.get('SUPABASE_SERVICE_ROLE_KEY') or st.secrets.get('SUPABASE_SERVICE_ROLE_KEY')
               or os.environ.get('SUPABASE_KEY') or st.secrets.get('SUPABASE_KEY'))
     dates_area = st.container()
+    force_dates_refresh = st.button('刷新已上传日期', key='platform_products_refresh_dates')
+    # Session-only cache: never share privileged metadata across user sessions.
+    connection_id = hashlib.sha256((str(url) + '\0' + str(secret)).encode()).hexdigest()
+    cache_key = '_platform_uploaded_dates_' + connection_id
 
     def show_uploaded_dates():
         with dates_area:
@@ -113,16 +144,33 @@ def render_platform_import():
                 st.warning('数据库连接配置缺失，无法查询已上传日期，请检查现有 SUPABASE_URL 和 SUPABASE_KEY。')
                 return
             try:
-                entries = uploaded_platform_dates(create_client(url, secret))
+                started = monotonic()
+                with st.spinner('正在查询数据库已上传日期…'):
+                    snapshot, cached = uploaded_dates_snapshot(
+                        create_client(url, secret), st.session_state.get(cache_key),
+                        force=force_dates_refresh)
+                st.session_state[cache_key] = snapshot
+                entries = snapshot['entries']
                 if entries:
                     st.dataframe(entries, use_container_width=True, hide_index=True)
+                    st.caption(f"最新数据日期：{max(e['数据日期'] for e in entries)}；"
+                               f"共 {len(entries)} 组日期/店铺/范围。")
                 else:
                     st.info('数据库中暂无已上传的抖音平台数据。')
-            except Exception:
-                st.warning('已上传日期查询失败，请稍后刷新重试；这不代表数据未上传。')
+                checked = datetime.fromtimestamp(snapshot['checked_at']).strftime('%Y-%m-%d %H:%M:%S')
+                st.caption(f"核对时间（服务器时间）：{checked}；数据库查询耗时 "
+                           f"{snapshot['elapsed']:.2f} 秒。"
+                           + ('当前为本会话缓存，点击刷新可立即重查。' if cached else '本次已查询数据库。'))
+            except Exception as exc:
+                incident = log_dates_error(exc, monotonic() - started)
+                st.warning(f'已上传日期查询失败，不代表数据未上传。核查编号：{incident}。请点击刷新重试。')
+                previous = st.session_state.get(cache_key)
+                if previous is not None:
+                    st.caption('以下为上次成功查询的历史结果，不代表本次刷新成功。')
+                    if previous['entries']:
+                        st.dataframe(previous['entries'], use_container_width=True, hide_index=True)
 
     # Render after import so this run includes newly persisted dates.
-    st.button('刷新已上传日期', key='platform_products_refresh_dates')
     files = st.file_uploader('平台商品列表 Excel', type=['xlsx'], accept_multiple_files=True, key='platform_products_files')
     if not files:
         show_uploaded_dates()
@@ -150,6 +198,8 @@ def render_platform_import():
             show_uploaded_dates()
             return
         client = create_client(url, secret)
+        # Even an uncertain network result can have committed: re-read dates.
+        force_dates_refresh = True
         for name, records in previews:
             try:
                 count = save_platform_products(client, records)
